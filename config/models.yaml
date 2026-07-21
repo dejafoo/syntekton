@@ -1,0 +1,128 @@
+profiles:
+  supervisor:
+    provider_adapter: openrouter
+    model: qwen/qwen3.6-27b
+    capabilities:
+      - planning
+      - architecture
+      - composition
+      - difficult_reasoning
+    structured_outputs: true
+    tool_calling: true
+    context_soft_limit: 64000
+    max_output_tokens: 12000
+    temperature: 0.2
+    reasoning_effort: high
+    pricing:
+      input: "0.289"
+      output: "2.40"
+    provider:
+      allow_fallbacks: true
+      require_parameters: true
+      data_collection: deny
+      sort: price
+
+  fast_worker:
+    provider_adapter: openrouter
+    model: z-ai/glm-4.7-flash
+    capabilities:
+      - repository_analysis
+      - requirements
+      - security_review
+      - testing
+      - documentation
+    structured_outputs: true
+    tool_calling: true
+    context_soft_limit: 32000
+    max_output_tokens: 8000
+    temperature: 0.1
+    pricing:
+      input: "0.06"
+      output: "0.40"
+    provider:
+      allow_fallbacks: true
+      require_parameters: true
+      data_collection: deny
+      sort: price
+
+  coding_worker:
+    provider_adapter: openrouter
+    model: qwen/qwen3-coder-next
+    capabilities:
+      - implementation
+      - repair
+    structured_outputs: true
+    tool_calling: true
+    context_soft_limit: 64000
+    max_output_tokens: 16000
+    temperature: 0.1
+    pricing:
+      input: "0.11"
+      output: "0.80"
+    provider:
+      allow_fallbacks: true
+      require_parameters: true
+      data_collection: deny
+      sort: price
+
+  local_target_reviewer:
+    provider_adapter: openrouter
+    # OpenRouter retired mistralai/devstral-small-2505 (no endpoints).
+    # qwen3-coder-30b is a cheap coding-sized stand-in for a future local reviewer.
+    model: qwen/qwen3-coder-30b-a3b-instruct
+    capabilities:
+      - independent_review
+    structured_outputs: true
+    tool_calling: true
+    context_soft_limit: 48000
+    max_output_tokens: 8000
+    temperature: 0.0
+    pricing:
+      input: "0.07"
+      output: "0.27"
+
+  strong_reviewer:
+    provider_adapter: openrouter
+    model: mistralai/devstral-2512
+    capabilities:
+      - independent_review
+      - difficult_reasoning
+    context_soft_limit: 96000
+    max_output_tokens: 10000
+    temperature: 0.0
+    pricing:
+      input: "0.20"
+      output: "0.60"
+
+  frontier_oracle:
+    provider_adapter: openrouter
+    model: anthropic/claude-fable-5
+    capabilities:
+      - benchmark_oracle
+      - adjudication
+    context_soft_limit: 128000
+    max_output_tokens: 16000
+    temperature: 0.0
+    pricing:
+      input: "10"
+      output: "50"
+    run_policy:
+      normal_runs: prohibited
+      evaluation_runs: allowed
+      manual_escalation: allowed
+
+  mock_local:
+    provider_adapter: mock
+    model: mock/local-model
+    capabilities:
+      - planning
+      - implementation
+      - independent_review
+    structured_outputs: true
+    tool_calling: true
+    context_soft_limit: 16000
+    max_output_tokens: 4000
+    temperature: 0.0
+    pricing:
+      input: "0"
+      output: "0"
