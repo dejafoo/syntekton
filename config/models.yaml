@@ -94,6 +94,25 @@ profiles:
       input: "0.20"
       output: "0.60"
 
+  grok_judge:
+    provider_adapter: openrouter
+    model: x-ai/grok-4.5
+    capabilities:
+      - benchmark_oracle
+      - adjudication
+    structured_outputs: true
+    tool_calling: true
+    context_soft_limit: 128000
+    max_output_tokens: 16000
+    temperature: 0.0
+    pricing:
+      input: "2"
+      output: "6"
+    run_policy:
+      normal_runs: prohibited
+      evaluation_runs: allowed
+      manual_escalation: allowed
+
   frontier_oracle:
     provider_adapter: openrouter
     model: anthropic/claude-fable-5

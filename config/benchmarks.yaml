@@ -1,0 +1,22 @@
+# LLM-judge benchmark defaults
+default_judge: grok_judge
+usable_threshold: 3
+oracle_sampling_rate: 0.2
+default_subjects:
+  - full_orchestration
+  - single_agent_baseline
+  - agent_isolation
+subjects:
+  full_orchestration:
+    model_profile: supervisor
+    description: Multi-agent MVP orchestration
+  single_agent_baseline:
+    model_profile: supervisor
+    description: Single agent without orchestration
+  agent_isolation:
+    model_profile: coding_worker
+    isolation_capability: implementation
+    description: Isolated capability runner
+  frontier_reference:
+    model_profile: frontier_oracle
+    description: Frontier reference (oracle budget)
