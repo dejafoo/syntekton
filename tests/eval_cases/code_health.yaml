@@ -1,0 +1,19 @@
+id: code_health
+workflow_type: code_change
+request: |
+  Add a validated health-check endpoint with tests.
+repository: tests/fixtures/sample_api
+tags: ['coding']
+expected_status:
+  - completed
+  - awaiting_approval
+
+acceptance_criteria:
+  - Health endpoint added with tests
+expected_files:
+  - src/app/health.py
+  - tests/test_health.py
+isolation_targets:
+  - implementation
+smoke_commands:
+  - python_tests

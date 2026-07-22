@@ -1,0 +1,9 @@
+id: code_refactor
+workflow_type: code_change
+request: |
+  Refactor duplicated string constant into shared module.
+repository: tests/fixtures/sample_api
+tags: [coding]
+expected_status:
+  - completed
+  - awaiting_approval

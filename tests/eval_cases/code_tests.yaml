@@ -1,0 +1,14 @@
+id: code_tests
+workflow_type: code_change
+request: |
+  Add tests for existing hello helper.
+repository: tests/fixtures/sample_api
+tags: ['coding']
+expected_status:
+  - completed
+  - awaiting_approval
+
+acceptance_criteria:
+  - Tests cover hello helper
+isolation_targets:
+  - test_design

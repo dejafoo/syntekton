@@ -1,0 +1,9 @@
+id: code_metrics
+workflow_type: code_change
+request: |
+  Add a simple metrics counter module.
+repository: tests/fixtures/sample_api
+tags: [extra]
+expected_status:
+  - completed
+  - awaiting_approval

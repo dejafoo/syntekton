@@ -1,0 +1,22 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: Sync
+        run: uv sync --extra dev
+      - name: Verify
+        run: |
+          uv run ruff format --check src tests
+          uv run ruff check src tests
+          uv run pytest -q -m "not integration"
+          uv run product-factory --help

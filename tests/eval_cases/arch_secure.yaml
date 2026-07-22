@@ -1,0 +1,15 @@
+id: arch_secure
+workflow_type: architecture
+request: |
+  Design a security-sensitive user workflow.
+tags: [architecture]
+expected_status:
+  - completed
+  - awaiting_approval
+
+acceptance_criteria:
+  - Security boundaries explicit
+  - Threat considerations
+isolation_targets:
+  - architecture
+  - security_review

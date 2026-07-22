@@ -1,0 +1,19 @@
+default_workflow: code_change
+workflows:
+  code_change:
+    description: Bounded repository change with patch approval
+    requires_repository: true
+    requires_approval: true
+    baseline_validators:
+      - patch_applies
+      - path_scope
+      - secret_scan
+      - tests
+  architecture:
+    description: Architecture handover document generation
+    requires_repository: false
+    requires_approval: false
+    baseline_validators:
+      - architecture_sections
+      - schema
+      - mermaid

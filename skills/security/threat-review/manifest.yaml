@@ -1,0 +1,9 @@
+id: security.threat-review
+version: 1.0.0
+title: Threat Review
+capabilities:
+  - security_review
+languages: ["*"]
+frameworks: ["*"]
+content_ref: SKILL.md
+status: active

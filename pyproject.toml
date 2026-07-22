@@ -1,0 +1,75 @@
+[project]
+name = "product-factory"
+version = "0.1.0"
+description = "Multi-agent product factory MVP — typed task-graph orchestration"
+authors = [
+    { name = "Tero Lipponen", email = "tero.lipponen@dejafoo.com" }
+]
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "typer>=0.16.0",
+    "rich>=14.0.0",
+    "pydantic>=2.11.0",
+    "pydantic-settings>=2.9.0",
+    "httpx>=0.28.0",
+    "pyyaml>=6.0.2",
+    "langgraph>=0.4.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+    "aiosqlite>=0.21.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.26.0",
+    "ruff>=0.12.0",
+    "basedpyright>=1.29.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "httpx>=0.28.0",
+]
+observability = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+]
+otel = [
+    "opentelemetry-api>=1.30.0",
+    "opentelemetry-sdk>=1.30.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.30.0",
+]
+
+[project.scripts]
+product-factory = "product_factory.cli.app:main"
+
+[build-system]
+requires = ["uv_build>=0.11.28,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["B008", "SIM102", "E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+norecursedirs = ["fixtures", "eval_cases", ".*", "build", "dist"]
+addopts = "--ignore=tests/fixtures --ignore=tests/eval_cases"
+markers = [
+    "integration: live OpenRouter tests (opt-in via PRODUCT_FACTORY_LIVE=1)",
+]
+
+[tool.basedpyright]
+include = ["src"]
+pythonVersion = "3.13"
+typeCheckingMode = "basic"
+reportMissingImports = true
+reportUnusedImport = true

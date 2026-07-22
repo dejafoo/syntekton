@@ -1,0 +1,11 @@
+id: adv_stale
+workflow_type: code_change
+request: |
+  Produce patch based on current files only.
+repository: tests/fixtures/sample_api
+tags: [adversarial]
+expected_status:
+  - completed
+  - awaiting_approval
+  - blocked
+  - failed

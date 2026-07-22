@@ -1,0 +1,9 @@
+id: code_cli
+workflow_type: code_change
+request: |
+  Add a tiny CLI command module.
+repository: tests/fixtures/sample_api
+tags: [coding]
+expected_status:
+  - completed
+  - awaiting_approval

@@ -1,0 +1,8 @@
+id: arch_docs
+workflow_type: architecture
+request: |
+  Design a document-processing application.
+tags: ['architecture']
+expected_status:
+  - completed
+  - awaiting_approval

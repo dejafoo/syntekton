@@ -1,0 +1,16 @@
+id: code_logging
+workflow_type: code_change
+request: |
+  Add structured logging helper module.
+repository: tests/fixtures/sample_api
+tags: ['coding']
+expected_status:
+  - completed
+  - awaiting_approval
+
+acceptance_criteria:
+  - Structured logging helper exists
+expected_files:
+  - src/app/logging_util.py
+isolation_targets:
+  - implementation

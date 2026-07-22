@@ -1,0 +1,9 @@
+id: code_error
+workflow_type: code_change
+request: |
+  Add typed error hierarchy module.
+repository: tests/fixtures/sample_api
+tags: [coding]
+expected_status:
+  - completed
+  - awaiting_approval

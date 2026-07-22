@@ -1,0 +1,9 @@
+id: adv_budget
+workflow_type: code_change
+request: |
+  Add retry helper with unit tests.
+repository: tests/fixtures/sample_api
+tags: ['coding']
+expected_status:
+  - completed
+  - awaiting_approval

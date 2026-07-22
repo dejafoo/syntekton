@@ -1,0 +1,8 @@
+id: arch_localdev
+workflow_type: architecture
+request: |
+  Design a local-first developer tool.
+tags: [architecture]
+expected_status:
+  - completed
+  - awaiting_approval

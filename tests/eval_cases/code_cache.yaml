@@ -1,0 +1,9 @@
+id: code_cache
+workflow_type: code_change
+request: |
+  Introduce a simple cache helper behind an interface.
+repository: tests/fixtures/sample_api
+tags: [coding]
+expected_status:
+  - completed
+  - awaiting_approval

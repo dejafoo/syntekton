@@ -1,0 +1,13 @@
+id: arch_offline
+workflow_type: architecture
+request: |
+  Design an offline-first desktop utility.
+tags: [architecture]
+expected_status:
+  - completed
+  - awaiting_approval
+
+acceptance_criteria:
+  - Offline sync approach described
+isolation_targets:
+  - architecture

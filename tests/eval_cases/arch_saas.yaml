@@ -1,0 +1,16 @@
+id: arch_saas
+workflow_type: architecture
+request: |
+  Design a small SaaS billing service.
+tags: ['architecture']
+expected_status:
+  - completed
+  - awaiting_approval
+
+acceptance_criteria:
+  - Architecture covers security and testing
+  - Trade-offs documented
+reference_hints: Should mention multi-tenant billing concerns
+isolation_targets:
+  - architecture
+  - composition

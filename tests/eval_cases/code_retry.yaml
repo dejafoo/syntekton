@@ -1,0 +1,16 @@
+id: code_retry
+workflow_type: code_change
+request: |
+  Add a retry decorator with jitter.
+repository: tests/fixtures/sample_api
+tags: [extra]
+expected_status:
+  - completed
+  - awaiting_approval
+
+acceptance_criteria:
+  - Retry helper with jitter
+expected_files:
+  - src/app/retry.py
+isolation_targets:
+  - implementation

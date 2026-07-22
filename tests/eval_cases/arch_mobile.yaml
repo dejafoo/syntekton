@@ -1,0 +1,8 @@
+id: arch_mobile
+workflow_type: architecture
+request: |
+  Design offline sync for a mobile companion app.
+tags: [extra]
+expected_status:
+  - completed
+  - awaiting_approval

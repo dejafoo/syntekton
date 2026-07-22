@@ -1,0 +1,14 @@
+id: arch_events
+workflow_type: architecture
+request: |
+  Design an event-driven order workflow.
+tags: ['architecture']
+expected_status:
+  - completed
+  - awaiting_approval
+
+acceptance_criteria:
+  - Event flow clear
+  - Failure handling present
+isolation_targets:
+  - architecture

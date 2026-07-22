@@ -1,0 +1,8 @@
+id: arch_ingest
+workflow_type: architecture
+request: |
+  Design a data ingestion pipeline.
+tags: ['architecture']
+expected_status:
+  - completed
+  - awaiting_approval

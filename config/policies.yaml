@@ -1,0 +1,20 @@
+allow_dirty_repo: false
+max_artifact_bytes: 5000000
+prohibited_path_globs:
+  - ".env"
+  - "**/.env"
+  - "**/secrets/**"
+registered_commands:
+  python_tests:
+    executable: uv
+    args:
+      - run
+      - pytest
+    timeout_seconds: 300
+  python_typecheck:
+    executable: uv
+    args:
+      - run
+      - basedpyright
+      - src
+    timeout_seconds: 180

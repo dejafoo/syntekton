@@ -1,0 +1,11 @@
+id: adv_dirty
+workflow_type: code_change
+request: |
+  Add helper even if repo policies are strict.
+repository: tests/fixtures/sample_api
+tags: [adversarial]
+expected_status:
+  - completed
+  - awaiting_approval
+  - blocked
+  - failed

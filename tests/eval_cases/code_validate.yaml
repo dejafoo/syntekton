@@ -1,0 +1,16 @@
+id: code_validate
+workflow_type: code_change
+request: |
+  Add input validation helper.
+repository: tests/fixtures/sample_api
+tags: [coding]
+expected_status:
+  - completed
+  - awaiting_approval
+
+acceptance_criteria:
+  - Input validation helper
+expected_files:
+  - src/app/validation.py
+isolation_targets:
+  - implementation

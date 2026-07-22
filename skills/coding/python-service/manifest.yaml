@@ -1,0 +1,19 @@
+id: coding.python-service
+version: 1.0.0
+title: Python Service Layout
+capabilities:
+  - implementation
+  - repair
+languages:
+  - python
+frameworks:
+  - "*"
+trigger:
+  description: Use when implementing Python services.
+required_tools:
+  - repository_read
+  - repository_write
+prohibited_tools:
+  - network_access
+content_ref: SKILL.md
+status: active

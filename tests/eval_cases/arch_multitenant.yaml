@@ -1,0 +1,8 @@
+id: arch_multitenant
+workflow_type: architecture
+request: |
+  Design a multi-tenant API platform.
+tags: ['architecture']
+expected_status:
+  - completed
+  - awaiting_approval

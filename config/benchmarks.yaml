@@ -1,3 +1,50 @@
+ablations:
+  single_agent_baseline:
+    runner: single_agent_baseline
+  implementation_isolation:
+    runner: agent_isolation
+    isolation_capability: implementation
+  orchestration_validation_repair:
+    runner: full_orchestration
+    disable_review: true
+    disable_analysis: true
+    planner_mode: fixed
+  full_orchestration_no_review:
+    runner: full_orchestration
+    disable_review: true
+  full_orchestration_with_review:
+    runner: full_orchestration
+    force_review: true
+  orchestration_file_list_context:
+    runner: full_orchestration
+    disable_review: true
+    context_mode: file_list_only
+    planner_mode: fixed
+  orchestration_targeted_context:
+    runner: full_orchestration
+    disable_review: true
+    context_mode: targeted
+    planner_mode: fixed
+  orchestration_fixed_planner:
+    runner: full_orchestration
+    disable_review: true
+    planner_mode: fixed
+  orchestration_live_planner:
+    runner: full_orchestration
+    disable_review: true
+    planner_mode: live
+  orchestration_complexity_planner:
+    runner: full_orchestration
+    disable_review: true
+    planner_mode: complexity_sensitive
+  frontier_reference:
+    runner: frontier_reference
+
+controls:
+  require_identical_worker_profile: true
+  require_identical_temperature: true
+  require_identical_case_budget: true
+  pairwise_random_seed: 0
 # LLM-judge benchmark defaults
 default_judge: grok_judge
 usable_threshold: 3

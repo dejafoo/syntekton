@@ -1,0 +1,9 @@
+id: code_config
+workflow_type: code_change
+request: |
+  Add typed config loader module.
+repository: tests/fixtures/sample_api
+tags: [extra]
+expected_status:
+  - completed
+  - awaiting_approval
