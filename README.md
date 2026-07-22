@@ -37,11 +37,14 @@ Read-only REST + WebSocket/SSE over the same SQLite event store used by CLI runs
 
 ## Docs
 
+- [Architecture](docs/architecture.md) — system design, run lifecycle, security, evaluation
+- [Codebase structure](docs/codebase-structure.md) — package map and “where to edit what”
 - [Observability API](docs/observability.md)
 - [Implementation handover](docs/handover.md)
 - [Implementation plan & tasks](docs/implementation-plan.md)
 - [LLM-judge benchmarking](docs/benchmarking.md)
 - [ADRs](docs/architecture/)
+- [Orchestration performance plan](docs/orchestration-performance-plan.md)
 
 ## Benchmarks
 
