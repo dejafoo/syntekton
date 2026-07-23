@@ -69,6 +69,13 @@ def _augment_request_text(case: EvalCase) -> str:
             "Acceptance criteria:\n"
             + "\n".join(f"- {item}" for item in case.acceptance_criteria)
         )
+    if case.must_cover:
+        parts.append(
+            "Must-cover topics (architecture must address each explicitly):\n"
+            + "\n".join(f"- {item}" for item in case.must_cover)
+        )
+    if case.reference_hints:
+        parts.append(f"Reference hints:\n{case.reference_hints.strip()}")
     if case.expected_files:
         parts.append(
             "Required deliverable paths (create or modify exactly these paths):\n"
@@ -134,6 +141,8 @@ class FullOrchestrationRunner:
                 "implementation_model_profile": str(
                     case.metadata.get("implementation_model_profile") or ""
                 ),
+                "must_cover": "|".join(case.must_cover),
+                "reference_hints": case.reference_hints or "",
             },
         )
         try:
@@ -193,7 +202,14 @@ class FullOrchestrationRunner:
                 "live_fallback_used": False,
             },
             error=(
-                "; ".join(manifest.notes)
+                (
+                    "; ".join(
+                        note
+                        for note in manifest.notes
+                        if note and not note.startswith("no_progress_count=")
+                    )
+                    or None
+                )
                 if manifest.final_status == "failed"
                 else None
             ),
@@ -608,68 +624,59 @@ def _list_repo_files(repo: Path | None, limit: int = 40) -> list[str]:
 
 def _mock_artifact_for_case(case: EvalCase, repo: Path | None) -> str:
     if case.workflow_type == "architecture":
+        must = case.must_cover or ["request-specific design"]
+        cover_lines = "\n".join(f"- Explicitly covers: {topic}." for topic in must)
+        detail = (
+            f"{case.request.strip()}\n\n"
+            "This design elaborates concrete components, trust boundaries, failure "
+            "modes, and verification for the stated domain rather than a generic "
+            "service shell. "
+            + " ".join(must)
+        )
         sections = [
             "# ARCHITECTURE.md",
             "",
             "## Objective",
-            case.request.strip(),
+            detail,
             "",
             "## Scope",
-            "MVP scope.",
+            "MVP includes the must-cover flows below and excludes unrelated platform work.",
+            cover_lines,
             "",
             "## Assumptions",
-            "- Standard service.",
+            "- Operators can provision one primary region for the MVP.",
+            "- Secrets and credentials are injected from an external secret store.",
             "",
             "## Functional requirements",
-            "- Deliver request.",
+            cover_lines,
+            "- Operators can observe and roll back failed workflows.",
             "",
             "## Nonfunctional requirements",
-            "- Reliability.",
+            "- Isolation, auditability, and recoverable failure handling are mandatory.",
             "",
-            "## System context",
-            "Users -> API -> DB",
-            "",
-            "## Components and responsibilities",
-            "- API, domain, persistence.",
+            "## Components",
+            "- Edge API / UI, domain services, persistence, and async workers as needed.",
             "",
             "## Data flows",
             "```mermaid",
             "flowchart LR",
-            "  User --> API --> DB",
+            "  User --> Edge --> Domain --> Store",
             "```",
             "",
-            "## External dependencies",
-            "- Database.",
+            "## Security",
+            "- Authn/authz at the edge; least-privilege data access; audited admin paths.",
             "",
-            "## Security boundaries",
-            "- Auth at edge.",
-            "",
-            "## Failure handling",
-            "- Timeouts and retries.",
-            "",
-            "## Observability",
-            "- Logs and metrics.",
-            "",
-            "## Testing strategy",
-            "- Unit and integration tests.",
-            "",
-            "## Deployment assumptions",
-            "- Container deploy.",
+            "## Testing",
+            "- Unit, contract, isolation, and abuse/regression tests for must-cover risks.",
             "",
             "## Trade-offs",
-            "- Simplicity first.",
-            "",
-            "## Rejected alternatives",
-            "- Premature distribution.",
+            "- Prefer a simpler modular monolith until traffic or tenancy forces split.",
             "",
             "## Open questions",
-            "- SLA targets.",
-            "",
-            "## Implementation stages",
-            "1. Scaffold 2. Core 3. Harden",
+            "- Exact SLOs and compliance evidence packs.",
             "",
             "## Acceptance criteria",
-            "- Sections complete.",
+            cover_lines,
             "",
         ]
         return "\n".join(sections)

@@ -1,15 +1,27 @@
 id: arch_secure
 workflow_type: architecture
 request: |
-  Design a security-sensitive user workflow.
+  Design a security-sensitive user onboarding and session workflow that
+  handles credential verification, MFA challenge, and session revocation for
+  a consumer web app.
 tags: [architecture]
 expected_status:
   - completed
   - awaiting_approval
 
 acceptance_criteria:
-  - Security boundaries explicit
-  - Threat considerations
+  - Security boundaries and trust zones are explicit
+  - Threat considerations cover credential stuffing / session hijack / MFA bypass
+  - Testing includes abuse and revocation scenarios
+reference_hints: |
+  Cover authn factors, MFA challenge flow, session tokens, revocation, and
+  threat mitigations with concrete controls (not slogans).
+must_cover:
+  - mfa
+  - session revocation
+  - threat model
+  - credential stuffing
 isolation_targets:
   - architecture
   - security_review
+  - composition

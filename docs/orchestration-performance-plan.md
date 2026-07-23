@@ -137,9 +137,8 @@ Live smoke results:
   - paired usable delta **+72 points** (CI +59 to +83)
   - orch cost/usable ≈ `$0.0127` (0.38× baseline cost/usable)
   - subject cost `$0.819391`, judge cost `$1.462102`
-- [~] Stage D–F (architecture quality, named ablations, frontier) remain open.
-  Stage E leftovers closed in N4; Stage F closed in N5 (keep mid-tier). Stage D
-  remains for N6.
+- [x] Stage D–F closed in N4–N6 (arch usable 77.8% under request-specific
+  contract; keep mid-tier workers; Stage E leftovers closed).
   Stage E partial slice `bench-72dfcf11b63b` completed: no-review/validation/
   context subjects ≈77.8% usable; forced review and isolation were 0% (review kept
   optional). Finding-category normalization and force-review AC injection were
@@ -872,9 +871,21 @@ Recorded live Stage C: `bench-e59f17adf319` — orch usable 85.2% vs baseline 13
 
 ### Stage D — Architecture quality
 
-- [ ] Replace template compliance with request-specific architecture criteria.
-- [ ] Run at least three seeds per architecture case.
-- [ ] Require at least 20% usable architecture artifacts before comparing mean judge quality.
+- [x] Replace template compliance with request-specific architecture criteria.
+- [x] Run at least three seeds per architecture case.
+- [x] Require at least 20% usable architecture artifacts before comparing mean judge quality.
+
+Live Stage D `bench-2e57f250a05f` (2026-07-23; `arch_saas`, `arch_multitenant`,
+`arch_secure` × 3 seeds):
+
+- orch usable **77.8%** (7/9), mean valid quality ≈ **0.99**, cost/usable ≈ `$0.030`
+- baseline usable **0%** (section completeness / must-cover misses under the new
+  contract)
+- Contract: `must_cover`, substance floor, boilerplate fingerprint rejection;
+  live composition writes request-specific `ARCHITECTURE.md` (mock retains
+  template)
+- Decision: architecture workflow **ready for product use** on gated cases;
+  prefer orchestration over one-shot baseline.
 
 ### Stage E — Ablations
 
@@ -1070,7 +1081,7 @@ Add dated entries as implementation proceeds.
   artifact than baseline (0.38×).
 - Note: blind pairwise still often favored baseline textually; usable-rate and
   apply/behavioral metrics are the Stage B/C promotion criteria and passed.
-- Remaining open: Stage D architecture (Stage E/F closed in N4/N5).
+- Remaining open: none for Stage D/E/F (N1–N6 package track closed).
 
 ### 2026-07-22 — N4 Stage E leftovers closed
 
@@ -1092,4 +1103,13 @@ Add dated entries as implementation proceeds.
   headroom for this suite.
 - Fix: gateway merges profile `provider:` prefs; `frontier_oracle` sets
   `require_parameters: false` (Claude + seed 404 under require_parameters).
+
+### 2026-07-23 — N6 Stage D architecture closed
+
+- Live `bench-2e57f250a05f`: orch architecture usable **77.8%** (7/9) with mean
+  valid quality ≈0.99; baseline 0% under the new request-specific contract.
+- Contract: `must_cover`, substance/boilerplate validators, live LLM composition
+  of `ARCHITECTURE.md` (templates no longer silent wins).
+- Decision: architecture workflow **ready for product use** on gated cases;
+  prefer orchestration over one-shot baseline.
 

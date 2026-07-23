@@ -45,6 +45,10 @@ class EvalCase(BaseModel):
     )
     isolation_targets: list[str] = Field(default_factory=list)
     reference_hints: str | None = None
+    must_cover: list[str] = Field(
+        default_factory=list,
+        description="Request-specific topics that architecture artifacts must address",
+    )
     expected_files: list[str] = Field(default_factory=list)
     smoke_commands: list[str] = Field(default_factory=list)
     budgets: CaseBudget = Field(default_factory=CaseBudget)

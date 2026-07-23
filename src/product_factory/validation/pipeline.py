@@ -35,6 +35,21 @@ ARCHITECTURE_REQUIRED_SECTIONS = [
     "Acceptance criteria",
 ]
 
+# Fingerprints from the historical deterministic ARCHITECTURE.md template.
+ARCHITECTURE_BOILERPLATE_MARKERS = (
+    "mvp scope as requested",
+    "deliver the requested capabilities",
+    "simplicity over premature distribution",
+    "exact sla targets",
+    "users interact via api/cli; system persists to a database",
+    "standard web service deployment",
+    "multi-region active-active for mvp",
+)
+
+# Minimum substance for a request-specific architecture artifact.
+ARCHITECTURE_MIN_CHARS = 1200
+ARCHITECTURE_MIN_WORDS = 150
+
 
 def validate_schema_dict(data: dict[str, Any], required_keys: list[str]) -> ValidatorResult:
     missing = [k for k in required_keys if k not in data]
@@ -104,6 +119,75 @@ def validate_architecture_document(markdown: str) -> ValidatorResult:
             details={"missing_sections": missing, "mermaid_ok": mermaid_ok},
         )
     return ValidatorResult(validator_id="architecture_sections", status="pass", message="ok")
+
+
+def validate_architecture_request_specificity(
+    markdown: str,
+    *,
+    must_cover: list[str] | None = None,
+    reject_boilerplate: bool = True,
+) -> list[ValidatorResult]:
+    """Fail empty, near-empty, pure templates, and missing request-specific topics."""
+    results: list[ValidatorResult] = []
+    text = (markdown or "").strip()
+    lower = text.lower()
+    words = re.findall(r"[a-z0-9]+", lower)
+
+    if len(text) < ARCHITECTURE_MIN_CHARS or len(words) < ARCHITECTURE_MIN_WORDS:
+        results.append(
+            ValidatorResult(
+                validator_id="architecture_substance",
+                status="fail",
+                message=(
+                    "Architecture artifact too thin for request-specific review "
+                    f"(chars={len(text)}, words={len(words)}; "
+                    f"need ≥{ARCHITECTURE_MIN_CHARS} chars and ≥{ARCHITECTURE_MIN_WORDS} words)"
+                ),
+                details={"chars": len(text), "words": len(words)},
+            )
+        )
+    else:
+        results.append(
+            ValidatorResult(
+                validator_id="architecture_substance",
+                status="pass",
+                message="ok",
+                details={"chars": len(text), "words": len(words)},
+            )
+        )
+
+    if reject_boilerplate:
+        hits = [marker for marker in ARCHITECTURE_BOILERPLATE_MARKERS if marker in lower]
+        if hits:
+            results.append(
+                ValidatorResult(
+                    validator_id="architecture_boilerplate",
+                    status="fail",
+                    message="Architecture looks like a generic template, not request-specific",
+                    details={"boilerplate_markers": hits},
+                )
+            )
+        else:
+            results.append(
+                ValidatorResult(
+                    validator_id="architecture_boilerplate",
+                    status="pass",
+                    message="ok",
+                )
+            )
+
+    topics = [str(item).strip() for item in (must_cover or []) if str(item).strip()]
+    if topics:
+        missing = [topic for topic in topics if topic.lower() not in lower]
+        results.append(
+            ValidatorResult(
+                validator_id="architecture_must_cover",
+                status="pass" if not missing else "fail",
+                message="ok" if not missing else f"Missing must-cover topics: {missing}",
+                details={"required": topics, "missing": missing},
+            )
+        )
+    return results
 
 
 def validate_behavioral_commands(

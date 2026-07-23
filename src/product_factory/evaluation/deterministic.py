@@ -20,6 +20,7 @@ from product_factory.evaluation.subjects import SubjectArtifact
 from product_factory.validation.pipeline import (
     has_blocking_failures,
     validate_architecture_document,
+    validate_architecture_request_specificity,
     validate_path_scope,
     validate_secrets,
 )
@@ -85,6 +86,18 @@ def run_deterministic_checks(
 
     if case.workflow_type == "architecture":
         results.append(validate_architecture_document(artifact.artifact_text))
+        results.extend(
+            validate_architecture_request_specificity(
+                artifact.artifact_text,
+                must_cover=case.must_cover
+                or [
+                    str(item).strip()
+                    for item in (case.metadata.get("must_cover") or [])
+                    if str(item).strip()
+                ],
+                reject_boilerplate=True,
+            )
+        )
         results.append(validate_secrets(artifact.artifact_text))
     if case.workflow_type == "code_change":
         is_diff = (

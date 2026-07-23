@@ -1,16 +1,26 @@
 id: arch_saas
 workflow_type: architecture
 request: |
-  Design a small SaaS billing service.
+  Design a small multi-tenant SaaS billing service that manages subscriptions,
+  invoices, and payment-provider webhooks for B2B customers.
 tags: ['architecture']
 expected_status:
   - completed
   - awaiting_approval
 
 acceptance_criteria:
-  - Architecture covers security and testing
-  - Trade-offs documented
-reference_hints: Should mention multi-tenant billing concerns
+  - Document is request-specific (not a generic section template)
+  - Tenant isolation and billing/invoice lifecycle are explicit
+  - Security boundaries and testing strategy are concrete
+  - Trade-offs vs alternatives are documented
+reference_hints: |
+  Must address multi-tenant billing, invoice states, webhook verification,
+  and PCI/payment-provider boundary choices.
+must_cover:
+  - tenant isolation
+  - invoice lifecycle
+  - webhook
+  - payment provider
 isolation_targets:
   - architecture
   - composition

@@ -68,8 +68,10 @@ from product_factory.skills.registry import SkillRegistry
 from product_factory.tools.broker import ToolBroker
 from product_factory.tools.registry import default_tool_registry
 from product_factory.validation.pipeline import (
+    ARCHITECTURE_REQUIRED_SECTIONS,
     has_blocking_failures,
     validate_architecture_document,
+    validate_architecture_request_specificity,
     validate_behavioral_commands,
     validate_patch_applies,
     validate_path_scope,
@@ -1185,6 +1187,19 @@ class RunCoordinator:
                 architecture_md = self._compose_architecture(request.request_text, findings)
             (run_dir / "output" / "ARCHITECTURE.md").write_text(architecture_md, encoding="utf-8")
             validation_results.append(validate_architecture_document(architecture_md))
+            must_cover = [
+                item.strip()
+                for item in str(request.metadata.get("must_cover") or "").split("|")
+                if item.strip()
+            ]
+            if must_cover or not isinstance(self._raw_gateway, MockGateway):
+                validation_results.extend(
+                    validate_architecture_request_specificity(
+                        architecture_md,
+                        must_cover=must_cover or None,
+                        reject_boilerplate=not isinstance(self._raw_gateway, MockGateway),
+                    )
+                )
 
         # Approval gate for code changes
         final_status: str
@@ -1994,7 +2009,18 @@ class RunCoordinator:
             summary = summary or "Independent review complete"
         elif task.capability == "composition":
             if request.workflow_type == "architecture":
-                architecture_md = self._compose_architecture(request.request_text, [])
+                if isinstance(self._raw_gateway, MockGateway):
+                    architecture_md = self._compose_architecture(request.request_text, [])
+                else:
+                    architecture_md, gen_usage = self._generate_architecture_document(
+                        request=request,
+                        task=task,
+                        ctx_messages=ctx.messages,
+                        run_id=run_id,
+                        profile=profile,
+                        dependency_outputs=dependency_outputs or [],
+                    )
+                    model_usage = model_usage.merge(gen_usage)
                 art = artifacts.put_text(
                     architecture_md,
                     media_type="text/markdown",
@@ -2030,46 +2056,51 @@ class RunCoordinator:
                 else:
                     summary = "Nothing to compose"
         elif task.capability in {"architecture", "requirements"}:
-            art = artifacts.put_json(
-                {"objective": task.objective, "notes": "draft"},
-                logical_name=f"{task.id}.json",
-                created_by_task_id=task.id,
-            )
+            draft_text = ""
+            if not isinstance(self._raw_gateway, MockGateway):
+                try:
+                    resp = self.gateway.complete(
+                        ModelRequest(
+                            request_id=f"req-{uuid.uuid4().hex[:8]}",
+                            run_id=run_id,
+                            task_id=task.id,
+                            session_id=f"pf:{run_id}:{profile}:{task.id}",
+                            model_profile=profile,
+                            messages=[
+                                CanonicalMessage(role=m["role"], content=m["content"])  # type: ignore[arg-type]
+                                for m in ctx.messages
+                            ],
+                            max_output_tokens=6000,
+                            seed=(
+                                int(request.metadata["benchmark_seed"])
+                                if request.metadata.get("benchmark_seed") is not None
+                                else None
+                            ),
+                        )
+                    )
+                    model_usage = model_usage.merge(resp.usage)
+                    draft_text = (resp.text or "").strip()
+                except Exception:
+                    draft_text = ""
+            if draft_text:
+                art = artifacts.put_text(
+                    draft_text,
+                    media_type="text/markdown",
+                    logical_name=f"{task.id}-draft.md",
+                    created_by_task_id=task.id,
+                )
+            else:
+                art = artifacts.put_json(
+                    {"objective": task.objective, "notes": "draft"},
+                    logical_name=f"{task.id}.json",
+                    created_by_task_id=task.id,
+                )
             artifact_refs.append(art)
             summary = f"{task.capability} draft created"
         else:
             summary = f"Task {task.capability} completed (stub)"
 
-        # Optional generic model invocation for non-mock when useful
-        if (
-            not isinstance(self.gateway, MockGateway)
-            and task.capability in {"architecture", "requirements"}
-            and not self.use_deterministic_planner
-        ):
-            try:
-                resp = self.gateway.complete(
-                    ModelRequest(
-                        request_id=f"req-{uuid.uuid4().hex[:8]}",
-                        run_id=run_id,
-                        task_id=task.id,
-                        session_id=f"pf:{run_id}:{profile}:{task.id}",
-                        model_profile=profile,
-                        messages=[
-                            CanonicalMessage(role=m["role"], content=m["content"])  # type: ignore[arg-type]
-                            for m in ctx.messages
-                        ],
-                        max_output_tokens=4000,
-                        seed=(
-                            int(request.metadata["benchmark_seed"])
-                            if request.metadata.get("benchmark_seed") is not None
-                            else None
-                        ),
-                    )
-                )
-                model_usage = model_usage.merge(resp.usage)
-            except Exception:
-                pass
-
+        # Legacy live probe path removed: architecture/requirements now persist drafts above.
         context_evidence = [
             ResourceRef(
                 id=f"context:{task.id}:{excerpt['path']}",
@@ -2150,6 +2181,19 @@ class RunCoordinator:
             )
         if request.workflow_type == "architecture" and architecture_md:
             results.append(validate_architecture_document(architecture_md))
+            must_cover = [
+                item.strip()
+                for item in str(request.metadata.get("must_cover") or "").split("|")
+                if item.strip()
+            ]
+            if must_cover or not isinstance(self._raw_gateway, MockGateway):
+                results.extend(
+                    validate_architecture_request_specificity(
+                        architecture_md,
+                        must_cover=must_cover or None,
+                        reject_boilerplate=not isinstance(self._raw_gateway, MockGateway),
+                    )
+                )
             results.append(validate_secrets(architecture_md))
         return results
 
@@ -2159,6 +2203,91 @@ class RunCoordinator:
             if line.startswith("+++ b/"):
                 files.append(line[6:])
         return files
+
+    def _generate_architecture_document(
+        self,
+        *,
+        request: RunRequest,
+        task: TaskSpec,
+        ctx_messages: list[dict[str, Any]],
+        run_id: str,
+        profile: str,
+        dependency_outputs: list[dict[str, Any]],
+    ) -> tuple[str, UsageMetrics]:
+        """Ask the live model for a request-specific ARCHITECTURE.md."""
+        must_cover = [
+            item.strip()
+            for item in str(request.metadata.get("must_cover") or "").split("|")
+            if item.strip()
+        ]
+        section_list = ", ".join(ARCHITECTURE_REQUIRED_SECTIONS)
+        system = (
+            "You are the architecture composer. Write a complete ARCHITECTURE.md "
+            "markdown document for the user request. Use these section headings "
+            f"(as markdown ## headings): {section_list}. "
+            "Every section must contain request-specific detail — never generic "
+            "boilerplate such as 'MVP scope as requested' or 'Deliver the requested "
+            "capabilities'. Include at least one mermaid data-flow diagram when useful. "
+            "Return markdown only."
+        )
+        payload = {
+            "request": request.request_text,
+            "task_objective": task.objective,
+            "must_cover_topics": must_cover,
+            "reference_hints": request.metadata.get("reference_hints") or "",
+            "dependency_drafts": dependency_outputs[:4],
+            "prior_context_messages": ctx_messages[-4:],
+        }
+        usage = UsageMetrics()
+        try:
+            resp = self.gateway.complete(
+                ModelRequest(
+                    request_id=f"arch-{uuid.uuid4().hex[:8]}",
+                    run_id=run_id,
+                    task_id=task.id,
+                    session_id=f"pf:{run_id}:{profile}:{task.id}",
+                    model_profile=profile,
+                    messages=[
+                        CanonicalMessage(role="system", content=system),
+                        CanonicalMessage(
+                            role="user",
+                            content=json.dumps(payload, indent=2, default=str),
+                        ),
+                    ],
+                    max_output_tokens=8000,
+                    temperature=0.2,
+                    seed=(
+                        int(request.metadata["benchmark_seed"])
+                        if request.metadata.get("benchmark_seed") is not None
+                        else None
+                    ),
+                    max_cost_usd=float(request.budget.max_cost_usd),
+                )
+            )
+            usage = resp.usage
+            text = (resp.text or "").strip()
+            if text:
+                if not text.lstrip().startswith("#"):
+                    text = f"# ARCHITECTURE.md\n\n{text}"
+                return text, usage
+        except Exception:
+            pass
+        # Fail closed toward an explicit thin draft rather than silent template success.
+        fallback = (
+            f"# ARCHITECTURE.md\n\n## Objective\n{request.request_text.strip()}\n\n"
+            "## Scope\nGeneration failed; document incomplete.\n\n"
+            "## Assumptions\n- None captured.\n\n"
+            "## Functional requirements\n- None captured.\n\n"
+            "## Nonfunctional requirements\n- None captured.\n\n"
+            "## Components\n- None captured.\n\n"
+            "## Data flows\nNone captured.\n\n"
+            "## Security\nNone captured.\n\n"
+            "## Testing\nNone captured.\n\n"
+            "## Trade-offs\nNone captured.\n\n"
+            "## Open questions\n- Architecture generation failed.\n\n"
+            "## Acceptance criteria\n- Regenerate architecture document.\n"
+        )
+        return fallback, usage
 
     def _compose_architecture(self, request_text: str, findings: list[Finding]) -> str:
         sections = [

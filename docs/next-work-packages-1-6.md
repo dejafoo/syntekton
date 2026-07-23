@@ -20,6 +20,7 @@ code suite, with ablations that attribute gains to a subsystem.
 | N4 planner | `bench-466fb40fada6` | fixed **77.8%** vs live **66.7%** → keep fixed |
 | N4 worker | `bench-fa7a67a1307f` | `coding_worker` **88.9%** vs strong **44.4%** → keep coding_worker |
 | N5 Stage F | `bench-c46101767870` | orch **93.3%** vs frontier **50%**; cost/usable **8.7×** cheaper; pairwise 43% (secondary fail) |
+| N6 Stage D | `bench-2e57f250a05f` | orch arch usable **77.8%** (7/9), mean-q **0.99**; baseline 0%; request-specific contract in force |
 
 ---
 
@@ -540,6 +541,24 @@ product-factory bench run --live \
 
 ## N6 — Stage D architecture quality
 
+### Status — 2026-07-23
+
+- [x] Scoring contract: `must_cover` on `EvalCase`; substance + boilerplate +
+      must-cover validators; judge payload/rubric updated.
+- [x] Live architecture composition generates request-specific `ARCHITECTURE.md`
+      (mock keeps template); template no longer silently “wins” on live eval.
+- [x] Gate cases tightened: `arch_saas`, `arch_multitenant`, `arch_secure`.
+- [x] Live Stage D — `bench-2e57f250a05f` (3 cases × 2 subjects × 3 seeds):
+  - `full_orchestration`: **7/9 usable (77.8%)**, mean valid quality **≈0.99**
+  - `single_agent_baseline`: **0/9 usable** (section / must-cover misses)
+  - Paired orch−baseline usable **+78pp**
+  - Residual misses: exact-phrase `must_cover` + incomplete section headings on
+    some multitenant cells (not template wins)
+- [x] **Decision: architecture workflow ready for product use on the gated
+      cases**, with orchestration preferred over one-shot baseline. Further
+      heading/phrase soft-matching is optional polish, not a blocker.
+- [x] **N6 exit met.**
+
 ### Goal
 
 Replace template-compliance wins with **request-specific** architecture quality,
@@ -555,29 +574,43 @@ not an impl-agent tweak.
 - Architecture cases (e.g. `arch_saas.yaml`) have soft AC and `reference_hints`.
 - Deterministic `validate_architecture_document` can pass boilerplate.
 - Historical “wins” often mean baseline empty vs template-shaped orch output.
+- Live composition previously always emitted `_compose_architecture` template and
+  discarded architecture-task LLM text.
+
+### Configuration (Stage D gate)
+
+```bash
+unset PRODUCT_FACTORY_FORCE_MOCK
+product-factory bench run --live \
+  --subjects full_orchestration,single_agent_baseline \
+  --case-ids arch_saas,arch_multitenant,arch_secure \
+  --limit 3 --seeds 3 \
+  --progress-log .product-factory/bench-progress/n6-stage-d.log
+```
 
 ### Workstreams
 
 #### N6.A — Scoring contract
 
-- [ ] Define request-specific must-cover dimensions per case (or shared rubric
+- [x] Define request-specific must-cover dimensions per case (or shared rubric
       with case overrides): e.g. tenancy, threat model, data model, failure
       modes, test strategy — mapped from `request` + `reference_hints`.
-- [ ] Fail empty / near-empty / pure template headers as non-usable.
-- [ ] Require ≥**20%** usable architecture artifacts before comparing mean
+- [x] Fail empty / near-empty / pure template headers as non-usable.
+- [x] Require ≥**20%** usable architecture artifacts before comparing mean
       judge quality (Stage D gate).
-- [ ] Optional: lightweight deterministic keyword/section checks **plus** LLM
+- [x] Optional: lightweight deterministic keyword/section checks **plus** LLM
       judge rubric that references case-specific criteria.
 
 #### N6.B — Cases and run
 
-- [ ] Audit `tests/eval_cases/arch_*.yaml`; tighten AC and hints on at least
+- [x] Audit `tests/eval_cases/arch_*.yaml`; tighten AC and hints on at least
       **3** cases used for the gate.
-- [ ] Run ≥3 seeds per selected architecture case.
+- [x] Run ≥3 seeds per selected architecture case.
 - Subjects: `full_orchestration`, `single_agent_baseline` (frontier optional /
       budget-separated).
-- [ ] If usable &lt; 20%: fix planner/architecture worker prompts and validation
+- [x] If usable &lt; 20%: fix planner/architecture worker prompts and validation
       before quality comparisons; do not declare Stage D passed on mean-q alone.
+      (Not needed — usable **77.8%**.)
 
 ### Likely files
 
@@ -590,10 +623,10 @@ not an impl-agent tweak.
 
 ### Exit (N6)
 
-- [ ] Request-specific criteria in force for gate cases
-- [ ] ≥20% usable architecture artifacts on the Stage D run
-- [ ] Mean judge quality compared only after usable floor met
-- [ ] Decision recorded: architecture workflow ready for product use / needs
+- [x] Request-specific criteria in force for gate cases
+- [x] ≥20% usable architecture artifacts on the Stage D run
+- [x] Mean judge quality compared only after usable floor met
+- [x] Decision recorded: architecture workflow ready for product use / needs
       another iteration / deprioritize vs code path
 
 ---
@@ -674,11 +707,12 @@ N1.C isolation ─────┤                         ├──► N5 Stage 
 
 ## Definition of done (all of 1–6)
 
-- [ ] N1–N6 package exits checked off with bench IDs
-- [ ] WP6 and WP8 gates in `orchestration-performance-plan.md` resolved
-- [ ] Stage D/E/F sections updated with decisions
-- [ ] Defaults in code match measured keep/kill calls
+- [x] N1–N6 package exits checked off with bench IDs
+- [x] WP6 and WP8 gates in `orchestration-performance-plan.md` resolved
+- [x] Stage D/E/F sections updated with decisions
+- [x] Defaults in code match measured keep/kill calls
 - [ ] README / architecture docs only updated if user-facing defaults changed
+      (no product-default change requiring README for N6)
 
 ---
 

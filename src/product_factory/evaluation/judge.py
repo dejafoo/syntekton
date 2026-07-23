@@ -61,6 +61,9 @@ Score each rubric dimension from 1–5:
 4 Strong minor corrections only, 5 Ready for intended MVP purpose.
 Dimensions: correctness, completeness, maintainability, architectural_quality,
 security_awareness, test_quality, evidence_quality, scope_discipline.
+For architecture artifacts: require request-specific design detail. Penalize
+generic templates, empty section stubs, and missing must_cover / reference_hints
+topics. Do not award usable overall scores (≥3) for boilerplate section shells.
 Do not invent evidence. Mark uncertain=true when unsure.
 Deterministic validation failures already reported must not be ignored.
 Return ONLY JSON matching the provided schema.
@@ -183,6 +186,7 @@ class LLMJudge(Judge):
             "request": case.request,
             "acceptance_criteria": case.acceptance_criteria,
             "reference_hints": case.reference_hints,
+            "must_cover": case.must_cover,
             "deterministic_validation": deterministic_summary,
             "artifact_kind": artifact.artifact_kind,
             "artifact_excerpt": artifact.artifact_text[:12_000],

@@ -1,8 +1,25 @@
 id: arch_multitenant
 workflow_type: architecture
 request: |
-  Design a multi-tenant API platform.
+  Design a multi-tenant public API platform with per-tenant API keys, rate
+  limits, and isolated data planes for independent customer environments.
 tags: ['architecture']
 expected_status:
   - completed
   - awaiting_approval
+
+acceptance_criteria:
+  - Tenant identity, authn/authz, and data isolation are explicit
+  - Rate limiting and noisy-neighbor controls are described
+  - Failure modes and testing for cross-tenant leakage are covered
+reference_hints: |
+  Focus on tenant_id propagation, API-key auth, quota/rate limits, and
+  isolation between tenant data stores or schemas.
+must_cover:
+  - tenant isolation
+  - api key
+  - rate limit
+  - noisy neighbor
+isolation_targets:
+  - architecture
+  - composition
