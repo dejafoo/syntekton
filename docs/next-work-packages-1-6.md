@@ -17,6 +17,8 @@ code suite, with ablations that attribute gains to a subsystem.
 | Live Stage B | `bench-be97863325ab` | orch usable **90%**; `code_health` **3/5** |
 | Live Stage C | `bench-e59f17adf319` | orch usable **85.2%** vs baseline 13% |
 | Stage E slice | `bench-72dfcf11b63b` | no-review/validation/context ≈**77.8%**; review-on & isolation **0%** |
+| N4 planner | `bench-466fb40fada6` | fixed **77.8%** vs live **66.7%** → keep fixed |
+| N4 worker | `bench-fa7a67a1307f` | `coding_worker` **88.9%** vs strong **44.4%** → keep coding_worker |
 
 ---
 
@@ -373,6 +375,29 @@ N1.B must produce a review subject that is not systematically empty.
 
 ## N4 — Targeted Stage E leftovers
 
+### Status — 2026-07-22
+
+- [x] Isolation subject fair (N1.C); ablation runners use fixed planner + agent
+      loop where needed.
+- [x] Planner ablation live — `bench-466fb40fada6`
+      (`code_cache,code_health,code_retry` × 3 seeds):
+      - `orchestration_fixed_planner`: **7/9 usable (77.8%)**, cost/usable ≈ `$0.021`
+      - `orchestration_live_planner`: **6/9 usable (66.7%)**, cost/usable ≈ `$0.025`
+      - Live −11.1pp usable and worse cost/usable → **keep `planner_mode=fixed`**
+- [x] Worker model ablation live — `bench-fa7a67a1307f` (same cases/seeds;
+      planner held fixed):
+      - `orchestration_fixed_planner` (`coding_worker`): **8/9 usable (88.9%)**,
+        cost/usable ≈ `$0.025`
+      - `orchestration_strong_worker` (`local_target_reviewer`): **4/9 usable
+        (44.4%)** — collapsed on `code_cache` (0/3) and weak on `code_retry` (1/3)
+      - Stronger profile does **not** improve usable → **keep `coding_worker`**
+- [x] Context ablation **skipped**: Stage E already tied targeted vs file-list
+      at 77.8%; planner/model left no residual question.
+- [x] Ablation knobs wired: `resolve_task_model_profile`, subject
+      `orchestration_strong_worker`, tests in `tests/graph/test_n4_ablation_knobs.py`.
+- [x] **N4 exit met.** Defaults already match (`planner_mode=fixed`,
+      impl profile `coding_worker`, `context_mode=targeted` as impl detail).
+
 ### Goal
 
 Answer only the three product-shape questions left open after Stage E.
@@ -383,17 +408,25 @@ Answer only the three product-shape questions left open after Stage E.
 | Worker model profile | Stronger coding worker vs cost/usable? | `coding_worker` vs one stronger profile (config/models) |
 | Context targeted vs file-list | Harder cases only; Stage E tied at 77.8% | `context_mode=targeted` vs `file_list_only` on harder / Stage C bottom stratum |
 
+### Decision table
+
+| Knob | Call | Bench | Default |
+| --- | --- | --- | --- |
+| Planner | **Keep fixed**; do not promote live as default | `bench-466fb40fada6` | `planner_mode=fixed` |
+| Worker profile | **Keep `coding_worker`**; do not switch to `local_target_reviewer` | `bench-fa7a67a1307f` | coding worker via scheduler |
+| Context | **Defer / drop as priority**; no ablation win claimed | Stage E `bench-72dfcf11b63b` (tie) | `context_mode=targeted` |
+
 ### Tasks
 
-- [ ] Confirm isolation subject is fair (N1.C); if re-including isolation in a
+- [x] Confirm isolation subject is fair (N1.C); if re-including isolation in a
       matrix, use the fixed runner.
-- [ ] Planner ablation: 3 cases × 3 seeds × 2–3 planner subjects; live.
-- [ ] Model-profile ablation: same cases/seeds; swap only worker profile;
+- [x] Planner ablation: 3 cases × 3 seeds × 2–3 planner subjects; live.
+- [x] Model-profile ablation: same cases/seeds; swap only worker profile;
       hold planner fixed.
-- [ ] Context: **skip** unless planner/model leave a residual question; if run,
+- [x] Context: **skip** unless planner/model leave a residual question; if run,
       use cases where file-list previously failed or Stage C misses.
-- [ ] Produce a one-page decision table: keep / kill / defer each knob.
-- [ ] Update Stage E section of the performance plan.
+- [x] Produce a one-page decision table: keep / kill / defer each knob.
+- [x] Update Stage E section of the performance plan.
 
 ### Decision heuristics
 
@@ -405,9 +438,9 @@ Answer only the three product-shape questions left open after Stage E.
 
 ### Exit (N4)
 
-- [ ] Three keep/kill calls documented with bench IDs
-- [ ] Defaults in `bench.py` / coordinator metadata match decisions
-- [ ] No “try everything” matrix left open as a blocker
+- [x] Three keep/kill calls documented with bench IDs
+- [x] Defaults in `bench.py` / coordinator metadata match decisions
+- [x] No “try everything” matrix left open as a blocker
 
 ---
 

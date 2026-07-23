@@ -72,11 +72,12 @@ Implemented and verified:
 - [~] WP9 low-risk two-task and high-risk reviewed plans, read/write path-scope
   fields, acceptance-criterion ownership checks, and planner-mode ablations
   (`fixed` / `live` / `complexity_sensitive`) are implemented. Live planner
-  ablation gates remain pending.
+  ablation **done** (`bench-466fb40fada6`): keep `planner_mode=fixed`.
 - [~] WP10 named ablations (including validation/repair vs no-review, context,
   and planner variants), blind randomized pairwise judging, confidence
-  intervals, and stratified reports are implemented. Live model/profile and
-  frontier experiments remain pending.
+  intervals, and stratified reports are implemented. Live model/profile
+  ablation **done** (`bench-fa7a67a1307f`): keep `coding_worker`. Frontier
+  experiments remain pending (N5).
 
 Verification:
 
@@ -137,6 +138,8 @@ Live smoke results:
   - orch cost/usable ≈ `$0.0127` (0.38× baseline cost/usable)
   - subject cost `$0.819391`, judge cost `$1.462102`
 - [~] Stage D–F (architecture quality, named ablations, frontier) remain open.
+  Stage E product-shape leftovers closed in N4 (planner fixed; coding_worker;
+  context deferred). Stage D/F remain for N6/N5.
   Stage E partial slice `bench-72dfcf11b63b` completed: no-review/validation/
   context subjects ≈77.8% usable; forced review and isolation were 0% (review kept
   optional). Finding-category normalization and force-review AC injection were
@@ -756,9 +759,13 @@ Compare:
 - current live planner;
 - complexity-sensitive planner.
 
+N4 live planner vs fixed (`bench-466fb40fada6`): fixed won usable (77.8% vs
+66.7%) → product default remains `planner_mode=fixed`. Complexity-sensitive
+remains an unused ablation subject (not promoted).
+
 Pass when:
 
-- [ ] Usable rate is not reduced.
+- [x] Usable rate is not reduced (fixed ≥ live on N4 slice).
 - [ ] Median task count and cost decrease for simple cases.
 - [ ] Acceptance-criterion coverage remains 100%.
 
@@ -874,8 +881,9 @@ Recorded live Stage C: `bench-e59f17adf319` — orch usable 85.2% vs baseline 13
 - [x] Worker isolation.
 - [x] Validation/repair.
 - [x] Review on/off.
-- [~] Planner variants.
-- [~] Model/profile variants.
+- [x] Planner variants.
+- [x] Model/profile variants.
+- [x] Context: deferred (Stage E tie; not a blocker).
 
 Recorded live Stage E slice `bench-72dfcf11b63b` (3 cases × 6 subjects × 3 seeds):
 
@@ -891,6 +899,15 @@ N1 follow-up live ablations (2026-07-22):
   (tied with no-review); prior Stage E 0% invalidated (was plan/empty failures).
 - Isolation retest `bench-9fb86599d67e`: usable 58.3%, patch-apply 100%;
   prior Stage E isolation 0% invalidated (unfair one-shot runner).
+
+N4 targeted leftovers (2026-07-22):
+
+- Planner `bench-466fb40fada6`: fixed **77.8%** vs live **66.7%** → **keep
+  `planner_mode=fixed`** (live worse usable and cost/usable).
+- Worker `bench-fa7a67a1307f`: `coding_worker` **88.9%** vs
+  `local_target_reviewer` **44.4%** → **keep `coding_worker`**.
+- Context: no new run; remain at Stage E tie; keep `targeted` as impl default
+  without claiming an ablation win. Stage E product-shape leftovers closed.
 
 ### Stage F — Frontier comparison
 
@@ -1041,5 +1058,16 @@ Add dated entries as implementation proceeds.
   artifact than baseline (0.38×).
 - Note: blind pairwise still often favored baseline textually; usable-rate and
   apply/behavioral metrics are the Stage B/C promotion criteria and passed.
-- Remaining open: Stage D architecture, Stage E/F ablations and frontier.
+- Remaining open: Stage D architecture, Stage F frontier (Stage E leftovers
+  closed in N4).
+
+### 2026-07-22 — N4 Stage E leftovers closed
+
+- Planner ablation `bench-466fb40fada6`: fixed 77.8% vs live 66.7% → keep
+  `planner_mode=fixed` as product default.
+- Worker ablation `bench-fa7a67a1307f`: `coding_worker` 88.9% vs
+  `local_target_reviewer` 44.4% → keep `coding_worker`.
+- Context: no new run; Stage E tie stands; keep `targeted` without claiming win.
+- Ablation subject `orchestration_strong_worker` + `implementation_model_profile`
+  override remain available for future experiments.
 

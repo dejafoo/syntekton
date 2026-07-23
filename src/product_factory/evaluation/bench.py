@@ -152,6 +152,17 @@ class BenchmarkRunner:
                 },
                 use_deterministic_planner=True,
             ),
+            "orchestration_strong_worker": OrchestrationAblationRunner(
+                app_config,
+                subject_id="orchestration_strong_worker",
+                metadata={
+                    "disable_review": True,
+                    "planner_mode": "fixed",
+                    # Stronger coding-oriented profile vs default coding_worker.
+                    "implementation_model_profile": "local_target_reviewer",
+                },
+                use_deterministic_planner=True,
+            ),
             "frontier_reference": FrontierReferenceRunner(app_config),
         }
 

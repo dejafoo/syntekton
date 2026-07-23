@@ -63,7 +63,7 @@ from product_factory.repositories.patches import (
 )
 from product_factory.repositories.snapshot import snapshot_repository
 from product_factory.repositories.worktrees import WorktreeManager
-from product_factory.scheduling.scheduler import runnable_tasks, select_model
+from product_factory.scheduling.scheduler import resolve_task_model_profile, runnable_tasks
 from product_factory.skills.registry import SkillRegistry
 from product_factory.tools.broker import ToolBroker
 from product_factory.tools.registry import default_tool_registry
@@ -1297,7 +1297,7 @@ class RunCoordinator:
         recorder: TelemetryRecorder | None = None,
         dependency_outputs: list[dict[str, Any]] | None = None,
     ) -> TaskResult:
-        profile = select_model(task)
+        profile = resolve_task_model_profile(task, metadata=request.metadata)
         agent_profile = {
             "repository_analysis": "repository_explorer",
             "implementation": "implementation_worker",

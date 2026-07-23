@@ -131,6 +131,9 @@ class FullOrchestrationRunner:
                 "seed_repair_defect": str(
                     case.metadata.get("seed_repair_defect") or ""
                 ),
+                "implementation_model_profile": str(
+                    case.metadata.get("implementation_model_profile") or ""
+                ),
             },
         )
         try:
@@ -749,6 +752,11 @@ def default_subject_configs() -> dict[str, SubjectConfig]:
             subject_id="orchestration_complexity_planner",
             model_profile="supervisor",
             description="Complexity-sensitive planner ablation",
+        ),
+        "orchestration_strong_worker": SubjectConfig(
+            subject_id="orchestration_strong_worker",
+            model_profile="local_target_reviewer",
+            description="Fixed planner with stronger implementation worker",
         ),
         "frontier_reference": SubjectConfig(
             subject_id="frontier_reference",

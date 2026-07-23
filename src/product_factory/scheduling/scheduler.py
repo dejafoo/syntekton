@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from product_factory.domain.plans import CompiledPlan
 from product_factory.domain.tasks import TaskSpec
 
@@ -27,6 +29,19 @@ def select_model(task: TaskSpec, *, originating_profile: str | None = None) -> s
     if task.capability == "repair":
         return originating_profile or "coding_worker"
     raise ValueError(f"Unsupported capability: {task.capability}")
+
+
+def resolve_task_model_profile(
+    task: TaskSpec,
+    *,
+    metadata: dict[str, Any] | None = None,
+    originating_profile: str | None = None,
+) -> str:
+    """Select the model profile, honoring ablation overrides for impl/repair."""
+    override = str((metadata or {}).get("implementation_model_profile") or "").strip()
+    if override and task.capability in {"implementation", "repair"}:
+        return override
+    return select_model(task, originating_profile=originating_profile)
 
 
 def runnable_tasks(
