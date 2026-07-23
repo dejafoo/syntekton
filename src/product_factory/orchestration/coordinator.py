@@ -391,12 +391,12 @@ def deterministic_impl_files(request_text: str, *, task_objective: str = "") -> 
                 ),
             )
         ]
-    # Default vertical-slice: health endpoint (preserves existing mock tests).
+    # Default vertical-slice: callable health module (plain package, no HTTP).
     return [
         (
             "src/app/health.py",
             (
-                '"""Health check endpoint."""\n\n'
+                '"""Health check module."""\n\n'
                 "def health() -> dict[str, str]:\n"
                 '    return {"status": "ok"}\n'
             ),
@@ -1029,11 +1029,15 @@ class RunCoordinator:
                             finding.status = "resolved"
                         blocking_findings = []
                     if (
-                        result.status != "success"
-                        or has_blocking_failures(validation_results)
-                        or blocking_findings
-                    ) and repair_count < (
-                        request.budget.max_total_repair_tasks
+                        request.metadata.get("disable_validation_repair") != "true"
+                        and (
+                            result.status != "success"
+                            or has_blocking_failures(validation_results)
+                            or blocking_findings
+                        )
+                        and repair_count < (
+                            request.budget.max_total_repair_tasks
+                        )
                     ):
                         origin_task = live_plan.tasks[result.task_id]
                         attempts = origin_repair_attempts.get(result.task_id, 0)
@@ -1581,8 +1585,47 @@ class RunCoordinator:
             summary = "Repository analyzed"
         elif task.capability in {"implementation", "repair"} and broker.worktree_root:
             applied = False
+            seeded_defect = str(request.metadata.get("seed_repair_defect") or "").strip()
+            force_seeded_impl = (
+                task.capability == "implementation"
+                and request.metadata.get("force_seeded_impl") == "true"
+                and bool(seeded_defect)
+            )
+            if force_seeded_impl:
+                from product_factory.evaluation.defects import (
+                    defect_files,
+                    resolve_defect_kind,
+                )
+
+                case_id = str(request.metadata.get("eval_case") or "")
+                kind = resolve_defect_kind(case_id, explicit=seeded_defect)
+                for rel_path, content in defect_files(case_id or "code_cache", kind):
+                    out = broker.execute(
+                        task_id=task.id,
+                        tool_name="create_file",
+                        arguments={
+                            "path": rel_path,
+                            "content": content,
+                            "overwrite": True,
+                        },
+                    )
+                    tool_call_ids.append(out["tool_call_id"])
+                    changed_files.append(rel_path)
+                applied = True
+                summary = f"Seeded repairable defect ({kind})"
+                artifact_refs.append(
+                    artifacts.put_json(
+                        {
+                            "seed_repair_defect": kind,
+                            "case_id": case_id,
+                            "files": changed_files,
+                        },
+                        logical_name=f"seeded-defect-{task.id}.json",
+                        created_by_task_id=task.id,
+                    )
+                )
             # Live path: bounded inspect/edit/test tool loop.
-            if not self.allow_deterministic_workers:
+            elif not self.allow_deterministic_workers:
                 patch_text = ""
                 try:
                     impl_messages = [

@@ -55,6 +55,28 @@ make ablations interpretable:
 2. Review-on path producing empty / plan-rejected artifacts
 3. Implementation isolation runner producing empty patches
 
+### Status — 2026-07-22
+
+- [x] N1.A contract A chosen and applied: `code_health` is a callable health
+      module + tests (no HTTP). Case YAML, mock deterministic impl text, and
+      judge `reference_hints` aligned.
+- [x] N1.A live Stage B retest **PASSED** — `bench-9ae9322ca17d`:
+      orch usable **90%** (18/20); `code_health` **5/5** (q≈0.97–1.0);
+      baseline usable 50%; paired usable delta +40pp; subject `$0.505`,
+      judge `$0.603`.
+- [x] N1.B live review-on/off slice **PASSED** — `bench-6df9e5333310`
+      (3 cases × 2 subjects × 3 seeds):
+      - no-review usable 6/9 (66.7%), artifacts 9/9
+      - with-review usable 6/9 (66.7%), artifacts **7/9 (77.8%)** ≥50% exit
+      - empties were provider **HTTP 502**, not systematic plan rejection
+      - Decision deferred to N3 (usable tied; cost similar; keep optional for now)
+- [x] N1.C live isolation mini-check **PASSED** — `bench-9fb86599d67e`
+      (4 cases × 3 seeds): usable **7/12 (58.3%)** ≥50%; artifact 12/12;
+      patch-apply 12/12. Pre-fix Stage E isolation 0% is **invalidated**.
+- [x] Fixture clone helpers materialize git from plain trees.
+
+**N1 package exit: met.** Proceed to N2 (seeded repair) / N3 (review default).
+
 ### Background / failure autopsy (known)
 
 **`code_health` (Stage B seeds 1, 3):**
@@ -210,6 +232,15 @@ completion.”
 
 ## N2 — Close WP6 live seeded-repair gate
 
+### Status — 2026-07-22
+
+- [x] Harness: `seeded_repair` subject + `evaluation/defects.py` +
+      `force_seeded_impl` coordinator path.
+- [x] Mock tests: repair triggered; candidate recovered.
+- [x] Live `bench-11f4a2d7b31c`: usable **8/12 (66.7%)** after one defect
+      strengthening retest; repair + fingerprint change on all cells.
+- [x] **N2 / WP6 exit met.**
+
 ### Goal
 
 Prove stateful repair recovers **>50%** of seeded repairable failures, starting
@@ -280,6 +311,16 @@ bug once; re-run once. Do not expand planner/review to compensate.
 ---
 
 ## N3 — Decide review default with evidence
+
+### Status — 2026-07-22
+
+- [x] Experiment: `bench-6df9e5333310` (reuse N1.B) — usable tied **66.7%**
+      with/without review; with-review artifacts 7/9 (empties = provider 502).
+- [x] **Decision: keep review optional** for ordinary/low-risk runs.
+- [x] High-risk fixed plans retain `independent_review` (existing planner).
+- [x] Policy regression tests added; no further review schema work until a new
+      measured hypothesis.
+- [x] **N3 exit met.**
 
 ### Goal
 

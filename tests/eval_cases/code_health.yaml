@@ -1,7 +1,10 @@
 id: code_health
 workflow_type: code_change
 request: |
-  Add a validated health-check endpoint with tests.
+  Add a validated health-check function in a dedicated module, with unit tests.
+  This repository is a plain Python package (not a web framework). Do not add
+  HTTP routing, ASGI/WSGI apps, or a web server. Expose a callable health check
+  that returns a structured status payload (for example {"status": "ok"}).
 repository: tests/fixtures/sample_api
 tags: ['coding']
 expected_status:
@@ -9,10 +12,16 @@ expected_status:
   - awaiting_approval
 
 acceptance_criteria:
-  - Health endpoint added with tests
+  - src/app/health.py defines a callable health check returning status information
+  - tests/test_health.py covers the health check
+  - No HTTP server or route wiring is required for this fixture
 expected_files:
   - src/app/health.py
   - tests/test_health.py
+reference_hints: |
+  Usable means a callable health module plus tests in the required paths.
+  Do not require HTTP endpoints, framework routing, or server integration —
+  this fixture has no web stack.
 isolation_targets:
   - implementation
 smoke_commands:

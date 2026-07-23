@@ -23,6 +23,7 @@ from product_factory.evaluation.runners import (
     FullOrchestrationRunner,
     IsolationAblationRunner,
     OrchestrationAblationRunner,
+    SeededRepairRunner,
     SingleAgentBaselineRunner,
     default_subject_configs,
 )
@@ -79,8 +80,15 @@ class BenchmarkRunner:
                 app_config, use_deterministic_planner=use_deterministic_planner
             ),
             "single_agent_baseline": SingleAgentBaselineRunner(app_config),
-            "agent_isolation": AgentIsolationRunner(app_config),
-            "implementation_isolation": IsolationAblationRunner(app_config),
+            "agent_isolation": AgentIsolationRunner(
+                app_config, use_deterministic_planner=use_deterministic_planner
+            ),
+            "implementation_isolation": IsolationAblationRunner(
+                app_config, use_deterministic_planner=use_deterministic_planner
+            ),
+            "seeded_repair": SeededRepairRunner(
+                app_config, use_deterministic_planner=use_deterministic_planner
+            ),
             "orchestration_validation_repair": OrchestrationAblationRunner(
                 app_config,
                 subject_id="orchestration_validation_repair",

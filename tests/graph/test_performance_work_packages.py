@@ -259,11 +259,9 @@ def test_repair_inherits_failed_patch_and_composition_uses_repaired_lineage(
     )
     root = Path(__file__).resolve().parents[2]
     repo = tmp_path / "repo"
-    subprocess.run(
-        ["git", "clone", "--local", str(root / "tests/fixtures/sample_api"), str(repo)],
-        check=True,
-        capture_output=True,
-    )
+    from tests.conftest import clone_fixture
+
+    clone_fixture(root / "tests/fixtures/sample_api", repo)
     coordinator = RunCoordinator(
         config=load_config(root),
         gateway=gateway,

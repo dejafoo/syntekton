@@ -13,6 +13,24 @@ Post–Stage-B/C next sequence (hard failures → repair gate → review decisio
 targeted ablations → frontier → architecture): see
 [`next-work-packages-1-6.md`](next-work-packages-1-6.md).
 
+N1 implementation progress (2026-07-22):
+
+- [x] `code_health` contract A (callable module + tests, no HTTP requirement).
+- [x] Implementation isolation reuses agent loop (`disable_validation_repair`).
+- [x] Fixture clone materializes git from plain trees.
+- [x] Live Stage B `bench-9ae9322ca17d`: orch 90%, `code_health` 5/5.
+- [x] Live review slice `bench-6df9e5333310`: with-review artifacts 7/9;
+      usable tied 66.7% vs no-review (N3 decides default).
+- [x] Live isolation `bench-9fb86599d67e`: usable 58.3%, patch-apply 100%.
+- [x] **N1 package exit met.**
+
+N2/N3 progress (2026-07-22):
+
+- [x] N2 seeded-repair harness (`seeded_repair` + `defects.py`).
+- [x] N2 live WP6 gate `bench-11f4a2d7b31c`: repairable usable **66.7%**.
+- [x] N3 review default: **keep optional** (evidence `bench-6df9e5333310`);
+      high-risk fixed plans may still include review.
+
 ## Status legend
 
 - [ ] Pending
@@ -581,9 +599,19 @@ Tests:
 
 ### WP6 exit gate
 
-- [ ] More than 50% of seeded repairable failures pass after repair.
-- [ ] Every repair starts from the latest candidate.
-- [ ] Every repair attempt either changes the fingerprint or terminates.
+- [x] More than 50% of seeded repairable failures pass after repair.
+- [x] Every repair starts from the latest candidate.
+- [x] Every repair attempt either changes the fingerprint or terminates.
+
+N2 live gate (2026-07-22):
+
+- Harness: `seeded_repair` subject plants a known-broken candidate via
+  `force_seeded_impl` + named defects, then runs validation/repair.
+- First live `bench-fe8ba74522cb`: usable 50% (weak existence tests allowed stub
+  “repairs”); defects strengthened and re-run once.
+- Retest `bench-11f4a2d7b31c` (4 cases × 3 seeds): repairable usable **8/12
+  (66.7%)**; behavioral 12/12; repair triggered on all cells; repair lineage
+  fingerprints changed on all cells. **WP6 exit met.**
 
 ---
 
@@ -666,10 +694,18 @@ Tests:
 
 Run review-on vs review-off over seeded-defect cases.
 
-- [ ] Defect detection at least 80%.
-- [ ] False-blocking rate below 20%.
-- [ ] Review improves usable rate enough to justify added cost and latency.
-- [ ] If the gate fails, keep review optional rather than default.
+- [~] Defect detection at least 80% — deferred (not measured in N3 slice).
+- [~] False-blocking rate below 20% — deferred.
+- [x] Review improves usable rate enough to justify added cost and latency —
+      **rejected** on N1.B/N3 evidence (`bench-6df9e5333310`): usable tied at
+      66.7% (6/9) with and without review; empties were provider 502s, not
+      systematic plan rejection.
+- [x] If the gate fails, keep review optional rather than default.
+
+**N3 decision (2026-07-22):** Keep review **optional** for ordinary/low-risk
+runs. Fixed high-risk plans may still include `independent_review` (existing
+planner behavior). Do not expand review schema/UX until a new measured
+hypothesis. Default-on for all plans is rejected.
 
 ---
 
@@ -848,6 +884,14 @@ Recorded live Stage E slice `bench-72dfcf11b63b` (3 cases × 6 subjects × 3 see
 - implementation isolation: usable 0% in this slice
 - targeted context did not beat file-list usable rate (tie at 77.8%)
 
+N1 follow-up live ablations (2026-07-22):
+
+- Stage B retest `bench-9ae9322ca17d`: orch 90%, `code_health` 5/5 after contract A.
+- Review retest `bench-6df9e5333310`: with-review artifacts 7/9, usable 66.7%
+  (tied with no-review); prior Stage E 0% invalidated (was plan/empty failures).
+- Isolation retest `bench-9fb86599d67e`: usable 58.3%, patch-apply 100%;
+  prior Stage E isolation 0% invalidated (unfair one-shot runner).
+
 ### Stage F — Frontier comparison
 
 Configuration:
@@ -897,9 +941,9 @@ Run health requirements:
 3. [x] WP3 — Multi-turn tool-using implementation agent.
 4. [~] WP4 — Repository and dependency context.
 5. [x] WP5 — Behavioral validation.
-6. [~] WP6 — Stateful repair.
+6. [x] WP6 — Stateful repair.
 7. [~] WP7 — Worktree lineage and composition.
-8. [~] WP8 — Evidence-based review.
+8. [x] WP8 — Evidence-based review (default-on rejected; keep optional).
 9. [~] WP9 — Planner and delegation optimization.
 10. [~] WP10 — Controlled ablations and model strategy.
 

@@ -23,11 +23,32 @@ from product_factory.orchestration.coordinator import RunCoordinator, extract_un
 def _clone_repo(src: Path, dest: Path) -> Path:
     if dest.exists():
         shutil.rmtree(dest)
+    if (src / ".git").exists():
+        result = subprocess.run(
+            ["git", "clone", "--local", str(src), str(dest)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return dest
+    # Fixtures are stored as plain trees; materialize a disposable git repo.
+    shutil.copytree(src, dest, ignore=shutil.ignore_patterns(".git"))
+    subprocess.run(["git", "init"], cwd=dest, check=True, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=dest, check=True, capture_output=True)
     subprocess.run(
-        ["git", "clone", "--local", str(src), str(dest)],
+        [
+            "git",
+            "-c",
+            "user.email=fixture@example.com",
+            "-c",
+            "user.name=Fixture",
+            "commit",
+            "-m",
+            "fixture",
+        ],
+        cwd=dest,
         check=True,
         capture_output=True,
-        text=True,
     )
     return dest
 
@@ -101,6 +122,15 @@ class FullOrchestrationRunner:
                 # the deterministic plan unless an ablation explicitly requests live.
                 "planner_mode": str(case.metadata.get("planner_mode", "fixed")),
                 "expected_files": ",".join(case.expected_files),
+                "disable_validation_repair": str(
+                    bool(case.metadata.get("disable_validation_repair", False))
+                ).lower(),
+                "force_seeded_impl": str(
+                    bool(case.metadata.get("force_seeded_impl", False))
+                ).lower(),
+                "seed_repair_defect": str(
+                    case.metadata.get("seed_repair_defect") or ""
+                ),
             },
         )
         try:
@@ -257,13 +287,69 @@ class SingleAgentBaselineRunner:
         )
 
 
+class OrchestrationAblationRunner(FullOrchestrationRunner):
+    """Named orchestration shape with controlled metadata switches."""
+
+    def __init__(
+        self,
+        app_config: AppConfig,
+        *,
+        subject_id: str,
+        metadata: dict[str, object],
+        use_deterministic_planner: bool = False,
+    ) -> None:
+        super().__init__(
+            app_config, use_deterministic_planner=use_deterministic_planner
+        )
+        self.subject_id = subject_id
+        self.metadata = metadata
+
+    def run(
+        self,
+        case: EvalCase,
+        *,
+        config: SubjectConfig,
+        gateway: ModelGateway,
+        work_dir: Path,
+    ) -> SubjectArtifact:
+        configured = case.model_copy(
+            update={"metadata": {**case.metadata, **self.metadata}}
+        )
+        artifact = super().run(
+            configured, config=config, gateway=gateway, work_dir=work_dir
+        )
+        return artifact.model_copy(update={"subject_id": self.subject_id})
+
+
 class AgentIsolationRunner:
-    """Run one capability in isolation with a fixed TaskSpec."""
+    """Run one capability in isolation with a fixed TaskSpec.
+
+    For code-change implementation isolation, reuse the orchestration
+    implementation agent loop (tools + worktree) without analysis, review, or
+    validation/repair — otherwise the subject is an unfair one-shot chat baseline.
+    """
 
     subject_id = "agent_isolation"
 
-    def __init__(self, app_config: AppConfig) -> None:
+    def __init__(
+        self,
+        app_config: AppConfig,
+        *,
+        use_deterministic_planner: bool = False,
+    ) -> None:
         self.app_config = app_config
+        self.use_deterministic_planner = use_deterministic_planner
+        self._impl_runner = OrchestrationAblationRunner(
+            app_config,
+            subject_id=self.subject_id,
+            metadata={
+                "disable_review": True,
+                "disable_analysis": True,
+                "disable_validation_repair": True,
+                "planner_mode": "fixed",
+            },
+            use_deterministic_planner=use_deterministic_planner,
+        )
 
     def run(
         self,
@@ -276,6 +362,21 @@ class AgentIsolationRunner:
         capability = config.isolation_capability or (
             case.isolation_targets[0] if case.isolation_targets else "implementation"
         )
+        if case.workflow_type == "code_change" and capability == "implementation":
+            artifact = self._impl_runner.run(
+                case, config=config, gateway=gateway, work_dir=work_dir
+            )
+            return artifact.model_copy(
+                update={
+                    "subject_id": self.subject_id,
+                    "metadata": {
+                        **artifact.metadata,
+                        "capability": capability,
+                        "isolation_mode": "agent_loop",
+                    },
+                }
+            )
+
         work_dir.mkdir(parents=True, exist_ok=True)
         repo = _resolve_repo(case, self.app_config.root, work_dir)
         task = TaskSpec(
@@ -300,7 +401,7 @@ class AgentIsolationRunner:
         user = json.dumps(
             {
                 "task": task.model_dump(mode="json"),
-                "request": case.request,
+                "request": _augment_request_text(case),
                 "repository_files": _list_repo_files(repo) if repo else [],
                 "dependency_context": "none (isolation)",
             },
@@ -356,7 +457,7 @@ class AgentIsolationRunner:
             resolved_model_id=resp.resolved_model_id,
             provider=resp.provider,
             usage=resp.usage,
-            metadata={"capability": capability},
+            metadata={"capability": capability, "isolation_mode": "one_shot"},
         )
 
 
@@ -376,42 +477,31 @@ class FrontierReferenceRunner(SingleAgentBaselineRunner):
         return art.model_copy(update={"subject_id": "frontier_reference"})
 
 
-class OrchestrationAblationRunner(FullOrchestrationRunner):
-    """Named orchestration shape with controlled metadata switches."""
+class IsolationAblationRunner(AgentIsolationRunner):
+    """Lone implementation agent with tools; no analysis/review/repair."""
+
+    subject_id = "implementation_isolation"
 
     def __init__(
         self,
         app_config: AppConfig,
         *,
-        subject_id: str,
-        metadata: dict[str, object],
         use_deterministic_planner: bool = False,
     ) -> None:
         super().__init__(
             app_config, use_deterministic_planner=use_deterministic_planner
         )
-        self.subject_id = subject_id
-        self.metadata = metadata
-
-    def run(
-        self,
-        case: EvalCase,
-        *,
-        config: SubjectConfig,
-        gateway: ModelGateway,
-        work_dir: Path,
-    ) -> SubjectArtifact:
-        configured = case.model_copy(
-            update={"metadata": {**case.metadata, **self.metadata}}
+        self._impl_runner = OrchestrationAblationRunner(
+            app_config,
+            subject_id=self.subject_id,
+            metadata={
+                "disable_review": True,
+                "disable_analysis": True,
+                "disable_validation_repair": True,
+                "planner_mode": "fixed",
+            },
+            use_deterministic_planner=use_deterministic_planner,
         )
-        artifact = super().run(
-            configured, config=config, gateway=gateway, work_dir=work_dir
-        )
-        return artifact.model_copy(update={"subject_id": self.subject_id})
-
-
-class IsolationAblationRunner(AgentIsolationRunner):
-    subject_id = "implementation_isolation"
 
     def run(
         self,
@@ -423,6 +513,82 @@ class IsolationAblationRunner(AgentIsolationRunner):
     ) -> SubjectArtifact:
         artifact = super().run(case, config=config, gateway=gateway, work_dir=work_dir)
         return artifact.model_copy(update={"subject_id": self.subject_id})
+
+
+class SeededRepairRunner(OrchestrationAblationRunner):
+    """Plant a known-broken candidate, then measure repair recovery."""
+
+    subject_id = "seeded_repair"
+
+    def __init__(
+        self,
+        app_config: AppConfig,
+        *,
+        use_deterministic_planner: bool = False,
+    ) -> None:
+        super().__init__(
+            app_config,
+            subject_id=self.subject_id,
+            metadata={
+                "disable_review": True,
+                "disable_analysis": True,
+                "force_seeded_impl": True,
+                "planner_mode": "fixed",
+            },
+            use_deterministic_planner=use_deterministic_planner,
+        )
+
+    def run(
+        self,
+        case: EvalCase,
+        *,
+        config: SubjectConfig,
+        gateway: ModelGateway,
+        work_dir: Path,
+    ) -> SubjectArtifact:
+        from product_factory.evaluation.defects import resolve_defect_kind
+
+        kind = resolve_defect_kind(
+            case.id,
+            explicit=str(case.metadata.get("seed_repair_defect") or "") or None,
+        )
+        configured = case.model_copy(
+            update={
+                "metadata": {
+                    **case.metadata,
+                    **self.metadata,
+                    "seed_repair_defect": kind,
+                    "force_seeded_impl": True,
+                }
+            }
+        )
+        # Ensure smoke runs so seeded defects are observed.
+        if configured.workflow_type == "code_change" and not configured.smoke_commands:
+            configured = configured.model_copy(update={"smoke_commands": ["python_tests"]})
+        artifact = FullOrchestrationRunner.run(
+            self, configured, config=config, gateway=gateway, work_dir=work_dir
+        )
+        repair_lineage = False
+        if artifact.run_id:
+            run_out = (
+                work_dir
+                / ".product-factory"
+                / "runs"
+                / artifact.run_id
+                / "output"
+            )
+            repair_lineage = any(run_out.glob("R-*-lineage.json"))
+        return artifact.model_copy(
+            update={
+                "subject_id": self.subject_id,
+                "metadata": {
+                    **artifact.metadata,
+                    "seed_repair_defect": kind,
+                    "repair_triggered": repair_lineage,
+                    "force_seeded_impl": True,
+                },
+            }
+        )
 
 
 def _list_repo_files(repo: Path | None, limit: int = 40) -> list[str]:
@@ -588,5 +754,10 @@ def default_subject_configs() -> dict[str, SubjectConfig]:
             subject_id="frontier_reference",
             model_profile="frontier_oracle",
             description="Frontier reference subject",
+        ),
+        "seeded_repair": SubjectConfig(
+            subject_id="seeded_repair",
+            model_profile="supervisor",
+            description="Seeded broken candidate then stateful repair",
         ),
     }
