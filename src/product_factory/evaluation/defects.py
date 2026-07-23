@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-DefectKind = Literal["broken_syntax", "failing_test", "incomplete_impl"]
+DefectKind = Literal["broken_syntax", "failing_test", "incomplete_impl", "style_only"]
 
 # Default defect kind per Stage B case (3 seeds × 4 cases = 12 live cells).
 # Prefer defects whose accompanying tests require real behavior after syntax is fixed.
@@ -17,13 +17,70 @@ CASE_DEFAULT_DEFECT: dict[str, DefectKind] = {
 
 
 def resolve_defect_kind(case_id: str, *, explicit: str | None = None) -> DefectKind:
-    if explicit in {"broken_syntax", "failing_test", "incomplete_impl"}:
+    if explicit in {"broken_syntax", "failing_test", "incomplete_impl", "style_only"}:
         return explicit  # type: ignore[return-value]
     return CASE_DEFAULT_DEFECT.get(case_id, "broken_syntax")
 
 
+def review_seed_paths(case_id: str, kind: DefectKind) -> list[str]:
+    """Paths that a seeded-review harness should expect findings to cite."""
+    return [path for path, _ in defect_files(case_id, kind)]
+
+
 def defect_files(case_id: str, kind: DefectKind) -> list[tuple[str, str]]:
     """Return (relative_path, content) pairs that should fail smoke validation."""
+    if kind == "style_only":
+        # Cosmetic-only change: valid behavior, should not yield blocking review findings.
+        if case_id == "code_health":
+            return [
+                (
+                    "src/app/health.py",
+                    (
+                        '"""Health helper with verbose local name (style-only seed)."""\n\n'
+                        "def health() -> dict[str, str]:\n"
+                        "    response_payload = {\"status\": \"ok\"}\n"
+                        "    return response_payload\n"
+                    ),
+                ),
+                (
+                    "tests/test_health.py",
+                    (
+                        "from app.health import health\n\n\n"
+                        "def test_health():\n"
+                        '    assert health()["status"] == "ok"\n'
+                    ),
+                ),
+            ]
+        return [
+            (
+                "src/app/cache.py",
+                (
+                    '"""Cache helper with verbose local name (style-only seed)."""\n\n'
+                    "class InMemoryCache:\n"
+                    "    def __init__(self) -> None:\n"
+                    "        self._store: dict[str, object] = {}\n\n"
+                    "    def get(self, key: str) -> object | None:\n"
+                    "        return self._store.get(key)\n\n"
+                    "    def set(self, key: str, value: object) -> None:\n"
+                    "        self._store[key] = value\n\n"
+                    "    def delete(self, key: str) -> None:\n"
+                    "        self._store.pop(key, None)\n"
+                ),
+            ),
+            (
+                "tests/test_cache.py",
+                (
+                    "from app.cache import InMemoryCache\n\n\n"
+                    "def test_in_memory_cache_roundtrip():\n"
+                    "    cache = InMemoryCache()\n"
+                    '    cache.set("a", 1)\n'
+                    '    assert cache.get("a") == 1\n'
+                    '    cache.delete("a")\n'
+                    '    assert cache.get("a") is None\n'
+                ),
+            ),
+        ]
+
     if case_id == "code_cache":
         if kind == "failing_test":
             return [

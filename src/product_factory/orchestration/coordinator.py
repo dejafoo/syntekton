@@ -50,6 +50,10 @@ from product_factory.orchestration.repair import (
     should_terminate_no_progress,
     update_no_progress,
 )
+from product_factory.orchestration.review_findings import (
+    parse_raw_findings,
+    validate_review_findings,
+)
 from product_factory.persistence.artifacts import ArtifactStore
 from product_factory.persistence.database import Database
 from product_factory.planning.compiler import compile_plan
@@ -984,6 +988,7 @@ class RunCoordinator:
                         architecture_md=architecture_md,
                         original_repo=original_repo,
                         task=live_plan.tasks[result.task_id],
+                        findings=result.findings,
                     )
                     (run_dir / "output" / "validation-report.json").write_text(
                         json.dumps(
@@ -1843,19 +1848,67 @@ class RunCoordinator:
                     )
                 )
             if self.allow_deterministic_workers:
-                task_findings.append(
-                    Finding(
-                        id=f"F-{task.id}",
-                        category="correctness",
-                        severity="minor",
-                        summary="No blocking issues detected",
-                        explanation="Deterministic mock reviewer inspected the inherited patch.",
-                        evidence_refs=[patch_ref],
-                        confidence=0.6,
-                        produced_by=profile,
-                        status="resolved",
-                    )
+                expect_blocking = (
+                    str(request.metadata.get("seed_review_expect_blocking") or "").lower()
+                    == "true"
                 )
+                seeded_paths = [
+                    p.strip()
+                    for p in str(request.metadata.get("seed_review_paths") or "").split(",")
+                    if p.strip()
+                ]
+                expect_flag = str(request.metadata.get("seed_review_expect_blocking") or "").lower()
+                if expect_blocking and seeded_paths:
+                    evidence_path = seeded_paths[0]
+                    task_findings.append(
+                        Finding(
+                            id=f"F-{task.id}-seed",
+                            category="correctness",
+                            severity="blocking",
+                            summary=f"Seeded correctness defect in {evidence_path}",
+                            explanation=(
+                                "Deterministic mock reviewer detected the seeded broken "
+                                f"implementation at {evidence_path}."
+                            ),
+                            evidence_refs=[
+                                patch_ref.model_copy(update={"scope": evidence_path})
+                            ],
+                            recommended_action=f"Repair the defect in {evidence_path}",
+                            confidence=0.9,
+                            produced_by=profile,
+                        )
+                    )
+                elif expect_flag == "false" and seeded_paths:
+                    evidence_path = seeded_paths[0]
+                    task_findings.append(
+                        Finding(
+                            id=f"F-{task.id}-style",
+                            category="maintainability",
+                            severity="minor",
+                            summary=f"Style-only note on {evidence_path}",
+                            explanation="Cosmetic naming preference; not a correctness defect.",
+                            evidence_refs=[
+                                patch_ref.model_copy(update={"scope": evidence_path})
+                            ],
+                            recommended_action="Optional rename; do not block merge",
+                            confidence=0.8,
+                            produced_by=profile,
+                        )
+                    )
+                else:
+                    task_findings.append(
+                        Finding(
+                            id=f"F-{task.id}",
+                            category="correctness",
+                            severity="minor",
+                            summary="No blocking issues detected",
+                            explanation="Deterministic mock reviewer inspected the inherited patch.",
+                            evidence_refs=[patch_ref],
+                            confidence=0.6,
+                            produced_by=profile,
+                            status="resolved",
+                        )
+                    )
             else:
                 review_messages = [
                     CanonicalMessage(role=m["role"], content=m["content"])  # type: ignore[arg-type]
@@ -1934,71 +1987,17 @@ class RunCoordinator:
                     result_status = "failed"
                     summary = f"review_{response.status}"
                 else:
-                    for index, raw in enumerate(payload.get("findings", []), 1):
-                        evidence_path = str(raw.get("evidence_path") or "").strip()
-                        evidence_ok = False
-                        if evidence_path:
-                            if evidence_path in review_patch or f"b/{evidence_path}" in review_patch:
-                                evidence_ok = True
-                            elif broker.worktree_root is not None:
-                                candidate = (broker.worktree_root / evidence_path)
-                                try:
-                                    candidate.resolve().relative_to(
-                                        broker.worktree_root.resolve()
-                                    )
-                                    evidence_ok = candidate.exists()
-                                except ValueError:
-                                    evidence_ok = False
-                        evidence = patch_ref.model_copy(
-                            update={"scope": evidence_path or "patch"}
+                    task_findings.extend(
+                        parse_raw_findings(
+                            list(payload.get("findings") or []),
+                            task_id=task.id,
+                            produced_by=profile,
+                            patch_ref=patch_ref,
+                            review_patch=review_patch,
+                            worktree_root=broker.worktree_root,
+                            acceptance_criterion_ids=[ac.id for ac in task.acceptance_criteria],
                         )
-                        confidence = float(raw["confidence"])
-                        severity = str(raw["severity"]).lower()
-                        if severity not in {"blocking", "major", "minor"}:
-                            severity = "major"
-                        category = str(raw["category"]).strip().lower().replace(" ", "_")
-                        if category == "testgap":
-                            category = "test_gap"
-                        if category not in {
-                            "correctness",
-                            "security",
-                            "maintainability",
-                            "test_gap",
-                            "architecture",
-                            "requirements",
-                            "policy",
-                            "evidence",
-                            "tool_error",
-                        }:
-                            category = "correctness"
-                        if not evidence_ok:
-                            if severity == "blocking":
-                                severity = "major"
-                            confidence = min(confidence, 0.49)
-                        if severity == "blocking" and confidence < 0.7:
-                            severity = "major"
-                        criterion_id = None
-                        for ac in task.acceptance_criteria:
-                            criterion_id = ac.id
-                            break
-                        for ac in task.acceptance_criteria:
-                            if ac.id in evidence_path or ac.id in str(raw.get("summary", "")):
-                                criterion_id = ac.id
-                                break
-                        task_findings.append(
-                            Finding(
-                                id=f"F-{task.id}-{index}",
-                                criterion_id=criterion_id,
-                                category=category,  # type: ignore[arg-type]
-                                severity=severity,  # type: ignore[arg-type]
-                                summary=raw["summary"],
-                                explanation=raw["explanation"],
-                                evidence_refs=[evidence],
-                                recommended_action=raw["recommended_action"],
-                                confidence=confidence,
-                                produced_by=profile,
-                            )
-                        )
+                    )
             art = artifacts.put_json(
                 [finding.model_dump(mode="json") for finding in task_findings],
                 logical_name="review-findings.json",
@@ -2159,6 +2158,7 @@ class RunCoordinator:
         architecture_md: str,
         original_repo: Path | None,
         task: TaskSpec,
+        findings: list[Finding] | None = None,
     ) -> list[ValidatorResult]:
         results: list[ValidatorResult] = []
         if request.workflow_type == "code_change" and patch_text and original_repo:
@@ -2195,6 +2195,16 @@ class RunCoordinator:
                     )
                 )
             results.append(validate_secrets(architecture_md))
+        if task.capability == "independent_review" and findings is not None:
+            # Demote unsupported blocking claims before scoring the evidence gate.
+            preliminary = validate_review_findings(findings)
+            if preliminary.status == "fail":
+                bad_ids = set(preliminary.details.get("finding_ids") or [])
+                for finding in findings:
+                    if finding.id in bad_ids and finding.severity == "blocking":
+                        finding.severity = "major"
+                        finding.confidence = min(finding.confidence, 0.49)
+            results.append(validate_review_findings(findings))
         return results
 
     def _changed_files_from_patch(self, patch: str) -> list[str]:

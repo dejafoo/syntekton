@@ -138,6 +138,10 @@ class FullOrchestrationRunner:
                 "seed_repair_defect": str(
                     case.metadata.get("seed_repair_defect") or ""
                 ),
+                "seed_review_expect_blocking": str(
+                    case.metadata.get("seed_review_expect_blocking") or ""
+                ).lower(),
+                "seed_review_paths": str(case.metadata.get("seed_review_paths") or ""),
                 "implementation_model_profile": str(
                     case.metadata.get("implementation_model_profile") or ""
                 ),
@@ -610,6 +614,93 @@ class SeededRepairRunner(OrchestrationAblationRunner):
         )
 
 
+class SeededReviewRunner(OrchestrationAblationRunner):
+    """Plant a seeded defect, force review, and score detection / false-block."""
+
+    subject_id = "seeded_review"
+
+    def __init__(
+        self,
+        app_config: AppConfig,
+        *,
+        use_deterministic_planner: bool = False,
+    ) -> None:
+        super().__init__(
+            app_config,
+            subject_id=self.subject_id,
+            metadata={
+                "force_review": True,
+                "force_seeded_impl": True,
+                "disable_analysis": True,
+                "disable_validation_repair": True,
+                "planner_mode": "fixed",
+            },
+            use_deterministic_planner=use_deterministic_planner,
+        )
+
+    def run(
+        self,
+        case: EvalCase,
+        *,
+        config: SubjectConfig,
+        gateway: ModelGateway,
+        work_dir: Path,
+    ) -> SubjectArtifact:
+        from product_factory.domain.findings import Finding
+        from product_factory.evaluation.defects import resolve_defect_kind, review_seed_paths
+        from product_factory.orchestration.review_findings import score_seeded_review_detection
+
+        explicit = str(case.metadata.get("seed_review_defect") or "") or None
+        kind = resolve_defect_kind(case.id, explicit=explicit)
+        expect_blocking = kind != "style_only"
+        paths = review_seed_paths(case.id, kind)
+        configured = case.model_copy(
+            update={
+                "metadata": {
+                    **case.metadata,
+                    **self.metadata,
+                    "seed_repair_defect": kind,
+                    "force_seeded_impl": True,
+                    "force_review": True,
+                    "seed_review_expect_blocking": "true" if expect_blocking else "false",
+                    "seed_review_paths": ",".join(paths),
+                }
+            }
+        )
+        if configured.workflow_type == "code_change" and not configured.smoke_commands:
+            configured = configured.model_copy(update={"smoke_commands": ["python_tests"]})
+        artifact = FullOrchestrationRunner.run(
+            self, configured, config=config, gateway=gateway, work_dir=work_dir
+        )
+        findings: list[Finding] = []
+        if artifact.run_id:
+            findings_path = (
+                work_dir
+                / ".product-factory"
+                / "runs"
+                / artifact.run_id
+                / "output"
+                / "review-findings.json"
+            )
+            if findings_path.exists():
+                raw = json.loads(findings_path.read_text(encoding="utf-8"))
+                findings = [Finding.model_validate(item) for item in raw]
+        detection = score_seeded_review_detection(
+            findings, seeded_paths=paths, expect_blocking=expect_blocking
+        )
+        return artifact.model_copy(
+            update={
+                "subject_id": self.subject_id,
+                "metadata": {
+                    **artifact.metadata,
+                    "seed_review_defect": kind,
+                    "seed_review_expect_blocking": expect_blocking,
+                    "seed_review_detection": detection,
+                },
+            }
+        )
+
+
 def _list_repo_files(repo: Path | None, limit: int = 40) -> list[str]:
     if repo is None:
         return []
@@ -774,5 +865,10 @@ def default_subject_configs() -> dict[str, SubjectConfig]:
             subject_id="seeded_repair",
             model_profile="supervisor",
             description="Seeded broken candidate then stateful repair",
+        ),
+        "seeded_review": SubjectConfig(
+            subject_id="seeded_review",
+            model_profile="supervisor",
+            description="Seeded defect with forced review detection measurement",
         ),
     }

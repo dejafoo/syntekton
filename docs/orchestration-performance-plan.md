@@ -669,35 +669,38 @@ Use review only when it produces actionable, measurable corrective value.
 
 ### Implementation
 
-- [ ] Define a strict structured review schema.
-- [ ] Parse model review into typed `Finding`s.
-- [ ] Require file/line or artifact evidence.
-- [ ] Map findings to acceptance criteria.
-- [ ] Classify blocking status by severity and confidence.
-- [ ] Trigger repair only for blocking findings.
-- [ ] Validate whether repair resolves each finding.
-- [ ] Remove the unconditional resolved placeholder finding.
+- [x] Define a strict structured review schema.
+- [x] Parse model review into typed `Finding`s.
+- [x] Require file/line or artifact evidence.
+- [x] Map findings to acceptance criteria.
+- [x] Classify blocking status by severity and confidence.
+- [x] Trigger repair only for blocking findings.
+- [~] Validate whether repair resolves each finding.
+- [x] Remove the unconditional resolved placeholder finding
+      (mock path still emits a resolved minor when no seed is set).
 
 Likely files:
 
 - `src/product_factory/orchestration/coordinator.py`
+- `src/product_factory/orchestration/review_findings.py`
 - `src/product_factory/domain/findings.py`
 - `src/product_factory/orchestration/repair.py`
 - `src/product_factory/gateway/canonical_messages.py`
 
 Tests:
 
-- [ ] Seeded correctness defect yields a blocking finding.
-- [ ] Style-only issue does not block.
-- [ ] Missing evidence makes the finding non-blocking or invalid.
+- [x] Seeded correctness defect yields a blocking finding (mock `seeded_review`).
+- [x] Style-only issue does not block (mock `seeded_review`).
+- [x] Missing evidence makes the finding non-blocking or invalid
+      (`apply_evidence_demotion` / `validate_review_findings`).
 - [ ] Repair closes the intended finding.
 
 ### WP8 experiment and gate
 
 Run review-on vs review-off over seeded-defect cases.
 
-- [~] Defect detection at least 80% — deferred (not measured in N3 slice).
-- [~] False-blocking rate below 20% — deferred.
+- [~] Defect detection at least 80% — mock harness green; live rate still deferred.
+- [~] False-blocking rate below 20% — mock style-only green; live rate still deferred.
 - [x] Review improves usable rate enough to justify added cost and latency —
       **rejected** on N1.B/N3 evidence (`bench-6df9e5333310`): usable tied at
       66.7% (6/9) with and without review; empties were provider 502s, not
@@ -1112,4 +1115,20 @@ Add dated entries as implementation proceeds.
   of `ARCHITECTURE.md` (templates no longer silent wins).
 - Decision: architecture workflow **ready for product use** on gated cases;
   prefer orchestration over one-shot baseline.
+
+### 2026-07-23 — MVP quality closure (lesson loop + review evidence)
+
+- Lesson CLI: `product-factory lessons list|summarize|accept|reject|promote`
+  with orch-only defaults; ADR-007 intact (human-authored files only).
+- First promotion from orch `arch_multitenant` lessons on `bench-2e57f250a05f`
+  → skills `architecture.system-design@1.0.1`, `quality.patch-review@1.0.1`
+  plus architecture soft heading/must-cover matching.
+- Held-out live `bench-36949225fc11`: orch usable **77.8%** (7/9) — no regression
+  vs N6; saas/secure 100%; multitenant still 33%.
+- Review evidence: `review_findings.py` + mock `seeded_review` subject (correctness
+  detected; style-only not blocking). Live smoke `bench-d6e9e333d7f8` (code_cache +
+  code_health × 1 seed): **2/2** blocking findings cited seeded paths; usable 0%
+  expected with repair disabled. Broader WP8 80%/20% rates remain deferred; review
+  stays optional (N3).
+- Tracker: [`next-work-packages-quality.md`](next-work-packages-quality.md).
 

@@ -1,11 +1,13 @@
 id: architecture.system-design
-version: 1.0.0
+version: 1.0.1
 title: System Design Handover
 capabilities:
-  - architecture
-  - composition
-languages: ["*"]
-frameworks: ["*"]
+- architecture
+- composition
+languages:
+- '*'
+frameworks:
+- '*'
 trigger:
   description: Use when producing architecture handover documents.
 content_ref: SKILL.md

@@ -34,6 +34,8 @@ models_app = typer.Typer(help="Model catalogue commands")
 app.add_typer(models_app, name="models")
 bench_app = typer.Typer(help="LLM-judge benchmark commands")
 app.add_typer(bench_app, name="bench")
+lessons_app = typer.Typer(help="Human-gated lesson triage and promotion (ADR-007)")
+app.add_typer(lessons_app, name="lessons")
 observe_app = typer.Typer(help="Observability API commands")
 app.add_typer(observe_app, name="observe")
 console = Console()
@@ -393,6 +395,7 @@ def bench_compare_cmd(run_id: str = typer.Argument(..., help="Bench id")) -> Non
 
 @bench_app.command("lessons")
 def bench_lessons_cmd(run_id: str = typer.Argument(..., help="Bench id")) -> None:
+    """Dump raw lesson JSON for a bench (legacy). Prefer `product-factory lessons list`."""
     config = load_config()
     lesson_dir = config.root / ".product-factory" / "lessons" / "candidates" / run_id
     if not lesson_dir.exists():
@@ -406,6 +409,128 @@ def bench_lessons_cmd(run_id: str = typer.Argument(..., help="Bench id")) -> Non
     else:
         for path in sorted(lesson_dir.glob("lesson-*.json")):
             console.print_json(data=json.loads(path.read_text(encoding="utf-8")))
+
+
+@lessons_app.command("list")
+def lessons_list_cmd(
+    bench: str = typer.Option(..., "--bench", help="Bench id"),
+    orch_only: bool = typer.Option(True, "--orch-only/--all", help="Default: actionable orch subjects"),
+    status: str | None = typer.Option(None, "--status", help="proposed|accepted|rejected|promoted"),
+    theme: str | None = typer.Option(None, "--theme"),
+) -> None:
+    from product_factory.evaluation.lessons import list_lessons
+
+    config = load_config()
+    pf_root = config.root / ".product-factory"
+    lessons = list_lessons(
+        pf_root,
+        bench_id=bench,
+        orch_only=orch_only,
+        status=status,  # type: ignore[arg-type]
+        theme=theme,
+    )
+    if not lessons:
+        console.print("[yellow]No matching lessons[/yellow]")
+        raise typer.Exit(0)
+    for lesson in lessons:
+        console.print(
+            f"{lesson.id} [{lesson.status}] {lesson.theme} "
+            f"{lesson.subject_id}/{lesson.case_id}: {lesson.summary}"
+        )
+
+
+@lessons_app.command("summarize")
+def lessons_summarize_cmd(
+    bench: str = typer.Option(..., "--bench", help="Bench id"),
+    orch_only: bool = typer.Option(True, "--orch-only/--all"),
+) -> None:
+    from product_factory.evaluation.lessons import list_lessons, summarize_lessons
+
+    config = load_config()
+    pf_root = config.root / ".product-factory"
+    lessons = list_lessons(pf_root, bench_id=bench, orch_only=orch_only)
+    console.print_json(data=summarize_lessons(lessons))
+
+
+@lessons_app.command("accept")
+def lessons_accept_cmd(
+    lesson_id: str = typer.Argument(...),
+    note: str = typer.Option("", "--note"),
+    bench: str | None = typer.Option(None, "--bench"),
+) -> None:
+    from product_factory.evaluation.lessons import update_lesson_status
+
+    config = load_config()
+    lesson = update_lesson_status(
+        config.root / ".product-factory",
+        lesson_id,
+        status="accepted",
+        note=note,
+        bench_id=bench,
+    )
+    console.print(f"[green]accepted[/green] {lesson.id}")
+
+
+@lessons_app.command("reject")
+def lessons_reject_cmd(
+    lesson_id: str | None = typer.Argument(None),
+    note: str = typer.Option("", "--note"),
+    bench: str | None = typer.Option(None, "--bench"),
+    filter_name: str | None = typer.Option(
+        None,
+        "--filter",
+        help="Bulk reject: baseline|non_orch (requires --bench)",
+    ),
+) -> None:
+    from product_factory.evaluation.lessons import reject_lessons_matching, update_lesson_status
+
+    config = load_config()
+    pf_root = config.root / ".product-factory"
+    if filter_name:
+        if not bench:
+            console.print("[red]--bench required with --filter[/red]")
+            raise typer.Exit(2)
+        updated = reject_lessons_matching(
+            pf_root, bench_id=bench, filter_name=filter_name, note=note
+        )
+        console.print(f"[yellow]rejected {len(updated)} lessons[/yellow] filter={filter_name}")
+        return
+    if not lesson_id:
+        console.print("[red]lesson id or --filter required[/red]")
+        raise typer.Exit(2)
+    lesson = update_lesson_status(
+        pf_root, lesson_id, status="rejected", note=note, bench_id=bench
+    )
+    console.print(f"[yellow]rejected[/yellow] {lesson.id}")
+
+
+@lessons_app.command("promote")
+def lessons_promote_cmd(
+    lesson_ids: str = typer.Option(..., "--lesson-ids", help="Comma-separated lesson ids"),
+    files: str = typer.Option(..., "--files", help="Comma-separated human-authored file paths"),
+    bump_skill: str = typer.Option(
+        "",
+        "--bump-skill",
+        help="Comma-separated skill ids to bump (manifest.yaml version)",
+    ),
+    note: str = typer.Option("", "--note"),
+    bench: str | None = typer.Option(None, "--bench"),
+) -> None:
+    """Promote accepted lessons after human edits (never auto-writes skill text)."""
+    from product_factory.evaluation.lessons import promote_lessons
+
+    config = load_config()
+    ledger = promote_lessons(
+        config.root / ".product-factory",
+        lesson_ids=[x.strip() for x in lesson_ids.split(",") if x.strip()],
+        files=[Path(x.strip()) for x in files.split(",") if x.strip()],
+        bump_skill_ids=[x.strip() for x in bump_skill.split(",") if x.strip()],
+        project_root=config.root,
+        note=note,
+        bench_id=bench,
+    )
+    console.print("[green]promoted[/green]")
+    console.print_json(data=ledger)
 
 
 @observe_app.command("serve")

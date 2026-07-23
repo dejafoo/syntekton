@@ -50,6 +50,56 @@ ARCHITECTURE_BOILERPLATE_MARKERS = (
 ARCHITECTURE_MIN_CHARS = 1200
 ARCHITECTURE_MIN_WORDS = 150
 
+# Optional synonym tokens for soft must-cover matching (topic → acceptable tokens).
+MUST_COVER_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "tenant isolation": ("tenant isolation", "tenant_id", "row-level", "rls", "tenancy"),
+    "multi-tenancy": ("multi-tenant", "multitenant", "tenant isolation", "tenant_id"),
+    "invoice lifecycle": ("invoice lifecycle", "draft", "paid", "void", "invoice state"),
+    "threat model": ("threat model", "threat modelling", "attack surface", "threat"),
+    "data model": ("data model", "schema", "entities", "erd"),
+}
+
+
+def _normalize_heading_text(text: str) -> str:
+    """Lowercase alphanumerics only — for soft section / topic matching."""
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def _heading_present(markdown: str, section: str) -> bool:
+    """True if a markdown heading roughly matches the required section name."""
+    target = _normalize_heading_text(section)
+    if not target:
+        return False
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("#"):
+            continue
+        heading = stripped.lstrip("#").strip()
+        norm = _normalize_heading_text(heading)
+        if target in norm or norm in target:
+            return True
+    # Fallback: normalized section name appears anywhere (legacy exact lower match).
+    return _normalize_heading_text(section) in _normalize_heading_text(markdown)
+
+
+def _topic_covered(markdown: str, topic: str) -> bool:
+    """Soft must-cover: full phrase, normalized containment, or synonym tokens."""
+    lower = markdown.lower()
+    topic_l = topic.lower().strip()
+    if not topic_l:
+        return True
+    if topic_l in lower:
+        return True
+    if _normalize_heading_text(topic_l) in _normalize_heading_text(markdown):
+        return True
+    synonyms = MUST_COVER_SYNONYMS.get(topic_l, ())
+    for syn in synonyms:
+        if syn.lower() in lower:
+            return True
+    # Token overlap: all significant words (≥4 chars) appear somewhere.
+    tokens = [t for t in re.findall(r"[a-z0-9]+", topic_l) if len(t) >= 4]
+    return bool(tokens and all(t in lower for t in tokens))
+
 
 def validate_schema_dict(data: dict[str, Any], required_keys: list[str]) -> ValidatorResult:
     missing = [k for k in required_keys if k not in data]
@@ -103,9 +153,8 @@ def validate_secrets(text: str) -> ValidatorResult:
 
 def validate_architecture_document(markdown: str) -> ValidatorResult:
     missing = []
-    lower = markdown.lower()
     for section in ARCHITECTURE_REQUIRED_SECTIONS:
-        if section.lower() not in lower:
+        if not _heading_present(markdown, section):
             missing.append(section)
     # Mermaid parse: crude check for balanced fences
     fences = markdown.count("```mermaid")
@@ -178,7 +227,7 @@ def validate_architecture_request_specificity(
 
     topics = [str(item).strip() for item in (must_cover or []) if str(item).strip()]
     if topics:
-        missing = [topic for topic in topics if topic.lower() not in lower]
+        missing = [topic for topic in topics if not _topic_covered(text, topic)]
         results.append(
             ValidatorResult(
                 validator_id="architecture_must_cover",

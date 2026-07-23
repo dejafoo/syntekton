@@ -118,14 +118,16 @@ Living task tracker for the MVP. Authoritative architecture: [handover.md](hando
 
 ## Known limitations (MVP)
 
-1. Worker execution uses deterministic capability handlers for reliability in offline/mock mode; live model tool-loops are partially wired (gateway + context) but not a full multi-turn tool agent yet.
+1. Live implementation/repair uses a bounded multi-turn tool agent
+   (`orchestration/agent_loop.py`). Offline/mock mode still uses deterministic
+   capability handlers for reliability.
 2. LangGraph graph is a checkpointed control skeleton; primary production path is `RunCoordinator`.
 3. Validation command execution depends on registered commands in the worktree environment.
 4. Frontier oracle (Claude Fable 5) is configured but disabled for normal runs.
 5. Concurrent workers are scheduled as waves; in-process execution is sequential within a wave for determinism in tests.
 6. Human scoring import UI is out of scope; reports are JSON/Markdown files.
 7. LLM-judge bench CI uses `MockJudge`; live frontier judging is opt-in (`--live` / `PRODUCT_FACTORY_BENCH_LIVE=1`).
-8. Lesson candidates are proposed only — no automatic skill/prompt promotion.
+8. Lesson candidates require human accept/promote — no automatic skill/prompt injection (ADR-007).
 
 ## How to update this file
 

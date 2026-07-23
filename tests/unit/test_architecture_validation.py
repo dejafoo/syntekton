@@ -136,6 +136,74 @@ flowchart LR
     assert all(r.status == "pass" for r in results)
 
 
+def test_soft_heading_match_accepts_punctuation_variants() -> None:
+    doc = TEMPLATE_DOC.replace("## Nonfunctional requirements", "## Non-functional Requirements!")
+    doc = doc.replace("## Trade-offs", "## Tradeoffs")
+    result = validate_architecture_document(doc)
+    assert result.status == "pass"
+
+
+def test_soft_must_cover_accepts_synonyms() -> None:
+    doc = """# ARCHITECTURE.md
+
+## Objective
+Multi-tenant SaaS billing with dunning for B2B customers who need subscription
+management, webhook-driven payment updates, and audited invoice history.
+
+## Scope
+MVP covers subscriptions, invoice generation, Stripe webhook ingestion, and a
+tenant-scoped billing admin API. Out of scope: tax engines and marketplace payouts.
+
+## Assumptions
+- One Postgres database with row-level tenant_id enforcement via RLS.
+- Card data never touches our servers; Stripe Elements collects PANs.
+
+## Functional requirements
+- Create and cancel subscriptions.
+- Generate invoices through draft → open → paid → void states.
+- Verify Stripe webhook signatures before mutating invoice state.
+
+## Nonfunctional requirements
+- Strong tenancy boundaries; p99 API latency under 300ms for read paths.
+- Audit log retention of 90 days for billing mutations.
+
+## Components
+- Billing API, Invoice worker, Webhook ingress, Tenant auth gateway.
+
+## Data flows
+```mermaid
+flowchart LR
+  Tenant --> API --> InvoiceWorker --> Stripe
+  Stripe --> WebhookIngress --> InvoiceWorker
+```
+
+## Security
+- Tenancy via RLS on tenant_id; webhook signature verification; no raw PANs.
+
+## Testing
+- Contract tests for draft/open/paid/void transitions.
+- Isolation tests that fail if tenant A can read tenant B invoices.
+
+## Trade-offs
+- Stripe Billing over an in-house ledger for MVP speed and PCI scope reduction.
+
+## Open questions
+- EU VAT edge cases for marketplace sellers.
+
+## Acceptance criteria
+- Tenant cannot read another tenant's invoices.
+- Invoice state machine covers draft→open→paid→void.
+- Webhooks are authenticated and idempotent.
+"""
+    # "tenant isolation" via synonyms tenant_id/RLS; "invoice lifecycle" via draft/paid/void
+    results = validate_architecture_request_specificity(
+        doc,
+        must_cover=["tenant isolation", "invoice lifecycle", "webhook"],
+        reject_boilerplate=True,
+    )
+    assert all(r.status == "pass" for r in results), results
+
+
 def test_deterministic_checks_wire_must_cover() -> None:
     case = EvalCase(
         id="arch_saas",

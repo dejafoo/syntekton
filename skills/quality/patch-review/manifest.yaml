@@ -1,19 +1,21 @@
 id: quality.patch-review
-version: 1.0.0
+version: 1.0.1
 title: Evidence-Based Patch Review
 capabilities:
-  - independent_review
-languages: ["*"]
-frameworks: ["*"]
+- independent_review
+languages:
+- '*'
+frameworks:
+- '*'
 trigger:
   description: Use when reviewing a proposed source-code patch.
 negative_triggers:
-  - Do not use for architecture-only documents.
+- Do not use for architecture-only documents.
 required_tools:
-  - repository_read
-  - git_diff
+- repository_read
+- git_diff
 prohibited_tools:
-  - repository_write
-  - network_access
+- repository_write
+- network_access
 content_ref: SKILL.md
 status: active

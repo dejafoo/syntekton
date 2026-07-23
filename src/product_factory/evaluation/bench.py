@@ -24,6 +24,7 @@ from product_factory.evaluation.runners import (
     IsolationAblationRunner,
     OrchestrationAblationRunner,
     SeededRepairRunner,
+    SeededReviewRunner,
     SingleAgentBaselineRunner,
     default_subject_configs,
 )
@@ -87,6 +88,9 @@ class BenchmarkRunner:
                 app_config, use_deterministic_planner=use_deterministic_planner
             ),
             "seeded_repair": SeededRepairRunner(
+                app_config, use_deterministic_planner=use_deterministic_planner
+            ),
+            "seeded_review": SeededReviewRunner(
                 app_config, use_deterministic_planner=use_deterministic_planner
             ),
             "orchestration_validation_repair": OrchestrationAblationRunner(
@@ -344,7 +348,9 @@ class BenchmarkRunner:
         for score in scores:
             case = case_by_id.get(score.case_id)
             if case is not None:
-                all_lessons.extend(extract_lessons(case=case, score=score))
+                all_lessons.extend(
+                    extract_lessons(case=case, score=score, source_bench_id=bench_id)
+                )
 
         report = build_comparison(
             bench_id=bench_id,
@@ -358,7 +364,11 @@ class BenchmarkRunner:
         self.store.save_bench(report)
         out_dir = self.pf_root / "bench-reports"
         self.store.write_reports(report, out_dir)
-        write_lesson_candidates(all_lessons, self.pf_root / "lessons" / "candidates" / bench_id)
+        write_lesson_candidates(
+            all_lessons,
+            self.pf_root / "lessons" / "candidates" / bench_id,
+            source_bench_id=bench_id,
+        )
         # Sidecar index for lessons
         (self.pf_root / "benches" / bench_id / "meta.json").write_text(
             report.model_dump_json(indent=2) + "\n", encoding="utf-8"

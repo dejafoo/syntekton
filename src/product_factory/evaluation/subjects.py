@@ -27,6 +27,7 @@ SubjectId = Literal[
     "orchestration_strong_worker",
     "frontier_reference",
     "seeded_repair",
+    "seeded_review",
 ]
 
 
