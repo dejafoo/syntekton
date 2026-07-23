@@ -19,6 +19,7 @@ code suite, with ablations that attribute gains to a subsystem.
 | Stage E slice | `bench-72dfcf11b63b` | no-review/validation/context ≈**77.8%**; review-on & isolation **0%** |
 | N4 planner | `bench-466fb40fada6` | fixed **77.8%** vs live **66.7%** → keep fixed |
 | N4 worker | `bench-fa7a67a1307f` | `coding_worker` **88.9%** vs strong **44.4%** → keep coding_worker |
+| N5 Stage F | `bench-c46101767870` | orch **93.3%** vs frontier **50%**; cost/usable **8.7×** cheaper; pairwise 43% (secondary fail) |
 
 ---
 
@@ -446,6 +447,27 @@ Answer only the three product-shape questions left open after Stage E.
 
 ## N5 — Stage F frontier / pairwise
 
+### Status — 2026-07-22
+
+- [x] Stratified case list + CLI profile selected (below).
+- [x] Live Stage F — `bench-c46101767870` (10 cases × 3 subjects × 3 seeds):
+  - `full_orchestration`: **28/30 usable (93.3%)**, CI 79–98%, cost/usable ≈ `$0.018`
+  - `frontier_reference` (`claude-fable-5`): **15/30 usable (50%)**, CI 33–67%,
+    cost/usable ≈ `$0.157` (oracle spend `$2.36` of `$8` cap)
+  - `single_agent_baseline`: **12/30 usable (40%)**
+  - Paired orch−baseline usable **+53pp** (CI +33 to +73)
+  - Blind pairwise orch vs baseline: **13/30 wins (43.3%)**, CI 27–61% — below
+    55% writing-quality gate; usable already dominates so pairwise does **not**
+    overturn product decision (same pattern as Stage C)
+- [x] Unblocked frontier routing: OpenRouter `require_parameters=true` + `seed`
+      404s Claude; gateway now merges profile `provider:` overrides;
+      `frontier_oracle` sets `require_parameters: false`.
+- [x] **Decision: cost-effective / keep mid-tier orchestration workers.** Do not
+      buy frontier headroom for the coding path — orch beats one-shot frontier
+      on usable **and** cost/usable (gap −43pp usable but orch is better, not
+      worse; cost/usable 8.7× lower).
+- [x] **N5 exit met.**
+
 ### Goal
 
 Measure orchestration against a frontier single-agent reference under budget;
@@ -458,32 +480,47 @@ noise.
 
 ### Configuration
 
-- **8–12 stratified code cases** (mix Stage B reliability + Stage C diversity;
-  include at least one historically hard case)
+- **10 stratified code cases** (Stage B reliability + Stage C diversity;
+  includes historically hard `code_health` / `code_retry`):
+  `code_cache,code_health,code_logging,code_retry,code_error,code_config,code_metrics,code_cli,code_refactor,code_validate`
 - Subjects: `full_orchestration`, `single_agent_baseline`, `frontier_reference`
-- Seeds: **3**
-- Explicit **oracle budget** (`frontier_oracle` / Claude-class) — set a hard USD
-  cap in bench config; stop frontier cells when exceeded
-- Blind pairwise: orch vs baseline (and optionally orch vs frontier) via existing
-  `BenchmarkRunner` pairwise path
-- Judge: keep non-oracle judge for scoring unless comparing oracle-on-oracle
+- Seeds: **3** → 90 subject-cells (30 frontier under oracle cap)
+- Explicit **oracle budget** `$8.00` on `frontier_oracle`
+  (`anthropic/claude-fable-5`); stop frontier cells when exceeded
+- Blind pairwise: orch vs baseline via existing `BenchmarkRunner` pairwise path
+- Judge: `grok_judge` (non-oracle) for absolute + pairwise scores
+- Cost sketch (from Stage C/N4 unit costs): orch+baseline+judge ≈ `$2–3`;
+  frontier up to cap ≈ `$8`
+
+```bash
+unset PRODUCT_FACTORY_FORCE_MOCK
+product-factory bench run --live \
+  --subjects full_orchestration,single_agent_baseline,frontier_reference \
+  --case-ids code_cache,code_health,code_logging,code_retry,code_error,code_config,code_metrics,code_cli,code_refactor,code_validate \
+  --limit 10 --seeds 3 --oracle-budget-usd 8.00 \
+  --progress-log .product-factory/bench-progress/n5-stage-f.log
+# Resume if interrupted:
+# product-factory bench run --live --resume bench-<id> ...same flags...
+```
 
 ### Primary gates (from performance plan)
 
-- [ ] Orchestration pairwise win rate vs single-agent **≥ 55%** with CI shown
-      (**secondary** — interpret carefully if usable already dominates)
-- [ ] Frontier gap within **15pp usable**, **or** orch lower cost at comparable
-      usable rate
+- [!] Orchestration pairwise win rate vs single-agent **≥ 55%** — **43.3%**
+      (CI 27–61%); secondary fail; usable +53pp dominates → do not overturn
+- [x] Frontier usable/cost clause: orch **higher** usable (93% vs 50%) **and**
+      **lower** cost/usable (`$0.018` vs `$0.157`) → pass product intent
+      (stay mid-tier; no frontier upgrade)
 
 ### Tasks
 
-- [ ] Select stratified case list; commit as a named bench profile or CLI args
+- [x] Select stratified case list; commit as a named bench profile or CLI args
       documented in the plan.
-- [ ] Set oracle budget; dry-run cost estimate from prior Stage C unit costs.
-- [ ] Live Stage F run with resume enabled; monitor cost.
-- [ ] Publish report: usable rates + CIs, cost/usable, pairwise summary,
+- [x] Set oracle budget; dry-run cost estimate from prior Stage C unit costs.
+- [x] Live Stage F run with resume enabled; monitor cost.
+- [x] Publish report: usable rates + CIs, cost/usable, pairwise summary,
       frontier gap.
-- [ ] Decision: “competitive / cost-effective / needs worker upgrade / defer”
+- [x] Decision: **cost-effective** — keep mid-tier workers; do not buy frontier
+      coding headroom
 
 ### Likely files
 
@@ -493,10 +530,10 @@ noise.
 
 ### Exit (N5)
 
-- [ ] Stage F gate criteria evaluated with uncertainty
-- [ ] Written product implication (e.g. stay mid-tier workers vs buy frontier
+- [x] Stage F gate criteria evaluated with uncertainty
+- [x] Written product implication (e.g. stay mid-tier workers vs buy frontier
       headroom)
-- [ ] Pairwise not used alone to overturn strong usable/cost evidence without
+- [x] Pairwise not used alone to overturn strong usable/cost evidence without
       explanation
 
 ---

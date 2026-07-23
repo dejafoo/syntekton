@@ -125,6 +125,13 @@ profiles:
     pricing:
       input: "10"
       output: "50"
+    # Claude endpoints reject OpenRouter require_parameters when seed is set
+    # (HTTP 404: no endpoints). Keep ZDR deny; disable parameter filtering.
+    provider:
+      allow_fallbacks: true
+      require_parameters: false
+      data_collection: deny
+      sort: price
     run_policy:
       normal_runs: prohibited
       evaluation_runs: allowed

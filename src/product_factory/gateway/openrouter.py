@@ -17,6 +17,7 @@ from product_factory.gateway.canonical_messages import (
     CanonicalToolCall,
     ModelRequest,
     ModelResponse,
+    ProviderPreferences,
 )
 from product_factory.gateway.errors import (
     BudgetRejectedError,
@@ -208,7 +209,7 @@ class OpenRouterGateway(ModelGateway):
                 }
                 for t in request.tools
             ]
-        prefs = request.provider_preferences
+        prefs = self._resolved_provider_preferences(request)
         provider: dict[str, Any] = {
             "allow_fallbacks": prefs.allow_fallbacks,
             "require_parameters": prefs.require_parameters,
@@ -223,6 +224,20 @@ class OpenRouterGateway(ModelGateway):
         payload["provider"] = provider
         payload["user"] = request.session_id
         return payload
+
+    def _resolved_provider_preferences(self, request: ModelRequest) -> ProviderPreferences:
+        """Merge profile `provider:` overrides from models.yaml onto request prefs.
+
+        Anthropic frontier models often reject OpenRouter `require_parameters`
+        when `seed` is set (404: no endpoints). Profiles can disable that flag.
+        """
+        profile = self.profile_models.get(request.model_profile, {})
+        override = profile.get("provider") or {}
+        if not isinstance(override, dict) or not override:
+            return request.provider_preferences
+        base = request.provider_preferences.model_dump()
+        merged = {**base, **{k: v for k, v in override.items() if v is not None}}
+        return ProviderPreferences.model_validate(merged)
 
     def _normalize(
         self,

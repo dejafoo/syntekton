@@ -76,8 +76,8 @@ Implemented and verified:
 - [~] WP10 named ablations (including validation/repair vs no-review, context,
   and planner variants), blind randomized pairwise judging, confidence
   intervals, and stratified reports are implemented. Live model/profile
-  ablation **done** (`bench-fa7a67a1307f`): keep `coding_worker`. Frontier
-  experiments remain pending (N5).
+  ablation **done** (`bench-fa7a67a1307f`): keep `coding_worker`. Stage F
+  frontier **done** (`bench-c46101767870`): keep mid-tier orch.
 
 Verification:
 
@@ -138,8 +138,8 @@ Live smoke results:
   - orch cost/usable ≈ `$0.0127` (0.38× baseline cost/usable)
   - subject cost `$0.819391`, judge cost `$1.462102`
 - [~] Stage D–F (architecture quality, named ablations, frontier) remain open.
-  Stage E product-shape leftovers closed in N4 (planner fixed; coding_worker;
-  context deferred). Stage D/F remain for N6/N5.
+  Stage E leftovers closed in N4; Stage F closed in N5 (keep mid-tier). Stage D
+  remains for N6.
   Stage E partial slice `bench-72dfcf11b63b` completed: no-review/validation/
   context subjects ≈77.8% usable; forced review and isolation were 0% (review kept
   optional). Finding-category normalization and force-review AC injection were
@@ -913,14 +913,26 @@ N4 targeted leftovers (2026-07-22):
 
 Configuration:
 
-- 8–12 stratified cases;
+- 10 stratified code cases (N5 list);
 - blind pairwise comparisons;
-- explicit oracle budget.
+- explicit oracle budget `$8` (`frontier_oracle` / `claude-fable-5`).
+
+Live Stage F `bench-c46101767870` (2026-07-22/23):
+
+- orch usable **93.3%** (28/30), cost/usable ≈ `$0.018`
+- frontier usable **50%** (15/30), cost/usable ≈ `$0.157` (oracle `$2.36`)
+- baseline usable **40%** (12/30); paired orch−baseline **+53pp**
+- pairwise orch win rate **43.3%** (13/30), CI 27–61% — secondary miss;
+  usable/cost dominate (same Stage C pattern)
+- Routing fix: profile `provider.require_parameters=false` for frontier (Claude
+  + seed + require_parameters caused OpenRouter 404)
 
 Gate:
 
-- [ ] Orchestration pairwise win rate against single-agent at least 55%, with uncertainty shown.
-- [ ] Frontier gap within 15 percentage points, or orchestration demonstrates lower cost at comparable usable rate.
+- [!] Orchestration pairwise win rate against single-agent at least 55%, with
+  uncertainty shown — **missed (43%)**; not used to overturn usable/cost.
+- [x] Frontier clause: orch higher usable **and** lower cost/usable vs frontier
+  one-shot → **keep mid-tier workers; no frontier coding upgrade**.
 
 ---
 
@@ -1058,8 +1070,7 @@ Add dated entries as implementation proceeds.
   artifact than baseline (0.38×).
 - Note: blind pairwise still often favored baseline textually; usable-rate and
   apply/behavioral metrics are the Stage B/C promotion criteria and passed.
-- Remaining open: Stage D architecture, Stage F frontier (Stage E leftovers
-  closed in N4).
+- Remaining open: Stage D architecture (Stage E/F closed in N4/N5).
 
 ### 2026-07-22 — N4 Stage E leftovers closed
 
@@ -1070,4 +1081,15 @@ Add dated entries as implementation proceeds.
 - Context: no new run; Stage E tie stands; keep `targeted` without claiming win.
 - Ablation subject `orchestration_strong_worker` + `implementation_model_profile`
   override remain available for future experiments.
+
+### 2026-07-23 — N5 Stage F frontier closed
+
+- Live `bench-c46101767870`: orch 93.3% usable vs frontier 50% vs baseline 40%;
+  orch cost/usable `$0.018` vs frontier `$0.157`.
+- Pairwise orch win 43% (secondary miss); usable +53pp vs baseline dominates —
+  do not overturn.
+- Product: **keep mid-tier orchestration workers**; do not buy frontier coding
+  headroom for this suite.
+- Fix: gateway merges profile `provider:` prefs; `frontier_oracle` sets
+  `require_parameters: false` (Claude + seed 404 under require_parameters).
 

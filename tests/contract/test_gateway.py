@@ -83,3 +83,32 @@ def test_catalog_refresh() -> None:
     gw = MockGateway()
     payload = gw.refresh_catalog()
     assert "models" in payload
+
+
+def test_openrouter_merges_profile_provider_preferences() -> None:
+    from product_factory.gateway.openrouter import OpenRouterGateway
+
+    gw = OpenRouterGateway(
+        api_key="test-key",
+        profile_models={
+            "frontier_oracle": {
+                "model": "anthropic/claude-fable-5",
+                "provider": {"require_parameters": False, "sort": "throughput"},
+            }
+        },
+    )
+    req = ModelRequest(
+        request_id="r1",
+        run_id="run1",
+        task_id="t1",
+        session_id="s1",
+        model_profile="frontier_oracle",
+        messages=[CanonicalMessage(role="user", content="hi")],
+        seed=0,
+    )
+    prefs = gw._resolved_provider_preferences(req)
+    assert prefs.require_parameters is False
+    assert prefs.sort == "throughput"
+    payload = gw._build_payload(req, "anthropic/claude-fable-5")
+    assert payload["provider"]["require_parameters"] is False
+    assert payload["seed"] == 0
