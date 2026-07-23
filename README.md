@@ -45,6 +45,7 @@ Read-only REST + WebSocket/SSE over the same SQLite event store used by CLI runs
 - [LLM-judge benchmarking](docs/benchmarking.md)
 - [ADRs](docs/architecture/)
 - [Orchestration performance plan](docs/orchestration-performance-plan.md)
+- [Next work packages 1–6](docs/next-work-packages-1-6.md) — post–Stage-B/C implementation plan
 
 ## Benchmarks
 

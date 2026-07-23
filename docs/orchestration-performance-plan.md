@@ -9,6 +9,10 @@ This plan is grounded in:
 - Evaluation harness: [`src/product_factory/evaluation/`](../src/product_factory/evaluation/)
 - Authoritative runtime: [`RunCoordinator`](../src/product_factory/orchestration/coordinator.py)
 
+Post–Stage-B/C next sequence (hard failures → repair gate → review decision →
+targeted ablations → frontier → architecture): see
+[`next-work-packages-1-6.md`](next-work-packages-1-6.md).
+
 ## Status legend
 
 - [ ] Pending
