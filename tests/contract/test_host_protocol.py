@@ -22,6 +22,17 @@ from tests.conftest import clone_fixture
 runner = CliRunner()
 
 
+def _clear_pf_env(monkeypatch) -> None:
+    """CLI host now honors PRODUCT_FACTORY_ROOT / DATA_DIR (same as MCP).
+
+    Contract tests that chdir into a temp project must clear these so an
+    ambient developer/CI env cannot point the CLI at another checkout.
+    """
+    monkeypatch.delenv("PRODUCT_FACTORY_ROOT", raising=False)
+    monkeypatch.delenv("PRODUCT_FACTORY_DATA_DIR", raising=False)
+    monkeypatch.delenv("PRODUCT_FACTORY_FORCE_MOCK", raising=False)
+
+
 def _project_root(tmp_path: Path) -> Path:
     root = tmp_path / "project"
     root.mkdir()
@@ -173,6 +184,7 @@ def test_host_cli_submit_status_approve(tmp_path: Path, monkeypatch) -> None:
     project = _project_root(tmp_path)
     fixture = _fixture_repo(tmp_path)
     request = _request_file(tmp_path, "Add a validated health-check endpoint with tests.")
+    _clear_pf_env(monkeypatch)
     monkeypatch.chdir(project)
 
     result = runner.invoke(
@@ -398,3 +410,149 @@ def test_host_export_bundle_contents_redacted(tmp_path: Path) -> None:
         assert cost["run_id"] == submitted.run_id
         plan = json.loads(zf.read("plan.json"))
         assert "objective" in plan or "tasks" in plan
+
+
+def _seed_materialize_run(
+    service: HostService,
+    fixture: Path,
+    *,
+    run_id: str = "run-mat-1",
+    status: str = "awaiting_approval",
+    artifact_name: str = "ARCHITECTURE.md",
+    artifact_body: str = "# ARCHITECTURE.md\n\n## Objective\nLand me.\n",
+) -> str:
+    run_dir = service.pf_root / "runs" / run_id
+    for sub in ("input", "output", "artifacts/blobs", "content"):
+        (run_dir / sub).mkdir(parents=True, exist_ok=True)
+    (run_dir / "output" / artifact_name).write_text(artifact_body, encoding="utf-8")
+    request = {
+        "request_id": "req-mat",
+        "workflow_type": "technical_plan",
+        "request_text": "Design a health-check architecture.",
+        "repository_path": str(fixture.resolve()),
+        "model_profile_set": "local-target",
+        "validation_commands": [],
+        "budget": {"max_cost_usd": "3.00"},
+        "metadata": {},
+    }
+    (run_dir / "input" / "request.json").write_text(
+        json.dumps(request, indent=2) + "\n", encoding="utf-8"
+    )
+    service.coord.db.upsert_run(
+        run_id=run_id,
+        workflow_type="technical_plan",
+        status=status,
+        request=request,
+        active_operation=status,
+    )
+    return run_id
+
+
+def test_host_materialize_happy_path(tmp_path: Path) -> None:
+    project = _project_root(tmp_path)
+    fixture = _fixture_repo(tmp_path)
+    config = load_config(project)
+    service = HostService(
+        config=config,
+        gateway=MockGateway(),
+        data_dir=tmp_path / ".product-factory",
+        use_deterministic_planner=True,
+    )
+    run_id = _seed_materialize_run(service, fixture)
+    dest = fixture / "docs" / "ARCHITECTURE.md"
+    assert not dest.exists()
+
+    result = service.materialize(
+        run_id,
+        artifact="ARCHITECTURE.md",
+        dest_path="docs/ARCHITECTURE.md",
+    )
+    assert result.ok, result.model_dump()
+    assert result.protocol == HOST_PROTOCOL
+    assert result.data is not None
+    assert Path(result.data["written_path"]) == dest.resolve()
+    assert dest.is_file()
+    assert "Land me" in dest.read_text(encoding="utf-8")
+    assert result.data["artifact"]["logical_name"] == "ARCHITECTURE.md"
+    assert len(result.data["artifact"]["sha256"]) == 64
+
+    events = service.list_events(run_id, after_seq=0, limit=50)
+    assert any(e.get("type") == "artifact.materialized" for e in events)
+
+
+def test_host_materialize_rejects_path_escape(tmp_path: Path) -> None:
+    project = _project_root(tmp_path)
+    fixture = _fixture_repo(tmp_path)
+    config = load_config(project)
+    service = HostService(
+        config=config,
+        gateway=MockGateway(),
+        data_dir=tmp_path / ".product-factory",
+        use_deterministic_planner=True,
+    )
+    run_id = _seed_materialize_run(service, fixture)
+
+    result = service.materialize(
+        run_id,
+        artifact="ARCHITECTURE.md",
+        dest_path="../escape.md",
+    )
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code == "path_escape"
+    assert not (tmp_path / "escape.md").exists()
+    assert not (fixture.parent / "escape.md").exists()
+
+
+def test_host_materialize_rejects_pre_approval_status(tmp_path: Path) -> None:
+    project = _project_root(tmp_path)
+    fixture = _fixture_repo(tmp_path)
+    config = load_config(project)
+    service = HostService(
+        config=config,
+        gateway=MockGateway(),
+        data_dir=tmp_path / ".product-factory",
+        use_deterministic_planner=True,
+    )
+    run_id = _seed_materialize_run(service, fixture, status="planning")
+    result = service.materialize(
+        run_id,
+        artifact="ARCHITECTURE.md",
+        dest_path="docs/ARCHITECTURE.md",
+    )
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code == "invalid_state"
+    assert result.status == "planning"
+    assert not (fixture / "docs" / "ARCHITECTURE.md").exists()
+
+
+def test_host_cli_materialize(tmp_path: Path, monkeypatch) -> None:
+    project = _project_root(tmp_path)
+    fixture = _fixture_repo(tmp_path)
+    _clear_pf_env(monkeypatch)
+    monkeypatch.chdir(project)
+    config = load_config(project)
+    service = HostService(
+        config=config,
+        gateway=MockGateway(),
+        use_deterministic_planner=True,
+    )
+    run_id = _seed_materialize_run(service, fixture, run_id="run-cli-mat")
+
+    result = runner.invoke(
+        app,
+        [
+            "host",
+            "materialize",
+            run_id,
+            "--artifact",
+            "ARCHITECTURE.md",
+            "--to",
+            "docs/ARCHITECTURE.md",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = HostResponse.model_validate(json.loads(result.output))
+    assert payload.ok
+    assert (fixture / "docs" / "ARCHITECTURE.md").is_file()

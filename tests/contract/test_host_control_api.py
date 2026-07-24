@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import time
 from pathlib import Path
@@ -221,3 +222,62 @@ def test_control_openapi_lists_write_routes(control_env) -> None:
     assert "/api/v1/runs/{run_id}/reject" in paths
     assert "/api/v1/runs/{run_id}/cancel" in paths
     assert "/api/v1/runs/{run_id}/revise" in paths
+    assert "/api/v1/runs/{run_id}/materialize" in paths
+
+
+def test_control_materialize_happy_path_and_path_escape(control_env) -> None:
+    client, fixture, data_dir = control_env
+    host = client.app.state.api_state.host(mock=True)
+    run_id = "run-http-mat"
+    run_dir = data_dir / "runs" / run_id
+    (run_dir / "output").mkdir(parents=True)
+    (run_dir / "input").mkdir(parents=True)
+    (run_dir / "output" / "ARCHITECTURE.md").write_text(
+        "# ARCHITECTURE.md\n\n## Objective\nHTTP land.\n", encoding="utf-8"
+    )
+    request = {
+        "request_id": "req-http-mat",
+        "workflow_type": "technical_plan",
+        "request_text": "Design it",
+        "repository_path": str(fixture.resolve()),
+        "model_profile_set": "local-target",
+        "validation_commands": [],
+        "budget": {"max_cost_usd": "3.00"},
+        "metadata": {},
+    }
+    (run_dir / "input" / "request.json").write_text(
+        json.dumps(request, indent=2) + "\n", encoding="utf-8"
+    )
+    host.coord.db.upsert_run(
+        run_id=run_id,
+        workflow_type="technical_plan",
+        status="awaiting_approval",
+        request=request,
+    )
+
+    ok = client.post(
+        f"/api/v1/runs/{run_id}/materialize",
+        json={
+            "artifact": "ARCHITECTURE.md",
+            "dest_path": "docs/ARCHITECTURE.md",
+        },
+    )
+    assert ok.status_code == 200, ok.text
+    body = HostResponse.model_validate(ok.json())
+    assert body.ok
+    assert body.data is not None
+    assert (fixture / "docs" / "ARCHITECTURE.md").is_file()
+
+    denied = client.post(
+        f"/api/v1/runs/{run_id}/materialize",
+        json={
+            "artifact": "ARCHITECTURE.md",
+            "dest_path": "../escape.md",
+            "overwrite": True,
+        },
+    )
+    assert denied.status_code == 400
+    err = HostResponse.model_validate(denied.json())
+    assert err.ok is False
+    assert err.error is not None
+    assert err.error.code == "path_escape"
