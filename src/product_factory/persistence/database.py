@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS runs (
     manifest_json TEXT,
     last_progress_at TEXT,
     active_operation TEXT,
-    budget_json TEXT
+    budget_json TEXT,
+    cancel_requested INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -170,6 +171,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "runs", "last_progress_at", "TEXT")
     _ensure_column(conn, "runs", "active_operation", "TEXT")
     _ensure_column(conn, "runs", "budget_json", "TEXT")
+    _ensure_column(conn, "runs", "cancel_requested", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "tasks", "started_at", "TEXT")
     _ensure_column(conn, "tasks", "ended_at", "TEXT")
     _ensure_column(conn, "tasks", "attempt", "INTEGER NOT NULL DEFAULT 1")
@@ -296,6 +298,24 @@ class Database:
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         row = self.conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
         return dict(row) if row else None
+
+    @_synchronized
+    def set_cancel_requested(self, run_id: str, *, requested: bool = True) -> None:
+        now = datetime.now(UTC).isoformat()
+        self.conn.execute(
+            """
+            UPDATE runs SET cancel_requested=?, updated_at=?
+            WHERE run_id=?
+            """,
+            (1 if requested else 0, now, run_id),
+        )
+        self.conn.commit()
+
+    def is_cancel_requested(self, run_id: str) -> bool:
+        row = self.get_run(run_id)
+        if not row:
+            return False
+        return bool(int(row.get("cancel_requested") or 0))
 
     def list_runs(self, limit: int = 50, status: str | None = None) -> list[dict[str, Any]]:
         if status:

@@ -22,6 +22,7 @@ from product_factory.domain.errors import ProductFactoryError
 from product_factory.domain.runs import RunRequest
 from product_factory.gateway.mock import MockGateway
 from product_factory.gateway.openrouter import OpenRouterGateway
+from product_factory.host.cli import host_app
 from product_factory.observability.logging import setup_logging
 from product_factory.orchestration.coordinator import RunCoordinator
 from product_factory.orchestration.graph import build_graph
@@ -40,6 +41,7 @@ lessons_app = typer.Typer(help="Human-gated lesson triage and promotion (ADR-007
 app.add_typer(lessons_app, name="lessons")
 observe_app = typer.Typer(help="Observability API commands")
 app.add_typer(observe_app, name="observe")
+app.add_typer(host_app, name="host")
 console = Console()
 
 
@@ -142,8 +144,9 @@ def plan_cmd(
 ) -> None:
     """Generate and compile a plan without full execution."""
     from product_factory.orchestration.coordinator import (
-        default_architecture_plan,
         default_code_change_plan,
+        default_investigation_plan,
+        default_technical_plan,
     )
     from product_factory.planning.compiler import compile_plan
 
@@ -151,8 +154,10 @@ def plan_cmd(
     config = load_config()
     gateway = _gateway_from_config(config, force_mock=mock)
     RunCoordinator(config=config, gateway=gateway, use_deterministic_planner=mock)
-    if workflow == "architecture":
-        proposal = default_architecture_plan(text)
+    if workflow in {"architecture", "technical_plan"}:
+        proposal = default_technical_plan(text)
+    elif workflow == "repository_investigation":
+        proposal = default_investigation_plan(text)
     else:
         proposal = default_code_change_plan(text)
     result = compile_plan(proposal)
@@ -609,22 +614,13 @@ def lessons_promote_cmd(
     console.print_json(data=ledger)
 
 
-@observe_app.command("serve")
-def observe_serve_cmd(
-    host: str = typer.Option("127.0.0.1", "--host"),
-    port: int = typer.Option(8765, "--port"),
-    data_dir: Path | None = typer.Option(
-        None,
-        "--data-dir",
-        help="Product-factory data root (contains data/ and runs/). Defaults to .product-factory",
-    ),
-    cors: str = typer.Option(
-        "",
-        "--cors",
-        help="Comma-separated CORS origins (empty = disabled)",
-    ),
+def _serve_api(
+    *,
+    host: str,
+    port: int,
+    data_dir: Path | None,
+    cors: str,
 ) -> None:
-    """Serve the read-only observability REST/WebSocket API."""
     try:
         from product_factory.api.app import serve
     except ImportError as exc:
@@ -642,8 +638,68 @@ def observe_serve_cmd(
         except ProductFactoryError:
             root = Path(".product-factory")
     origins = [o.strip() for o in cors.split(",") if o.strip()] or None
-    console.print(f"Observability API on http://{host}:{port} (data={root.resolve()})")
+    console.print(
+        f"Control + observability API on http://{host}:{port} (data={root.resolve()})"
+    )
     serve(root, host=host, port=port, cors_origins=origins)
+
+
+@observe_app.command("serve")
+def observe_serve_cmd(
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8765, "--port"),
+    data_dir: Path | None = typer.Option(
+        None,
+        "--data-dir",
+        help="Product-factory data root (contains data/ and runs/). Defaults to .product-factory",
+    ),
+    cors: str = typer.Option(
+        "",
+        "--cors",
+        help="Comma-separated CORS origins (empty = disabled)",
+    ),
+) -> None:
+    """Serve the local observability + host control REST/WebSocket API."""
+    _serve_api(host=host, port=port, data_dir=data_dir, cors=cors)
+
+
+@app.command("serve")
+def serve_cmd(
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8765, "--port"),
+    data_dir: Path | None = typer.Option(
+        None,
+        "--data-dir",
+        help="Product-factory data root (contains data/ and runs/). Defaults to .product-factory",
+    ),
+    cors: str = typer.Option(
+        "",
+        "--cors",
+        help="Comma-separated CORS origins (empty = disabled)",
+    ),
+) -> None:
+    """Alias for `observe serve` (control + observability API)."""
+    _serve_api(host=host, port=port, data_dir=data_dir, cors=cors)
+
+
+@app.command("mcp")
+def mcp_cmd(
+    mock: bool = typer.Option(
+        False,
+        "--mock",
+        help="Force mock gateway for tools that submit runs",
+    ),
+    data_dir: Path | None = typer.Option(
+        None,
+        "--data-dir",
+        help="Override .product-factory data root",
+    ),
+) -> None:
+    """Run the Product Factory MCP server on stdio (OpenCode / Cursor / Claude Code)."""
+    from product_factory.host_mcp.server import run_stdio
+
+    # MCP uses stdout for JSON-RPC; keep Rich/typer noise off the wire.
+    run_stdio(mock=mock, data_dir=data_dir)
 
 
 @app.command("costs")

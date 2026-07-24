@@ -1,0 +1,35 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "product-factory": {
+      "type": "local",
+      "command": ["uv", "run", "product-factory", "mcp", "--mock"],
+      "enabled": true,
+      "environment": {
+        "PRODUCT_FACTORY_FORCE_MOCK": "1"
+      }
+    }
+  },
+  "command": {
+    "pf-investigate": {
+      "description": "Submit a repository_investigation run via Product Factory MCP",
+      "template": "Use Product Factory MCP tools (not ad-hoc edits).\n\n1. Call pf_submit with workflow=repository_investigation, repository_path set to the project root (or the path the user named), and request_text summarizing this investigation request (curated text only — do not dump the full chat):\n$ARGUMENTS\n2. Poll with pf_status / pf_tail until status is awaiting_approval or terminal.\n3. Call pf_inspect and summarize the evidence report / artifacts for the user.\n4. Do not approve unless the user explicitly asks."
+    },
+    "pf-plan": {
+      "description": "Submit a technical_plan run via Product Factory MCP",
+      "template": "Use Product Factory MCP tools.\n\n1. Call pf_submit with workflow=technical_plan, repository_path set appropriately, and curated request_text:\n$ARGUMENTS\n2. Poll pf_status / pf_tail until awaiting_approval or terminal.\n3. pf_inspect and present the plan, acceptance criteria, and handoff tasks.\n4. Do not approve unless the user explicitly asks."
+    },
+    "pf-change": {
+      "description": "Submit a repository_change / code_change run via Product Factory MCP",
+      "template": "Use Product Factory MCP tools for a durable change with budgets and approval.\n\n1. Call pf_submit with workflow=repository_change (or code_change if more appropriate), repository_path set, optional validation_commands, and curated request_text:\n$ARGUMENTS\n2. Poll pf_status / pf_tail until awaiting_approval or terminal.\n3. pf_inspect and summarize the plan, validations, and proposed patch.\n4. Do not approve or apply unless the user explicitly asks — then use pf_approve (apply=false by default)."
+    },
+    "pf-status": {
+      "description": "Check Product Factory run status / recent events",
+      "template": "Use Product Factory MCP.\n\nIf $ARGUMENTS looks like a run_id (run-…), call pf_status and pf_tail (after_seq=0 or the last cursor you have). Otherwise ask for the run_id or list what you know from this session.\nArguments: $ARGUMENTS"
+    },
+    "pf-approve": {
+      "description": "Approve a Product Factory run awaiting operator approval",
+      "template": "The user wants to approve a Product Factory run.\n\n1. Interpret $ARGUMENTS as run_id (required). If missing, ask for it.\n2. Call pf_inspect first and briefly confirm status is awaiting_approval.\n3. Call pf_approve with apply=false unless the user explicitly asked to apply.\n4. Report the HostResponse status.\nArguments: $ARGUMENTS"
+    }
+  }
+}

@@ -10,3 +10,4 @@ dist/
 build/
 .DS_Store
 uv.lock
+dashboard/node_modules/

@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import shutil
+import subprocess
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -24,6 +25,7 @@ from product_factory.domain.errors import (
     BudgetExhaustedError,
     ConfigurationError,
     PlanRejectedError,
+    RunCancelledError,
     RuntimeFailureError,
     SkillGrantViolation,
     ToolAuthorizationError,
@@ -85,6 +87,8 @@ from product_factory.validation.pipeline import (
     validate_architecture_document,
     validate_architecture_request_specificity,
     validate_behavioral_commands,
+    validate_citations,
+    validate_investigation_document,
     validate_patch_applies,
     validate_path_scope,
     validate_secrets,
@@ -94,9 +98,19 @@ from product_factory.workflows.registry import resolve_workflow_pack
 
 logger = logging.getLogger("product_factory.orchestration.coordinator")
 
-# code_change/repository_change resolve to the same pack (P1.G); every other
-# comparison in this module treats them identically.
+# code_change/repository_change resolve to the same pack (P1.G); architecture/
+# technical_plan share the technical_plan pack (P3.D).
 _CODE_CHANGE_WORKFLOW_TYPES = frozenset({"code_change", "repository_change"})
+_TECHNICAL_PLAN_WORKFLOW_TYPES = frozenset({"architecture", "technical_plan"})
+_INVESTIGATION_WORKFLOW_TYPES = frozenset({"repository_investigation"})
+_PACK_BACKED_WORKFLOW_TYPES = (
+    _CODE_CHANGE_WORKFLOW_TYPES
+    | _TECHNICAL_PLAN_WORKFLOW_TYPES
+    | _INVESTIGATION_WORKFLOW_TYPES
+)
+
+# Repository mutation tools — never granted for investigation packs by default.
+_REPOSITORY_WRITE_TOOL_NAMES = frozenset({"create_file", "apply_patch"})
 
 
 def default_code_change_plan(request_text: str) -> PlannerOutput:
@@ -290,6 +304,60 @@ def default_architecture_plan(request_text: str) -> PlannerOutput:
     )
 
 
+def default_technical_plan(request_text: str) -> PlannerOutput:
+    """Frozen fixed planner for `technical_plan` — same shape as architecture."""
+    return default_architecture_plan(request_text)
+
+
+def default_investigation_plan(request_text: str) -> PlannerOutput:
+    """Frozen fixed planner for read-only repository investigation (P3.D)."""
+    return PlannerOutput(
+        objective=request_text[:200],
+        assumptions=[],
+        tasks=[
+            TaskSpec(
+                id="T-001",
+                title="Inspect repository structure",
+                capability="repository_analysis",
+                objective="Identify relevant modules, evidence paths, and conventions",
+                expected_output_schema="repository_analysis.v1",
+                required_skills=["repository-inspection"],
+                required_tool_classes={"repository_read", "git_read"},
+                prohibited_actions={"file_write", "repository_write", "git_write"},
+                acceptance_criteria=[
+                    AcceptanceCriterion(
+                        id="AC-001",
+                        description="Relevant files identified with path evidence",
+                        verification="evidence_check",
+                    )
+                ],
+            ),
+            TaskSpec(
+                id="T-002",
+                title="Compose evidence report",
+                capability="composition",
+                objective="Produce EVIDENCE_REPORT.md with cited paths and assumptions",
+                dependencies=["T-001"],
+                expected_output_schema="evidence_report.v1",
+                required_tool_classes={"repository_read", "artifact_write"},
+                prohibited_actions={"file_write", "repository_write", "git_write"},
+                acceptance_criteria=[
+                    AcceptanceCriterion(
+                        id="AC-002",
+                        description="Evidence report with citations and assumptions",
+                        verification="static_rule",
+                    )
+                ],
+            ),
+        ],
+        final_artifacts=[
+            FinalArtifactSpec(logical_name="EVIDENCE_REPORT.md", composer_task_id="T-002")
+        ],
+        validation_strategy="section checks, citation presence, secret scan",
+        risk_classification="low",
+    )
+
+
 def extract_unified_diff(text: str) -> str:
     """Pull a unified diff out of model output (raw or fenced)."""
     if not text:
@@ -473,8 +541,8 @@ class RunCoordinator:
         else:
             self._raw_gateway = self.gateway.inner
 
-    def run(self, request: RunRequest) -> RunManifest:
-        run_id = f"run-{uuid.uuid4().hex[:12]}"
+    def run(self, request: RunRequest, *, run_id: str | None = None) -> RunManifest:
+        run_id = run_id or f"run-{uuid.uuid4().hex[:12]}"
         run_dir = self.pf_root / "runs" / run_id
         for sub in (
             "input",
@@ -517,6 +585,7 @@ class RunCoordinator:
             summary="Run started",
             payload={"workflow": request.workflow_type},
         )
+        self._raise_if_cancelled(run_id)
 
         self.db.upsert_run(
             run_id=run_id,
@@ -536,12 +605,11 @@ class RunCoordinator:
         repo_summary: dict[str, Any] | None = None
         worktrees: WorktreeManager | None = None
         original_repo: Path | None = None
-        # Resolve the declarative workflow pack up front (P1.G): unknown
+        # Resolve the declarative workflow pack up front (P1.G / P3.D): unknown
         # workflow ids fail closed before any planning/execution spend, and
         # the resolved pack's identity is stamped on the run manifest.
-        # `architecture` is not yet pack-backed and is left untouched.
         workflow_pack: WorkflowPack | None = None
-        if request.workflow_type in _CODE_CHANGE_WORKFLOW_TYPES:
+        if request.workflow_type in _PACK_BACKED_WORKFLOW_TYPES:
             workflow_pack = resolve_workflow_pack(request.workflow_type)
             recorder.emit(
                 run_id=run_id,
@@ -654,6 +722,8 @@ class RunCoordinator:
                 },
             )
 
+            self._raise_if_cancelled(run_id)
+
             # Execute
             manifest = self._execute(
                 run_id=run_id,
@@ -671,6 +741,33 @@ class RunCoordinator:
                 workflow_pack=workflow_pack,
             )
             return manifest
+        except RunCancelledError as exc:
+            existing_row = self.db.get_run(run_id)
+            last_usage = (
+                json.loads(existing_row["usage_json"])
+                if existing_row and existing_row.get("usage_json")
+                else None
+            )
+            try:
+                recorder.emit(
+                    run_id=run_id,
+                    event_type="run.cancelled",
+                    severity=EventSeverity.WARNING,
+                    summary=str(exc),
+                    payload={"status": "cancelled"},
+                )
+            except Exception:
+                events.emit(run_id, "run.cancelled", {"error": str(exc)})
+            self.db.upsert_run(
+                run_id=run_id,
+                workflow_type=request.workflow_type,
+                status="cancelled",
+                request=request.model_dump(mode="json"),
+                base_commit=base_commit,
+                usage=last_usage,
+                active_operation=None,
+            )
+            raise
         except (
             PlanRejectedError,
             BudgetExhaustedError,
@@ -799,7 +896,7 @@ class RunCoordinator:
             self._raw_gateway, recorder=recorder, db=self.db, ledger=ledger
         )
         workflow_pack: WorkflowPack | None = None
-        if request.workflow_type in _CODE_CHANGE_WORKFLOW_TYPES:
+        if request.workflow_type in _PACK_BACKED_WORKFLOW_TYPES:
             workflow_pack = resolve_workflow_pack(request.workflow_type)
 
         plan_path = run_dir / "output" / "plan.json"
@@ -828,6 +925,7 @@ class RunCoordinator:
         usage = UsageMetrics()
         patch_text = ""
         architecture_md = ""
+        evidence_report_md = ""
         for row in self.db.list_tasks_in_creation_order(run_id):
             spec = TaskSpec.model_validate(json.loads(row["spec_json"]))
             if spec.id not in merged_tasks:
@@ -882,6 +980,8 @@ class RunCoordinator:
                             patch_text = artifacts.get_text(art.sha256)
                         if art.logical_name == "ARCHITECTURE.md":
                             architecture_md = artifacts.get_text(art.sha256)
+                        if art.logical_name == "EVIDENCE_REPORT.md":
+                            evidence_report_md = artifacts.get_text(art.sha256)
                     except Exception:
                         continue
         for tid in merged_tasks:
@@ -952,7 +1052,25 @@ class RunCoordinator:
                 initial_results=results,
                 initial_patch_text=patch_text,
                 initial_architecture_md=architecture_md,
+                initial_evidence_report_md=evidence_report_md,
             )
+        except RunCancelledError as exc:
+            self.db.upsert_run(
+                run_id=run_id,
+                workflow_type=request.workflow_type,
+                status="cancelled",
+                request=request.model_dump(mode="json"),
+                base_commit=base_commit,
+                active_operation=None,
+            )
+            recorder.emit(
+                run_id=run_id,
+                event_type="run.cancelled",
+                severity=EventSeverity.WARNING,
+                summary=str(exc),
+                payload={"status": "cancelled"},
+            )
+            raise
         except (
             PlanRejectedError,
             BudgetExhaustedError,
@@ -1002,8 +1120,10 @@ class RunCoordinator:
             or (self.use_deterministic_planner and not force_live)
         )
         if use_deterministic:
-            if request.workflow_type == "architecture":
-                proposal = default_architecture_plan(request.request_text)
+            if request.workflow_type in _TECHNICAL_PLAN_WORKFLOW_TYPES:
+                proposal = default_technical_plan(request.request_text)
+            elif request.workflow_type in _INVESTIGATION_WORKFLOW_TYPES:
+                proposal = default_investigation_plan(request.request_text)
             else:
                 proposal = default_code_change_plan(request.request_text)
         else:
@@ -1138,6 +1258,7 @@ class RunCoordinator:
         initial_results: list[TaskResult] | None = None,
         initial_patch_text: str = "",
         initial_architecture_md: str = "",
+        initial_evidence_report_md: str = "",
     ) -> RunManifest:
         # `initial_*` are only populated by `resume()` (P1.B): they seed the
         # wave loop with already-completed task state so resumed runs incur
@@ -1156,6 +1277,7 @@ class RunCoordinator:
         previous_validation_failures: set[str] = set()
         patch_text = initial_patch_text
         architecture_md = initial_architecture_md
+        evidence_report_md = initial_evidence_report_md
         validation_results: list[ValidatorResult] = []
 
         self.db.upsert_run(
@@ -1179,6 +1301,7 @@ class RunCoordinator:
         live_plan = plan
 
         while True:
+            self._raise_if_cancelled(run_id)
             if spent >= request.budget.max_cost_usd:
                 raise BudgetExhaustedError("Run budget exhausted")
             ledger.check_wall_clock()
@@ -1287,6 +1410,7 @@ class RunCoordinator:
                 executor_fn=_run_one,
                 max_workers=request.budget.max_parallel_tasks,
             )
+            self._raise_if_cancelled(run_id)
 
             for task, result in zip(ready, wave_results):
                 usage = usage.merge(result.usage)
@@ -1337,6 +1461,8 @@ class RunCoordinator:
                         patch_text = artifacts.get_text(art.sha256)
                     if art.logical_name == "ARCHITECTURE.md":
                         architecture_md = artifacts.get_text(art.sha256)
+                    if art.logical_name == "EVIDENCE_REPORT.md":
+                        evidence_report_md = artifacts.get_text(art.sha256)
 
             # After wave: deterministic validation for implementation outputs
             for result in wave_results:
@@ -1350,6 +1476,7 @@ class RunCoordinator:
                         request=request,
                         patch_text=patch_text,
                         architecture_md=architecture_md,
+                        evidence_report_md=evidence_report_md,
                         original_repo=original_repo,
                         task=live_plan.tasks[result.task_id],
                         findings=result.findings,
@@ -1556,6 +1683,19 @@ class RunCoordinator:
                     logical_name="proposed.patch",
                     created_by_task_id="compose",
                 )
+        elif request.workflow_type in _INVESTIGATION_WORKFLOW_TYPES:
+            if not evidence_report_md:
+                evidence_report_md = self._compose_evidence_report(
+                    request.request_text,
+                    findings=findings,
+                    dependency_outputs=[],
+                )
+            (run_dir / "output" / "EVIDENCE_REPORT.md").write_text(
+                evidence_report_md, encoding="utf-8"
+            )
+            validation_results.append(validate_investigation_document(evidence_report_md))
+            validation_results.append(validate_citations(evidence_report_md))
+            validation_results.append(validate_secrets(evidence_report_md))
         else:
             if not architecture_md:
                 architecture_md = self._compose_architecture(request.request_text, findings)
@@ -1581,6 +1721,10 @@ class RunCoordinator:
             any(status == "failed" for status in task_status.values())
             or has_blocking_failures(validation_results)
             or (request.workflow_type in _CODE_CHANGE_WORKFLOW_TYPES and not patch_text.strip())
+            or (
+                request.workflow_type in _INVESTIGATION_WORKFLOW_TYPES
+                and not evidence_report_md.strip()
+            )
         )
         if terminal_failure:
             final_status = "failed"
@@ -1899,7 +2043,7 @@ class RunCoordinator:
             if t.tool_class in task.required_tool_classes
             or (not task.required_tool_classes and t.risk_class in {"R0", "R1"})
         }
-        # Always allow artifact write for composition/architecture
+        # Always allow artifact write for composition/architecture/documentation
         if task.capability in {"composition", "architecture", "documentation"}:
             granted.add("write_artifact")
         if task.capability in {"implementation", "repair"}:
@@ -1915,6 +2059,10 @@ class RunCoordinator:
             }
         if task.capability in {"repository_analysis", "independent_review"}:
             granted.update({"read_file", "list_files", "search_text", "git_diff", "git_status"})
+        # Investigation packs never receive repository mutation tools (P3.D).
+        if request.workflow_type in _INVESTIGATION_WORKFLOW_TYPES:
+            granted -= _REPOSITORY_WRITE_TOOL_NAMES
+            granted.discard("run_validation_command")
 
         # Fail closed before granting if a matched skill's declared tool policy
         # is inconsistent with the task's actual grant (P1.E).
@@ -2446,7 +2594,7 @@ class RunCoordinator:
             artifact_refs.append(art)
             summary = summary or "Independent review complete"
         elif task.capability == "composition":
-            if request.workflow_type == "architecture":
+            if request.workflow_type in _TECHNICAL_PLAN_WORKFLOW_TYPES:
                 if isinstance(self._raw_gateway, MockGateway):
                     architecture_md = self._compose_architecture(request.request_text, [])
                 else:
@@ -2467,6 +2615,20 @@ class RunCoordinator:
                 )
                 artifact_refs.append(art)
                 summary = "Architecture composed"
+            elif request.workflow_type in _INVESTIGATION_WORKFLOW_TYPES:
+                evidence_report_md = self._compose_evidence_report(
+                    request.request_text,
+                    findings=task_findings,
+                    dependency_outputs=dependency_outputs or [],
+                )
+                art = artifacts.put_text(
+                    evidence_report_md,
+                    media_type="text/markdown",
+                    logical_name="EVIDENCE_REPORT.md",
+                    created_by_task_id=task.id,
+                )
+                artifact_refs.append(art)
+                summary = "Evidence report composed"
             else:
                 if broker.worktree_root and base_commit:
                     # Composition is the deterministic diff of its inherited lineage.
@@ -2615,6 +2777,7 @@ class RunCoordinator:
         task: TaskSpec,
         findings: list[Finding] | None = None,
         ledger: BudgetLedger | None = None,
+        evidence_report_md: str = "",
     ) -> list[ValidatorResult]:
         results: list[ValidatorResult] = []
         if request.workflow_type in _CODE_CHANGE_WORKFLOW_TYPES and patch_text and original_repo:
@@ -2632,7 +2795,7 @@ class RunCoordinator:
                     ledger=ledger,
                 )
             )
-        if request.workflow_type == "architecture" and architecture_md:
+        if request.workflow_type in _TECHNICAL_PLAN_WORKFLOW_TYPES and architecture_md:
             results.append(validate_architecture_document(architecture_md))
             must_cover = [
                 item.strip()
@@ -2648,6 +2811,10 @@ class RunCoordinator:
                     )
                 )
             results.append(validate_secrets(architecture_md))
+        if request.workflow_type in _INVESTIGATION_WORKFLOW_TYPES and evidence_report_md:
+            results.append(validate_investigation_document(evidence_report_md))
+            results.append(validate_citations(evidence_report_md))
+            results.append(validate_secrets(evidence_report_md))
         if task.capability == "independent_review" and findings is not None:
             # Demote unsupported blocking claims before scoring the evidence gate.
             preliminary = validate_review_findings(findings)
@@ -2825,6 +2992,66 @@ class RunCoordinator:
                 sections.append(f"- {f.summary}")
         return "\n".join(sections) + "\n"
 
+    def _compose_evidence_report(
+        self,
+        request_text: str,
+        *,
+        findings: list[Finding],
+        dependency_outputs: list[dict[str, Any]],
+    ) -> str:
+        """Deterministic evidence report with cited paths and assumptions (P3.D)."""
+        cited_paths: list[str] = []
+        for prior in dependency_outputs:
+            for excerpt in prior.get("artifact_excerpts") or []:
+                if excerpt.get("logical_name") != "repository-analysis.json":
+                    continue
+                try:
+                    payload = json.loads(excerpt.get("content") or "{}")
+                except json.JSONDecodeError:
+                    continue
+                for key in ("files", "entry_points", "tests", "configuration"):
+                    for path in payload.get(key) or []:
+                        path_s = str(path).strip()
+                        if path_s and path_s not in cited_paths:
+                            cited_paths.append(path_s)
+                for item in payload.get("relevant_excerpts") or []:
+                    if isinstance(item, dict) and item.get("path"):
+                        path_s = str(item["path"]).strip()
+                        if path_s and path_s not in cited_paths:
+                            cited_paths.append(path_s)
+        if not cited_paths:
+            cited_paths = ["README.md"]
+        cited_paths = cited_paths[:20]
+        finding_lines = [
+            f"- {f.summary} (see `{cited_paths[0]}`)"
+            for f in findings
+        ] or [
+            f"- Request focuses on: {request_text.strip()[:240] or 'repository structure'}",
+            f"- Observed entry points and modules under `{cited_paths[0]}`",
+        ]
+        assumption_lines = [
+            "- Analysis is read-only; no repository mutations were performed.",
+            "- Path citations come from repository listing and targeted excerpts.",
+            "- Scope is limited to files visible in the snapshotted worktree.",
+        ]
+        sections = [
+            "# EVIDENCE_REPORT.md",
+            "",
+            "## Summary",
+            request_text.strip() or "Repository investigation",
+            "",
+            "## Findings",
+            *finding_lines,
+            "",
+            "## Cited paths",
+            *[f"- `{path}`" for path in cited_paths],
+            "",
+            "## Assumptions",
+            *assumption_lines,
+            "",
+        ]
+        return "\n".join(sections) + "\n"
+
     def approve(self, run_id: str, *, apply: bool = False) -> dict[str, Any]:
         run_dir = self.pf_root / "runs" / run_id
         approval_path = run_dir / "output" / "approval.json"
@@ -2870,6 +3097,196 @@ class RunCoordinator:
             )
         self._emit_approval_decided(run_id, "rejected")
         return approval
+
+    def cancel(self, run_id: str) -> dict[str, Any]:
+        """Request cooperative cancel; flip status immediately when no worker loop."""
+        row = self.db.get_run(run_id)
+        if not row:
+            raise ConfigurationError(f"Unknown run: {run_id}")
+        status = str(row["status"])
+        terminal = {
+            "completed",
+            "failed",
+            "blocked",
+            "budget_exhausted",
+            "plan_rejected",
+            "cancelled",
+        }
+        if status in terminal:
+            if status == "cancelled":
+                return {
+                    "run_id": run_id,
+                    "status": "cancelled",
+                    "cancel_requested": True,
+                    "immediate": True,
+                }
+            raise ConfigurationError(
+                f"Run {run_id} is already terminal ({status}); cannot cancel",
+                details={"status": status},
+            )
+
+        self.db.set_cancel_requested(run_id, requested=True)
+        recorder = TelemetryRecorder(self.db)
+        recorder.emit(
+            run_id=run_id,
+            event_type="run.cancel_requested",
+            severity=EventSeverity.WARNING,
+            summary="Cancel requested",
+            payload={"previous_status": status},
+        )
+
+        # No active wave loop for queued / awaiting_approval — finalize now.
+        immediate = status in {"queued", "awaiting_approval"}
+        if immediate:
+            self.db.upsert_run(
+                run_id=run_id,
+                workflow_type=row["workflow_type"],
+                status="cancelled",
+                request=json.loads(row["request_json"]),
+                base_commit=row.get("base_commit"),
+                usage=json.loads(row.get("usage_json") or "{}"),
+                active_operation=None,
+            )
+            if status == "awaiting_approval":
+                approval_path = self.pf_root / "runs" / run_id / "output" / "approval.json"
+                if approval_path.exists():
+                    try:
+                        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+                    except json.JSONDecodeError:
+                        approval = {}
+                    approval["status"] = "cancelled"
+                    approval["decided_at"] = datetime.now(UTC).isoformat()
+                    approval_path.write_text(
+                        json.dumps(approval, indent=2), encoding="utf-8"
+                    )
+            recorder.emit(
+                run_id=run_id,
+                event_type="run.cancelled",
+                severity=EventSeverity.WARNING,
+                summary="Run cancelled",
+                payload={"status": "cancelled", "immediate": True},
+            )
+            status = "cancelled"
+
+        return {
+            "run_id": run_id,
+            "status": status,
+            "cancel_requested": True,
+            "immediate": immediate,
+        }
+
+    def revise(self, run_id: str, *, note: str) -> RunManifest:
+        """Bounded follow-up after awaiting_approval; does not widen grants."""
+        note = (note or "").strip()
+        if not note:
+            raise ConfigurationError("Revision note is required")
+        row = self.db.get_run(run_id)
+        if not row:
+            raise ConfigurationError(f"Unknown run: {run_id}")
+        if row["status"] != "awaiting_approval":
+            raise ApprovalBlockedError(
+                f"Revise requires awaiting_approval; run is {row['status']!r}",
+                details={"status": row["status"]},
+            )
+
+        run_dir = self.pf_root / "runs" / run_id
+        approval_path = run_dir / "output" / "approval.json"
+        if not approval_path.exists():
+            raise ApprovalBlockedError(f"No pending approval for {run_id}")
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+        prior_actions = list(approval.get("actions") or [])
+        approval["status"] = "revision_requested"
+        approval["revision_note"] = note
+        approval["revised_at"] = datetime.now(UTC).isoformat()
+        approval_path.write_text(json.dumps(approval, indent=2), encoding="utf-8")
+
+        request = RunRequest.model_validate(json.loads(row["request_json"]))
+        # Boundedness: same workflow, budget, validation commands, and policy.
+        # Only attach the operator note — never widen tool/skill grants here.
+        revision_count = int(request.metadata.get("revision_count") or "0") + 1
+        metadata = dict(request.metadata)
+        metadata["revision_count"] = str(revision_count)
+        metadata["revision_note"] = note
+        revised_text = request.request_text.rstrip()
+        if note not in revised_text:
+            revised_text = f"{revised_text}\n\n## Operator revision\n{note}\n"
+        revised = request.model_copy(
+            update={"request_text": revised_text, "metadata": metadata}
+        )
+
+        revisions_path = run_dir / "output" / "revisions.jsonl"
+        with revisions_path.open("a", encoding="utf-8") as fh:
+            fh.write(
+                json.dumps(
+                    {
+                        "at": datetime.now(UTC).isoformat(),
+                        "note": note,
+                        "revision_count": revision_count,
+                        "workflow_type": revised.workflow_type,
+                        "budget": revised.budget.model_dump(mode="json"),
+                        "prior_approval_actions": prior_actions,
+                    },
+                    default=str,
+                )
+                + "\n"
+            )
+
+        recorder = TelemetryRecorder(self.db)
+        recorder.emit(
+            run_id=run_id,
+            event_type="run.revision_requested",
+            summary="Operator requested revision",
+            payload={
+                "note": note,
+                "revision_count": revision_count,
+                "workflow_type": revised.workflow_type,
+                "grants_unchanged": True,
+            },
+        )
+
+        self.db.set_cancel_requested(run_id, requested=False)
+        (run_dir / "input" / "request.md").write_text(revised.request_text, encoding="utf-8")
+        (run_dir / "input" / "request.json").write_text(
+            revised.model_dump_json(indent=2), encoding="utf-8"
+        )
+        # Fresh worktrees for the follow-up (same run_id); do not reuse stale
+        # implementation trees from the prior awaiting_approval attempt.
+        worktrees_root = run_dir / "worktrees"
+        if revised.repository_path is not None and worktrees_root.exists():
+            repo = revised.repository_path.resolve()
+            for child in list(worktrees_root.iterdir()):
+                if not child.is_dir():
+                    continue
+                subprocess.run(
+                    ["git", "worktree", "remove", "--force", str(child)],
+                    cwd=repo,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if child.exists():
+                    shutil.rmtree(child, ignore_errors=True)
+            subprocess.run(
+                ["git", "worktree", "prune"],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.db.upsert_run(
+            run_id=run_id,
+            workflow_type=revised.workflow_type,
+            status="planning",
+            request=revised.model_dump(mode="json"),
+            base_commit=row.get("base_commit"),
+            usage=json.loads(row.get("usage_json") or "{}"),
+            active_operation="revising",
+        )
+        return self.run(revised, run_id=run_id)
+
+    def _raise_if_cancelled(self, run_id: str) -> None:
+        if self.db.is_cancel_requested(run_id):
+            raise RunCancelledError(f"Run {run_id} cancelled by operator")
 
     def _emit_approval_decided(self, run_id: str, decision: str) -> None:
         recorder = TelemetryRecorder(self.db)

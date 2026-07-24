@@ -5,15 +5,21 @@ from __future__ import annotations
 from product_factory.domain.errors import ConfigurationError
 from product_factory.workflows.base import WorkflowPack
 from product_factory.workflows.repository_change import REPOSITORY_CHANGE_PACK
+from product_factory.workflows.repository_investigation import REPOSITORY_INVESTIGATION_PACK
+from product_factory.workflows.technical_plan import TECHNICAL_PLAN_PACK
 
 _PACKS: dict[str, WorkflowPack] = {
     REPOSITORY_CHANGE_PACK.id: REPOSITORY_CHANGE_PACK,
+    REPOSITORY_INVESTIGATION_PACK.id: REPOSITORY_INVESTIGATION_PACK,
+    TECHNICAL_PLAN_PACK.id: TECHNICAL_PLAN_PACK,
 }
 
-# `code_change` is a one-release alias for `repository_change` (P1.G): existing
-# callers keep working unchanged while the canonical pack id is versioned.
+# One-release aliases: existing callers keep working while canonical pack ids
+# are versioned. `code_change` → `repository_change` (P1.G);
+# `architecture` → `technical_plan` (P3.D).
 _ALIASES: dict[str, str] = {
     "code_change": REPOSITORY_CHANGE_PACK.id,
+    "architecture": TECHNICAL_PLAN_PACK.id,
 }
 
 

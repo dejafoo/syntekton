@@ -11,7 +11,13 @@ from pydantic import BaseModel, Field
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.usage import UsageMetrics
 
-WorkflowType = Literal["architecture", "code_change", "repository_change"]
+WorkflowType = Literal[
+    "architecture",
+    "technical_plan",
+    "code_change",
+    "repository_change",
+    "repository_investigation",
+]
 
 FinalStatus = Literal[
     "initializing",
@@ -25,6 +31,7 @@ FinalStatus = Literal[
     "failed",
     "blocked",
     "budget_exhausted",
+    "cancelled",
 ]
 
 

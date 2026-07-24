@@ -36,6 +36,18 @@ ARCHITECTURE_REQUIRED_SECTIONS = [
     "Acceptance criteria",
 ]
 
+INVESTIGATION_REQUIRED_SECTIONS = [
+    "Summary",
+    "Findings",
+    "Cited paths",
+    "Assumptions",
+]
+
+# Path-like citations: backtick-wrapped paths with a slash or file extension.
+CITATION_PATH_RE = re.compile(
+    r"`((?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_./-]+|[A-Za-z0-9_.-]+\.[A-Za-z0-9]+)`"
+)
+
 # Fingerprints from the historical deterministic ARCHITECTURE.md template.
 ARCHITECTURE_BOILERPLATE_MARKERS = (
     "mvp scope as requested",
@@ -169,6 +181,41 @@ def validate_architecture_document(markdown: str) -> ValidatorResult:
             details={"missing_sections": missing, "mermaid_ok": mermaid_ok},
         )
     return ValidatorResult(validator_id="architecture_sections", status="pass", message="ok")
+
+
+def validate_investigation_document(markdown: str) -> ValidatorResult:
+    """Require evidence-report sections (summary, findings, cited paths, assumptions)."""
+    missing = [
+        section
+        for section in INVESTIGATION_REQUIRED_SECTIONS
+        if not _heading_present(markdown, section)
+    ]
+    if missing:
+        return ValidatorResult(
+            validator_id="investigation_sections",
+            status="fail",
+            message="Evidence report incomplete",
+            details={"missing_sections": missing},
+        )
+    return ValidatorResult(validator_id="investigation_sections", status="pass", message="ok")
+
+
+def validate_citations(markdown: str) -> ValidatorResult:
+    """Require at least one path-like citation in backtick form."""
+    citations = sorted({match.group(1) for match in CITATION_PATH_RE.finditer(markdown or "")})
+    if not citations:
+        return ValidatorResult(
+            validator_id="citation_presence",
+            status="fail",
+            message="Evidence report must cite at least one repository path",
+            details={"citations": []},
+        )
+    return ValidatorResult(
+        validator_id="citation_presence",
+        status="pass",
+        message="ok",
+        details={"citations": citations},
+    )
 
 
 def validate_architecture_request_specificity(

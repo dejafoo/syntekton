@@ -150,6 +150,41 @@ class PromptPackageView(BaseModel):
     content_refs: list[ContentRef] = Field(default_factory=list)
 
 
+class ContentView(BaseModel):
+    """A run-scoped, capture-policy-aware stored body."""
+
+    sha256: str
+    available: bool
+    capture_level: CaptureLevel
+    media_type: str | None = None
+    byte_count: int | None = None
+    truncated: bool = False
+    payload: Any | None = None
+
+
+class PlanView(BaseModel):
+    run_id: str
+    plan: dict[str, Any] | None = None
+    compiler: dict[str, Any] | None = None
+
+
+class LineageView(BaseModel):
+    run_id: str
+    dependencies: dict[str, list[str]] = Field(default_factory=dict)
+    repairs: list[dict[str, Any]] = Field(default_factory=list)
+    files: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class CostView(BaseModel):
+    run_id: str
+    basis: Literal["reported", "estimated", "mixed"]
+    total: dict[str, Any] = Field(default_factory=dict)
+    budget: dict[str, Any] = Field(default_factory=dict)
+    ledger: dict[str, Any] = Field(default_factory=dict)
+    by_task: list[dict[str, Any]] = Field(default_factory=list)
+    by_model: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class HealthView(BaseModel):
     status: Literal["ok", "degraded"]
     database_path: str

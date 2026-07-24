@@ -378,6 +378,14 @@ Exit criteria:
 
 ### Phase 3 — Existing-CLI integration and investigation/planning workflows
 
+> **Status: exit criteria met (mocked regression + mock host smoke).** See
+> [`docs/next-work-packages-phase3.md`](next-work-packages-phase3.md) for the
+> workstream checklist and test evidence (focused **49 passed**, broader
+> unit/contract/graph **203 passed**; mock CLI loop `run-600efcba7fa7`). Protocol
+> and OpenCode/MCP packaging: [`docs/host-integration.md`](host-integration.md),
+> [`examples/opencode/`](../examples/opencode/). Live OpenRouter Stage B smoke
+> skipped (mock gate sufficient).
+
 **Goal:** make Product Factory useful from an existing development CLI without
 becoming a competing CLI product.
 

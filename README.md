@@ -6,13 +6,15 @@ validation/repair, and an LLM-judge evaluation harness.
 
 Workflows:
 
-- `code_change` — proposed unified diff (approval before apply)
-- `architecture` — request-specific `ARCHITECTURE.md`
+- `code_change` / `repository_change` — proposed unified diff (approval before apply)
+- `repository_investigation` — read-only evidence report with cited paths
+- `technical_plan` — requirements / architecture decision / acceptance criteria (`architecture` aliases here)
 
 ## Requirements
 
 - Python 3.13
 - [uv](https://docs.astral.sh/uv/)
+- Node.js 20+ / npm (to build the bundled observability dashboard)
 - Git
 
 ## Setup
@@ -29,9 +31,21 @@ product-factory --help
 product-factory doctor
 product-factory run --request request.md --repo ./tests/fixtures/sample_api \
   --workflow code_change --mock
-product-factory run --request request.md --workflow architecture --mock
+product-factory run --request request.md --workflow technical_plan --mock
 product-factory eval --limit 10 --mock
 ```
+
+Machine hosts (async JSON, HTTP control, OpenCode MCP):
+
+```bash
+product-factory host submit --request request.md --repo ./repo --mock
+product-factory host status <run_id>
+product-factory host approve <run_id>
+product-factory mcp --mock   # stdio MCP for OpenCode / Cursor / Claude Code
+```
+
+See [Host integration](docs/host-integration.md) and
+[examples/opencode/](examples/opencode/).
 
 Set `OPENROUTER_API_KEY` for live model calls. Use `--mock` or
 `PRODUCT_FACTORY_FORCE_MOCK=1` for offline runs.
@@ -109,14 +123,15 @@ uv sync --extra observability
 product-factory observe serve --host 127.0.0.1 --port 8765
 ```
 
-Read-only REST + WebSocket/SSE over the same SQLite event store used by CLI runs.
-See [Observability](docs/observability.md).
+Open [http://127.0.0.1:8765/dashboard/](http://127.0.0.1:8765/dashboard/) for the bundled, monitor-only run dashboard. It uses the same REST + WebSocket/SSE event store as CLI runs; mutations go through `product-factory host …`, HTTP control routes on serve, or MCP — not the dashboard.
+See [Observability](docs/observability.md) and [Host integration](docs/host-integration.md).
 
 ## Docs
 
 - [Architecture](docs/architecture.md) — system design, run lifecycle, security, evaluation
 - [Codebase structure](docs/codebase-structure.md) — package map and “where to edit what”
 - [Observability API](docs/observability.md)
+- [Local dashboard operator guide](docs/dashboard.md)
 - [Implementation handover](docs/handover.md)
 - [Implementation plan & tasks](docs/implementation-plan.md)
 - [LLM-judge benchmarking](docs/benchmarking.md)
@@ -125,6 +140,8 @@ See [Observability](docs/observability.md).
 - [Next work packages 1–6](docs/next-work-packages-1-6.md) — Stage B–F gates (closed)
 - [MVP quality closure](docs/next-work-packages-quality.md) — lesson loop, review evidence, soft arch matching
 - [Phase 1 execution kernel](docs/next-work-packages-phase1.md) — budgets, resume, sandbox, concurrency, workflow packs
+- [Phase 3 host integration](docs/next-work-packages-phase3.md) — JSON host protocol, control API, OpenCode MCP, investigation/plan packs
+- [Host integration protocol](docs/host-integration.md) — CLI + HTTP + MCP for OpenCode / Cursor / scripts
 - [Sandbox and durable resume design](docs/architecture/sandbox-and-resume.md)
 
 ## Verify

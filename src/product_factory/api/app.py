@@ -11,14 +11,27 @@ from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
+from product_factory.api.control import router as control_router
 from product_factory.api.deps import ApiState
 from product_factory.api.routes import router
 from product_factory.api.streaming import HEARTBEAT_SECONDS, MAX_QUEUE, iter_events
 
 
-def create_app(data_dir: Path, *, cors_origins: list[str] | None = None) -> FastAPI:
-    state = ApiState(data_dir.resolve())
+def create_app(
+    data_dir: Path,
+    *,
+    cors_origins: list[str] | None = None,
+    project_root: Path | None = None,
+    observe_base_url: str | None = None,
+) -> FastAPI:
+    state = ApiState(
+        data_dir.resolve(),
+        project_root=project_root,
+        observe_base_url=observe_base_url,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -29,7 +42,10 @@ def create_app(data_dir: Path, *, cors_origins: list[str] | None = None) -> Fast
     app = FastAPI(
         title="Product Factory Observability API",
         version="1.0.0",
-        description="Read-only REST and streaming API for orchestration events.",
+        description=(
+            "Local observability (read) and host control (write) API for "
+            "orchestration events and run lifecycle."
+        ),
         lifespan=lifespan,
     )
     # Available immediately for TestClient and startup races.
@@ -40,10 +56,21 @@ def create_app(data_dir: Path, *, cors_origins: list[str] | None = None) -> Fast
             CORSMiddleware,
             allow_origins=origins,
             allow_credentials=True,
-            allow_methods=["GET"],
+            allow_methods=["GET", "POST", "OPTIONS"],
             allow_headers=["Authorization", "Content-Type"],
         )
     app.include_router(router)
+    app.include_router(control_router)
+    dashboard_dir = Path(__file__).with_name("static") / "dashboard"
+    if dashboard_dir.is_dir():
+        # Deliberately mounted after /api/v1 and docs: this is a single-user
+        # local UI, not a second backend or a mutation surface.
+        app.mount("/dashboard/assets", StaticFiles(directory=dashboard_dir / "assets"), name="dashboard-assets")
+
+        @app.get("/dashboard/{path:path}", include_in_schema=False)
+        async def dashboard(path: str = "") -> FileResponse:
+            # SPA fallback is intentionally constrained to the packaged index.
+            return FileResponse(dashboard_dir / "index.html")
 
     @app.websocket("/api/v1/events/ws")
     async def events_ws(websocket: WebSocket) -> None:

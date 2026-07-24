@@ -38,6 +38,12 @@ class ApprovalBlockedError(ProductFactoryError):
     exit_code = 7
 
 
+class RunCancelledError(ProductFactoryError):
+    """Raised when a cooperative cancel flag is observed between waves/tasks."""
+
+    exit_code = 9
+
+
 class UnsafeOperationError(ProductFactoryError):
     exit_code = 8
 

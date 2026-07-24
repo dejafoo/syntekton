@@ -12,8 +12,12 @@ from product_factory.api.deps import ApiState
 from product_factory.api.streaming import encode_sse, iter_events
 from product_factory.observability.contracts import (
     ArtifactView,
+    ContentView,
+    CostView,
     HealthView,
+    LineageView,
     ModelInvocationView,
+    PlanView,
     PromptPackageView,
     RunSummary,
     TaskSummary,
@@ -76,6 +80,29 @@ def get_task(run_id: str, task_id: str, request: Request) -> TaskSummary:
     return task
 
 
+def _known_run(run_id: str, request: Request) -> None:
+    if _state(request).query.get_run(run_id) is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+
+@router.get("/runs/{run_id}/plan", response_model=PlanView)
+def get_plan(run_id: str, request: Request) -> PlanView:
+    _known_run(run_id, request)
+    return _state(request).query.plan(run_id)
+
+
+@router.get("/runs/{run_id}/lineage", response_model=LineageView)
+def get_lineage(run_id: str, request: Request) -> LineageView:
+    _known_run(run_id, request)
+    return _state(request).query.lineage(run_id)
+
+
+@router.get("/runs/{run_id}/costs", response_model=CostView)
+def get_costs(run_id: str, request: Request) -> CostView:
+    _known_run(run_id, request)
+    return _state(request).query.costs(run_id)
+
+
 @router.get("/runs/{run_id}/events")
 def list_events(
     run_id: str,
@@ -136,6 +163,24 @@ def list_artifacts(run_id: str, request: Request) -> list[ArtifactView]:
     if _state(request).query.get_run(run_id) is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return _state(request).query.list_artifacts_for_run(run_id)
+
+
+@router.get("/runs/{run_id}/artifacts/{sha256}/content", response_model=ContentView)
+def get_artifact_content(run_id: str, sha256: str, request: Request) -> ContentView:
+    _known_run(run_id, request)
+    content = _state(request).query.artifact_content(run_id, sha256)
+    if content is None:
+        raise HTTPException(status_code=404, detail="Artifact not found for run")
+    return content
+
+
+@router.get("/runs/{run_id}/content/{sha256}", response_model=ContentView)
+def get_content(run_id: str, sha256: str, request: Request) -> ContentView:
+    _known_run(run_id, request)
+    content = _state(request).query.content(run_id, sha256)
+    if content is None:
+        raise HTTPException(status_code=404, detail="Content not found for run")
+    return content
 
 
 @router.get("/runs/{run_id}/prompts", response_model=list[PromptPackageView])

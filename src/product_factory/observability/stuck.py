@@ -37,6 +37,7 @@ def derive_liveness(
         "awaiting_approval",
         "plan_rejected",
         "budget_exhausted",
+        "cancelled",
         "success",
         "skipped",
     }

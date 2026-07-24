@@ -1,0 +1,272 @@
+"""CLI group: `product-factory host` (machine JSON protocol)."""
+
+from __future__ import annotations
+
+import json
+import sys
+import uuid
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+import typer
+import yaml
+
+from product_factory.config.loader import PoliciesConfig, load_config
+from product_factory.domain.budgets import RunBudget
+from product_factory.domain.errors import ProductFactoryError
+from product_factory.domain.runs import RunRequest
+from product_factory.gateway.mock import MockGateway
+from product_factory.gateway.openrouter import OpenRouterGateway
+from product_factory.host.protocol import HostResponse
+from product_factory.host.service import HostService
+
+host_app = typer.Typer(
+    name="host",
+    help="Machine host protocol (product-factory.host/v1). JSON output by default.",
+    no_args_is_help=True,
+    add_completion=False,
+)
+
+
+def _gateway_from_config(config, *, force_mock: bool = False):
+    if force_mock:
+        return MockGateway()
+    profiles = {
+        name: {
+            "model": p.model,
+            "pricing": p.pricing,
+            "provider": p.provider,
+        }
+        for name, p in config.models.profiles.items()
+    }
+    import os
+
+    if os.environ.get("OPENROUTER_API_KEY") and not os.environ.get("PRODUCT_FACTORY_FORCE_MOCK"):
+        return OpenRouterGateway(profile_models=profiles)
+    return MockGateway()
+
+
+def _parse_validation_commands(
+    validation_command: list[str], validation_commands: str | None
+) -> list[str]:
+    ids = list(validation_command)
+    if validation_commands:
+        ids.extend(v.strip() for v in validation_commands.split(",") if v.strip())
+    seen: set[str] = set()
+    result: list[str] = []
+    for cid in ids:
+        if cid not in seen:
+            seen.add(cid)
+            result.append(cid)
+    return result
+
+
+def _load_config_with_policy_override(policy: Path | None):
+    config = load_config()
+    if policy is not None:
+        raw = yaml.safe_load(policy.read_text(encoding="utf-8")) or {}
+        config = config.model_copy(update={"policies": PoliciesConfig.model_validate(raw)})
+    return config
+
+
+def _emit(response: HostResponse, *, exit_on_error: bool = True) -> None:
+    sys.stdout.write(response.model_dump_json() + "\n")
+    sys.stdout.flush()
+    if exit_on_error and not response.ok:
+        raise typer.Exit(1)
+
+
+def _service(
+    *,
+    mock: bool = False,
+    policy: Path | None = None,
+    data_dir: Path | None = None,
+) -> HostService:
+    config = _load_config_with_policy_override(policy)
+    gateway = _gateway_from_config(config, force_mock=mock)
+    return HostService(
+        config=config,
+        gateway=gateway,
+        data_dir=data_dir,
+        use_deterministic_planner=mock or isinstance(gateway, MockGateway),
+    )
+
+
+@host_app.command("submit")
+def host_submit_cmd(
+    request: Path = typer.Option(..., "--request", exists=True, dir_okay=False),
+    repo: Path | None = typer.Option(None, "--repo"),
+    workflow: str = typer.Option("code_change", "--workflow"),
+    profile: str = typer.Option("local-target", "--profile"),
+    budget_usd: float = typer.Option(3.0, "--budget-usd"),
+    max_wall_clock_seconds: int | None = typer.Option(None, "--max-wall-clock-seconds"),
+    validation_command: list[str] = typer.Option([], "--validation-command"),
+    validation_commands: str | None = typer.Option(None, "--validation-commands"),
+    policy: Path | None = typer.Option(None, "--policy"),
+    mock: bool = typer.Option(False, "--mock"),
+    inline: bool = typer.Option(
+        False,
+        "--inline",
+        help="Run worker in a daemon thread (tests); default spawns a subprocess",
+    ),
+    sync: bool = typer.Option(
+        False,
+        "--sync",
+        help="Run worker in-process before returning (debug only)",
+    ),
+) -> None:
+    """Submit a curated request and return run_id + subscription immediately."""
+    service = _service(mock=mock, policy=policy)
+    budget_kwargs: dict[str, Any] = {"max_cost_usd": Decimal(str(budget_usd))}
+    if max_wall_clock_seconds is not None:
+        budget_kwargs["max_wall_clock_seconds"] = max_wall_clock_seconds
+    run_request = RunRequest(
+        request_id=f"req-{uuid.uuid4().hex[:8]}",
+        workflow_type=workflow,  # type: ignore[arg-type]
+        request_text=request.read_text(encoding="utf-8"),
+        repository_path=repo.resolve() if repo else None,
+        model_profile_set=profile,
+        validation_commands=_parse_validation_commands(validation_command, validation_commands),
+        budget=RunBudget(**budget_kwargs),
+    )
+    response = service.submit(
+        run_request,
+        mock=mock,
+        detach=not inline and not sync,
+        inline_thread=inline and not sync,
+    )
+    _emit(response)
+
+
+@host_app.command("worker")
+def host_worker_cmd(
+    run_id: str = typer.Option(..., "--run-id"),
+    mock: bool = typer.Option(False, "--mock"),
+    data_dir: Path | None = typer.Option(
+        None, "--data-dir", help="Override .product-factory data root"
+    ),
+) -> None:
+    """Internal: execute a queued host submit (spawned by submit)."""
+    from product_factory.domain.errors import RunCancelledError
+
+    service = _service(mock=mock, data_dir=data_dir)
+    try:
+        manifest = service.run_worker(run_id)
+    except RunCancelledError as exc:
+        _emit(
+            HostResponse.success(
+                run_id=run_id,
+                status="cancelled",
+                data={"cancelled": True, "message": exc.message},
+            )
+        )
+        return
+    except ProductFactoryError as exc:
+        _emit(
+            HostResponse.failure(
+                code=exc.__class__.__name__,
+                message=exc.message,
+                run_id=run_id,
+                details=exc.details,
+            )
+        )
+        return
+    _emit(
+        HostResponse.success(
+            run_id=manifest.run_id,
+            status=manifest.final_status,
+            data={"usage": json.loads(manifest.usage.model_dump_json())},
+        )
+    )
+
+
+@host_app.command("status")
+def host_status_cmd(run_id: str = typer.Argument(...)) -> None:
+    _emit(_service().status(run_id))
+
+
+@host_app.command("inspect")
+def host_inspect_cmd(run_id: str = typer.Argument(...)) -> None:
+    _emit(_service().inspect(run_id))
+
+
+@host_app.command("artifacts")
+def host_artifacts_cmd(run_id: str = typer.Argument(...)) -> None:
+    _emit(_service().artifacts(run_id))
+
+
+@host_app.command("approve")
+def host_approve_cmd(
+    run_id: str = typer.Argument(...),
+    apply: bool = typer.Option(False, "--apply"),
+) -> None:
+    _emit(_service().approve(run_id, apply=apply))
+
+
+@host_app.command("reject")
+def host_reject_cmd(run_id: str = typer.Argument(...)) -> None:
+    _emit(_service().reject(run_id))
+
+
+@host_app.command("cancel")
+def host_cancel_cmd(run_id: str = typer.Argument(...)) -> None:
+    _emit(_service().cancel(run_id))
+
+
+@host_app.command("revise")
+def host_revise_cmd(
+    run_id: str = typer.Argument(...),
+    note: str = typer.Option("", "--note"),
+) -> None:
+    _emit(_service().revise(run_id, note=note))
+
+
+@host_app.command("export-bundle")
+def host_export_bundle_cmd(run_id: str = typer.Argument(...)) -> None:
+    _emit(_service().export_bundle(run_id))
+
+
+def _tail_cmd(
+    run_id: str,
+    *,
+    after_seq: int,
+    follow: bool,
+    once: bool,
+) -> None:
+    service = _service()
+    for batch in service.tail(
+        run_id,
+        after_seq=after_seq,
+        follow=follow and not once,
+        max_idle_polls=1 if once else None,
+        stop_when_terminal=True,
+    ):
+        _emit(batch, exit_on_error=False)
+        if once:
+            break
+        if batch.events:
+            # Keep streaming; when terminal idle heartbeat arrives, iterator stops.
+            continue
+
+
+@host_app.command("tail")
+def host_tail_cmd(
+    run_id: str = typer.Argument(...),
+    after_seq: int = typer.Option(0, "--after-seq"),
+    follow: bool = typer.Option(True, "--follow/--no-follow"),
+    once: bool = typer.Option(False, "--once", help="Emit one batch and exit"),
+) -> None:
+    """Stream events by after_seq; falls back to SQLite/events.jsonl if observe is down."""
+    _tail_cmd(run_id, after_seq=after_seq, follow=follow, once=once)
+
+
+@host_app.command("attach")
+def host_attach_cmd(
+    run_id: str = typer.Argument(...),
+    after_seq: int = typer.Option(0, "--after-seq"),
+    follow: bool = typer.Option(True, "--follow/--no-follow"),
+    once: bool = typer.Option(False, "--once"),
+) -> None:
+    """Alias for `host tail`."""
+    _tail_cmd(run_id, after_seq=after_seq, follow=follow, once=once)

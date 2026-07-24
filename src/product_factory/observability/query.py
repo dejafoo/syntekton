@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import re
+from collections import defaultdict
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
 from product_factory.observability.contracts import (
     ArtifactView,
+    CaptureLevel,
+    ContentView,
+    CostView,
     HealthView,
+    LineageView,
     ModelInvocationView,
+    PlanView,
     PromptPackageView,
     RunSummary,
     TaskSummary,
@@ -27,6 +36,33 @@ def _json_loads(raw: str | None, default: Any) -> Any:
         return json.loads(raw)
     except json.JSONDecodeError:
         return default
+
+
+_SHA256 = re.compile(r"^[a-f0-9]{64}$")
+_RUN_OUTPUT_FILES = frozenset({"plan.json", "compiler-report.json"})
+
+
+def _decimal(value: Any) -> Decimal:
+    try:
+        return Decimal(str(value or 0))
+    except (InvalidOperation, ValueError):
+        return Decimal("0")
+
+
+def _usage_totals(items: list[dict[str, Any]]) -> dict[str, Any]:
+    keys = ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens", "latency_ms", "retries")
+    result: dict[str, Any] = {key: 0 for key in keys}
+    result["estimated_cost_usd"] = Decimal("0")
+    result["reported_cost_usd"] = Decimal("0")
+    result["reported_count"] = 0
+    for usage in items:
+        for key in keys:
+            result[key] += int(usage.get(key) or 0)
+        result["estimated_cost_usd"] += _decimal(usage.get("estimated_cost_usd"))
+        if usage.get("reported_cost_usd") is not None:
+            result["reported_cost_usd"] += _decimal(usage.get("reported_cost_usd"))
+            result["reported_count"] += 1
+    return result
 
 
 class ObservabilityQueryService:
@@ -60,6 +96,9 @@ class ObservabilityQueryService:
             counts[t["status"]] = counts.get(t["status"], 0) + 1
         req = _json_loads(row.get("request_json"), {})
         budget = (req.get("budget") if isinstance(req, dict) else {}) or {}
+        ledger = _json_loads(row.get("budget_json"), {})
+        if isinstance(ledger, dict) and isinstance(ledger.get("budget"), dict):
+            budget = ledger["budget"]
         latest_seq = self.db.latest_seq_for_run(row["run_id"])
         last_progress = row.get("last_progress_at") or row.get("updated_at")
         return RunSummary(
@@ -209,14 +248,23 @@ class ObservabilityQueryService:
         ]
 
     def list_artifacts_for_run(self, run_id: str) -> list[ArtifactView]:
+        run_dir = self._run_dir(run_id)
+        if run_dir is None:
+            return []
         task_ids = {t["task_id"] for t in self.db.list_tasks(run_id)}
         views: list[ArtifactView] = []
         for a in self.db.list_artifacts():
-            if a.get("created_by_task_id") in task_ids or a.get("created_by_task_id") in {
+            # Artifact rows predate a run_id column. The run-local blob is the
+            # authoritative ownership proof and avoids task-id collisions across
+            # runs (for example every plan has a `plan` task).
+            owned_blob = run_dir / "artifacts" / "blobs" / a["sha256"]
+            if owned_blob.is_file() and (
+                a.get("created_by_task_id") in task_ids or a.get("created_by_task_id") in {
                 "compose",
                 "plan",
                 "system",
-            }:
+                }
+            ):
                 views.append(
                     ArtifactView(
                         sha256=a["sha256"],
@@ -231,6 +279,190 @@ class ObservabilityQueryService:
                 )
         # Also include filesystem prompts/artifacts under run dir when present
         return views
+
+    def plan(self, run_id: str) -> PlanView:
+        """Read only known coordinator output files; never browser-selected paths."""
+        run_dir = self._run_dir(run_id)
+        if run_dir is None:
+            return PlanView(run_id=run_id)
+        plan = self._read_run_output(run_dir, "plan.json")
+        compiler = self._read_run_output(run_dir, "compiler-report.json")
+        return PlanView(
+            run_id=run_id,
+            plan=plan if isinstance(plan, dict) else None,
+            compiler=compiler if isinstance(compiler, dict) else None,
+        )
+
+    def lineage(self, run_id: str) -> LineageView:
+        tasks = self.list_tasks(run_id)
+        dependencies = {task.task_id: task.dependencies for task in tasks}
+        task_by_id = {task.task_id: task for task in tasks}
+        files: list[dict[str, Any]] = []
+        run_dir = self._run_dir(run_id)
+        if run_dir is not None:
+            output = run_dir / "output"
+            for path in sorted(output.glob("*-lineage.json")) if output.exists() else []:
+                data = self._read_json(path)
+                if isinstance(data, dict):
+                    files.append({"name": path.name, "data": data})
+        failed = [task for task in tasks if task.status in {"failed", "blocked"}]
+        repairs: list[dict[str, Any]] = []
+        for task in tasks:
+            if task.capability != "repair":
+                continue
+            direct = [dep for dep in task.dependencies if dep in task_by_id]
+            origin = next((dep for dep in direct if task_by_id[dep].status in {"failed", "blocked"}), None)
+            # Older runs can replace a failed task's dependency with its repair.
+            # The best durable derivation available is the most recent failed task.
+            if origin is None and failed:
+                origin = failed[-1].task_id
+            lineage = next(
+                (entry["data"] for entry in files if entry["data"].get("task_id") == task.task_id),
+                {},
+            )
+            repairs.append(
+                {
+                    "task_id": task.task_id,
+                    "origin_task_id": origin,
+                    "dependencies": task.dependencies,
+                    "reason": task.title or task.summary,
+                    "inherited_patch_fingerprint": lineage.get("pre_patch_fingerprint"),
+                    "supersedes": [
+                        candidate.task_id
+                        for candidate in tasks
+                        if candidate.task_id != task.task_id and task.task_id in candidate.dependencies
+                    ],
+                }
+            )
+        return LineageView(run_id=run_id, dependencies=dependencies, repairs=repairs, files=files)
+
+    def costs(self, run_id: str) -> CostView:
+        invocations = self.db.list_invocations(run_id)
+        parsed = [{**row, "usage": _json_loads(row.get("usage_json"), {})} for row in invocations]
+        total = _usage_totals([row["usage"] for row in parsed])
+        reported_count = int(total.pop("reported_count"))
+        if reported_count == len(parsed) and parsed:
+            basis = "reported"
+        elif reported_count:
+            basis = "mixed"
+        else:
+            basis = "estimated"
+        for key in ("estimated_cost_usd", "reported_cost_usd"):
+            total[key] = str(total[key])
+        by_task: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        by_model: dict[tuple[str | None, str | None, str], list[dict[str, Any]]] = defaultdict(list)
+        for item in parsed:
+            by_task[item["task_id"]].append(item["usage"])
+            by_model[(item.get("provider"), item.get("resolved_model_id"), item["model_profile"])].append(item["usage"])
+        task_rows = [self._cost_row({"task_id": key}, values) for key, values in by_task.items()]
+        model_rows = [
+            self._cost_row(
+                {"provider": key[0], "resolved_model_id": key[1], "model_profile": key[2]}, values
+            )
+            for key, values in by_model.items()
+        ]
+        row = self.db.get_run(run_id) or {}
+        ledger = _json_loads(row.get("budget_json"), {})
+        budget = ledger.get("budget") if isinstance(ledger, dict) else None
+        if not isinstance(budget, dict):
+            req = _json_loads(row.get("request_json"), {})
+            budget = req.get("budget") if isinstance(req, dict) else {}
+        max_cost = _decimal(budget.get("max_cost_usd") if isinstance(budget, dict) else 0)
+        spend = _decimal(total["reported_cost_usd"] if basis == "reported" else total["estimated_cost_usd"])
+        total["remaining_budget_usd"] = str(max(max_cost - spend, Decimal("0")))
+        return CostView(run_id=run_id, basis=basis, total=total, budget=budget or {}, ledger=ledger if isinstance(ledger, dict) else {}, by_task=task_rows, by_model=model_rows)
+
+    def artifact_content(self, run_id: str, sha256: str) -> ContentView | None:
+        if not _SHA256.fullmatch(sha256):
+            return None
+        artifact = next((item for item in self.list_artifacts_for_run(run_id) if item.sha256 == sha256), None)
+        run_dir = self._run_dir(run_id)
+        if artifact is None or run_dir is None:
+            return None
+        path = run_dir / "artifacts" / "blobs" / sha256
+        if not path.is_file():
+            return None
+        return self._content_view(sha256, path, media_type=artifact.media_type, capture_level=None)
+
+    def content(self, run_id: str, sha256: str) -> ContentView | None:
+        if not _SHA256.fullmatch(sha256):
+            return None
+        refs = self._content_refs(run_id)
+        ref = next((item for item in refs if item.get("sha256") == sha256), None)
+        if ref is None:
+            return None
+        try:
+            level = CaptureLevel(str(ref.get("capture_level") or "metadata"))
+        except ValueError:
+            level = CaptureLevel.METADATA
+        if level in {CaptureLevel.OFF, CaptureLevel.METADATA}:
+            return ContentView(sha256=sha256, available=False, capture_level=level, media_type=ref.get("media_type"), byte_count=ref.get("byte_count"))
+        run_dir = self._run_dir(run_id)
+        if run_dir is None:
+            return None
+        path = run_dir / "content" / sha256
+        if not path.is_file():
+            return ContentView(sha256=sha256, available=False, capture_level=level, media_type=ref.get("media_type"), byte_count=ref.get("byte_count"))
+        return self._content_view(sha256, path, media_type=ref.get("media_type"), capture_level=level, byte_count=ref.get("byte_count"))
+
+    def _cost_row(self, labels: dict[str, Any], usages: list[dict[str, Any]]) -> dict[str, Any]:
+        totals = _usage_totals(usages)
+        totals.pop("reported_count", None)
+        totals["estimated_cost_usd"] = str(totals["estimated_cost_usd"])
+        totals["reported_cost_usd"] = str(totals["reported_cost_usd"])
+        return {**labels, **totals, "invocation_count": len(usages)}
+
+    def _run_dir(self, run_id: str) -> Path | None:
+        if self.data_dir is None or not self.db.get_run(run_id):
+            return None
+        return self.data_dir / "runs" / run_id
+
+    def _read_run_output(self, run_dir: Path, name: str) -> Any:
+        if name not in _RUN_OUTPUT_FILES:
+            return None
+        return self._read_json(run_dir / "output" / name)
+
+    @staticmethod
+    def _read_json(path: Path) -> Any:
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    def _content_refs(self, run_id: str) -> list[dict[str, Any]]:
+        refs: list[dict[str, Any]] = []
+        for event in self.db.list_events(run_id=run_id, limit=100_000):
+            refs.extend(_json_loads(event.get("content_refs_json"), []))
+        for invocation in self.db.list_invocations(run_id):
+            refs.extend(_json_loads(invocation.get("content_refs_json"), []))
+        return [ref for ref in refs if isinstance(ref, dict)]
+
+    @staticmethod
+    def _content_view(
+        sha256: str,
+        path: Path,
+        *,
+        media_type: str | None,
+        capture_level: CaptureLevel | None,
+        byte_count: Any = None,
+    ) -> ContentView:
+        raw = path.read_bytes()
+        truncated = len(raw) > 1_000_000
+        visible = raw[:1_000_000]
+        text = visible.decode("utf-8", errors="replace")
+        payload: Any = text
+        if media_type == "application/json":
+            with contextlib.suppress(json.JSONDecodeError):
+                payload = json.loads(text)
+        return ContentView(
+            sha256=sha256,
+            available=True,
+            capture_level=capture_level or CaptureLevel.FULL,
+            media_type=media_type,
+            byte_count=byte_count or len(raw),
+            truncated=truncated,
+            payload=payload,
+        )
 
     def list_prompts(self, run_id: str) -> list[PromptPackageView]:
         if self.data_dir is None:
