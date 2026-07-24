@@ -696,10 +696,19 @@ def mcp_cmd(
     ),
 ) -> None:
     """Run the Product Factory MCP server on stdio (OpenCode / Cursor / Claude Code)."""
+    import sys
+
     from product_factory.host_mcp.server import run_stdio
 
     # MCP uses stdout for JSON-RPC; keep Rich/typer noise off the wire.
-    run_stdio(mock=mock, data_dir=data_dir)
+    try:
+        run_stdio(mock=mock, data_dir=data_dir)
+    except ProductFactoryError as exc:
+        sys.stderr.write(f"product-factory mcp failed: {exc.message}\n")
+        raise SystemExit(1) from None
+    except Exception as exc:  # noqa: BLE001 — last-resort stdio safety
+        sys.stderr.write(f"product-factory mcp failed: {exc}\n")
+        raise SystemExit(1) from None
 
 
 @app.command("costs")
