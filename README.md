@@ -141,6 +141,7 @@ See [Observability](docs/observability.md) and [Host integration](docs/host-inte
 - [MVP quality closure](docs/next-work-packages-quality.md) — lesson loop, review evidence, soft arch matching
 - [Phase 1 execution kernel](docs/next-work-packages-phase1.md) — budgets, resume, sandbox, concurrency, workflow packs
 - [Phase 3 host integration](docs/next-work-packages-phase3.md) — JSON host protocol, control API, OpenCode MCP, investigation/plan packs
+- [Phase 3.G materialize + OpenCode plugin](docs/next-work-packages-phase3g.md) — `materialize` host action, optional plugin packaging
 - [Host integration protocol](docs/host-integration.md) — CLI + HTTP + MCP for OpenCode / Cursor / scripts
 - [Sandbox and durable resume design](docs/architecture/sandbox-and-resume.md)
 
