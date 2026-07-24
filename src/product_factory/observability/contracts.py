@@ -218,6 +218,7 @@ EVENT_TYPES = frozenset(
         "tool.call.failed",
         "validation.completed",
         "artifact.created",
+        "artifact.materialized",
         "approval.required",
         "approval.decided",
         "budget.updated",

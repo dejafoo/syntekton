@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import uuid
 from decimal import Decimal
@@ -20,6 +21,7 @@ from product_factory.gateway.mock import MockGateway
 from product_factory.gateway.openrouter import OpenRouterGateway
 from product_factory.host.protocol import HostResponse
 from product_factory.host.service import HostService
+from product_factory.host_mcp.factory import resolve_mcp_config_root
 
 host_app = typer.Typer(
     name="host",
@@ -40,8 +42,6 @@ def _gateway_from_config(config, *, force_mock: bool = False):
         }
         for name, p in config.models.profiles.items()
     }
-    import os
-
     if os.environ.get("OPENROUTER_API_KEY") and not os.environ.get("PRODUCT_FACTORY_FORCE_MOCK"):
         return OpenRouterGateway(profile_models=profiles)
     return MockGateway()
@@ -63,7 +63,9 @@ def _parse_validation_commands(
 
 
 def _load_config_with_policy_override(policy: Path | None):
-    config = load_config()
+    # Same cwd-independent resolution as MCP so OpenCode plugin hosts can set
+    # PRODUCT_FACTORY_ROOT when the project cwd is not the PF checkout.
+    config = load_config(resolve_mcp_config_root())
     if policy is not None:
         raw = yaml.safe_load(policy.read_text(encoding="utf-8")) or {}
         config = config.model_copy(update={"policies": PoliciesConfig.model_validate(raw)})
@@ -84,12 +86,15 @@ def _service(
     data_dir: Path | None = None,
 ) -> HostService:
     config = _load_config_with_policy_override(policy)
-    gateway = _gateway_from_config(config, force_mock=mock)
+    if data_dir is None and os.environ.get("PRODUCT_FACTORY_DATA_DIR"):
+        data_dir = Path(os.environ["PRODUCT_FACTORY_DATA_DIR"]).expanduser()
+    force_mock = mock or bool(os.environ.get("PRODUCT_FACTORY_FORCE_MOCK"))
+    gateway = _gateway_from_config(config, force_mock=force_mock)
     return HostService(
         config=config,
         gateway=gateway,
         data_dir=data_dir,
-        use_deterministic_planner=mock or isinstance(gateway, MockGateway),
+        use_deterministic_planner=force_mock or isinstance(gateway, MockGateway),
     )
 
 
@@ -225,6 +230,36 @@ def host_revise_cmd(
 @host_app.command("export-bundle")
 def host_export_bundle_cmd(run_id: str = typer.Argument(...)) -> None:
     _emit(_service().export_bundle(run_id))
+
+
+@host_app.command("materialize")
+def host_materialize_cmd(
+    run_id: str = typer.Argument(...),
+    artifact: str = typer.Option(
+        ...,
+        "--artifact",
+        help="Logical artifact name (e.g. ARCHITECTURE.md) or sha256",
+    ),
+    to_path: str = typer.Option(
+        ...,
+        "--to",
+        help="Destination path under the run repository_path",
+    ),
+    overwrite: bool = typer.Option(
+        False,
+        "--overwrite",
+        help="Replace an existing destination file",
+    ),
+) -> None:
+    """Land a run artifact into the target repository (host-mediated copy)."""
+    _emit(
+        _service().materialize(
+            run_id,
+            artifact=artifact,
+            dest_path=to_path,
+            overwrite=overwrite,
+        )
+    )
 
 
 def _tail_cmd(

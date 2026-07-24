@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -23,7 +26,9 @@ from product_factory.gateway.base import ModelGateway
 from product_factory.gateway.mock import MockGateway
 from product_factory.host.export import export_evidence_bundle
 from product_factory.host.protocol import HostResponse, HostSubscription
+from product_factory.observability.contracts import EventSeverity
 from product_factory.observability.query import ObservabilityQueryService
+from product_factory.observability.recorder import TelemetryRecorder
 from product_factory.orchestration.coordinator import RunCoordinator
 
 DEFAULT_OBSERVE_URL = "http://127.0.0.1:8765"
@@ -37,6 +42,17 @@ TERMINAL_STATUSES = frozenset(
         "cancelled",
     }
 )
+MATERIALIZE_ALLOWED_STATUSES = frozenset({"awaiting_approval", "completed"})
+KNOWN_MATERIALIZE_OUTPUTS = (
+    "ARCHITECTURE.md",
+    "EVIDENCE_REPORT.md",
+    "proposed.patch",
+    "plan.json",
+    "run-summary.md",
+    "approval.json",
+    "compiler-report.json",
+)
+_SHA256_RE = re.compile(r"^[a-fA-F0-9]{64}$")
 
 
 class HostService:
@@ -404,6 +420,207 @@ class HostService:
             data=result,
         )
 
+    def materialize(
+        self,
+        run_id: str,
+        *,
+        artifact: str,
+        dest_path: str | Path,
+        overwrite: bool = False,
+    ) -> HostResponse:
+        """Copy a run artifact into the target repository (host-mediated land).
+
+        Allowed only when the run is ``awaiting_approval`` or ``completed``.
+        Destination must resolve under the run's ``repository_path``.
+        """
+        row = self.coord.db.get_run(run_id)
+        if not row:
+            return HostResponse.failure(
+                code="not_found", message=f"Unknown run {run_id}", run_id=run_id
+            )
+        status = row["status"]
+        if status not in MATERIALIZE_ALLOWED_STATUSES:
+            return HostResponse.failure(
+                code="invalid_state",
+                message=(
+                    f"materialize requires status awaiting_approval or completed; "
+                    f"got {status!r}"
+                ),
+                run_id=run_id,
+                status=status,
+                details={"allowed_statuses": sorted(MATERIALIZE_ALLOWED_STATUSES)},
+            )
+
+        request = self._request_dict(run_id) or {}
+        repo_raw = request.get("repository_path")
+        if not repo_raw:
+            return HostResponse.failure(
+                code="missing_repository",
+                message="Run has no repository_path; cannot materialize into a workspace",
+                run_id=run_id,
+                status=status,
+            )
+        repo_root = Path(str(repo_raw)).expanduser().resolve()
+        if not repo_root.is_dir():
+            return HostResponse.failure(
+                code="missing_repository",
+                message=f"repository_path is not a directory: {repo_root}",
+                run_id=run_id,
+                status=status,
+                details={"repository_path": str(repo_root)},
+            )
+
+        try:
+            dest = self._resolve_materialize_dest(repo_root, dest_path)
+        except ValueError as exc:
+            return HostResponse.failure(
+                code="path_escape",
+                message=str(exc),
+                run_id=run_id,
+                status=status,
+                details={
+                    "dest_path": str(dest_path),
+                    "repository_path": str(repo_root),
+                },
+            )
+
+        source = self._resolve_materialize_source(run_id, artifact)
+        if source is None:
+            return HostResponse.failure(
+                code="not_found",
+                message=f"Artifact not found: {artifact}",
+                run_id=run_id,
+                status=status,
+                details={
+                    "artifact": artifact,
+                    "known_outputs": list(KNOWN_MATERIALIZE_OUTPUTS),
+                },
+            )
+
+        if dest.exists() and not overwrite:
+            return HostResponse.failure(
+                code="already_exists",
+                message=f"Destination exists (pass overwrite=true): {dest}",
+                run_id=run_id,
+                status=status,
+                details={"written_path": str(dest)},
+            )
+
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source["path"], dest)
+        except OSError as exc:
+            return HostResponse.failure(
+                code="materialize_failed",
+                message=str(exc),
+                run_id=run_id,
+                status=status,
+            )
+
+        digest = hashlib.sha256(dest.read_bytes()).hexdigest()
+        written_rel = str(dest.relative_to(repo_root))
+        TelemetryRecorder(self.coord.db).emit(
+            run_id=run_id,
+            event_type="artifact.materialized",
+            summary=f"Materialized {source['logical_name']} → {written_rel}",
+            severity=EventSeverity.INFO,
+            payload={
+                "artifact": source["logical_name"],
+                "sha256": digest,
+                "source_sha256": source.get("sha256") or digest,
+                "dest_path": written_rel,
+                "absolute_path": str(dest),
+                "overwrite": overwrite,
+            },
+        )
+        return HostResponse.success(
+            run_id=run_id,
+            status=status,
+            artifacts=self._artifact_dicts(run_id),
+            data={
+                "written_path": str(dest),
+                "relative_path": written_rel,
+                "artifact": {
+                    "logical_name": source["logical_name"],
+                    "sha256": digest,
+                    "source_path": str(source["path"]),
+                },
+                "overwrite": overwrite,
+            },
+        )
+
+    def _resolve_materialize_dest(self, repo_root: Path, dest_path: str | Path) -> Path:
+        raw = Path(dest_path).expanduser()
+        candidate = raw.resolve() if raw.is_absolute() else (repo_root / raw).resolve()
+        if not candidate.is_relative_to(repo_root):
+            raise ValueError(
+                f"Destination escapes repository_path: {dest_path} "
+                f"(repo={repo_root})"
+            )
+        return candidate
+
+    def _resolve_materialize_source(
+        self, run_id: str, artifact: str
+    ) -> dict[str, Any] | None:
+        """Locate a materializable artifact by logical name or sha256."""
+        run_dir = self.pf_root / "runs" / run_id
+        output_dir = run_dir / "output"
+        selector = artifact.strip()
+        if not selector:
+            return None
+
+        if _SHA256_RE.fullmatch(selector):
+            blob = run_dir / "artifacts" / "blobs" / selector.lower()
+            if blob.is_file():
+                logical = selector.lower()
+                for view in self.query.list_artifacts_for_run(run_id):
+                    if view.sha256 == selector.lower():
+                        logical = view.logical_name
+                        break
+                return {
+                    "path": blob,
+                    "logical_name": logical,
+                    "sha256": selector.lower(),
+                }
+            return None
+
+        # Prefer well-known output files (canonical casing).
+        candidates: list[Path] = []
+        direct = output_dir / selector
+        if direct.is_file():
+            candidates.append(direct)
+        for known in KNOWN_MATERIALIZE_OUTPUTS:
+            if known.lower() == selector.lower():
+                path = output_dir / known
+                if path.is_file() and path not in candidates:
+                    candidates.append(path)
+        if output_dir.is_dir():
+            for path in output_dir.iterdir():
+                if path.is_file() and path.name.lower() == selector.lower():
+                    if path not in candidates:
+                        candidates.append(path)
+
+        if candidates:
+            path = candidates[0]
+            return {
+                "path": path,
+                "logical_name": path.name,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+
+        # Fall back to artifact store / DB views by logical name.
+        for view in self.query.list_artifacts_for_run(run_id):
+            if view.logical_name.lower() != selector.lower():
+                continue
+            blob = run_dir / "artifacts" / "blobs" / view.sha256
+            if blob.is_file():
+                return {
+                    "path": blob,
+                    "logical_name": view.logical_name,
+                    "sha256": view.sha256,
+                }
+        return None
+
     def plan_preview(
         self,
         request_text: str,
@@ -591,6 +808,8 @@ class HostService:
         candidates = [
             run_dir / "plan.json",
             run_dir / "proposed.patch",
+            run_dir / "ARCHITECTURE.md",
+            run_dir / "EVIDENCE_REPORT.md",
             run_dir / "architecture.md",
             run_dir / "approval.json",
             self.pf_root / "runs" / run_id / "run-manifest.json",

@@ -42,6 +42,12 @@ class ReviseBody(BaseModel):
     note: str = ""
 
 
+class MaterializeBody(BaseModel):
+    artifact: str
+    dest_path: str
+    overwrite: bool = False
+
+
 class PlanPreviewBody(BaseModel):
     request_text: str
     workflow_type: WorkflowType = "code_change"
@@ -125,6 +131,20 @@ def revise_run(
 ) -> JSONResponse:
     host = _state(request).host(observe_base_url=_observe_base(request))
     return _host_json(host.revise(run_id, note=body.note))
+
+
+@router.post("/runs/{run_id}/materialize")
+def materialize_run(run_id: str, request: Request, body: MaterializeBody) -> JSONResponse:
+    """Land a run artifact under the run's repository_path."""
+    host = _state(request).host(observe_base_url=_observe_base(request))
+    return _host_json(
+        host.materialize(
+            run_id,
+            artifact=body.artifact,
+            dest_path=body.dest_path,
+            overwrite=body.overwrite,
+        )
+    )
 
 
 @router.post("/plan")
