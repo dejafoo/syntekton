@@ -1,0 +1,39 @@
+{
+  "name": "@product-factory/opencode-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenCode plugin exposing Product Factory host workflows (pf_run/pf_wait/pf_review/pf_merge/pf_decline) over the product-factory.host/v1 CLI JSON protocol.",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "tsc --noEmit"
+  },
+  "keywords": [
+    "opencode",
+    "product-factory",
+    "plugin"
+  ],
+  "peerDependencies": {
+    "@opencode-ai/plugin": "*"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.18.4",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.7"
+  }
+}

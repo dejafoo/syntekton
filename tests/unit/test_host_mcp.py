@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
 from product_factory.host.protocol import HOST_PROTOCOL, HostResponse, HostSubscription
+from product_factory.host_mcp.factory import resolve_mcp_config_root
 from product_factory.host_mcp.server import McpServer, _read_message, _write_message
 from product_factory.host_mcp.tools import TOOL_NAMES, dispatch_tool, tool_schemas
 
@@ -18,7 +20,24 @@ def _ok(**kwargs: Any) -> HostResponse:
 def test_tool_schemas_match_small_tool_set() -> None:
     names = [t["name"] for t in tool_schemas()]
     assert names == list(TOOL_NAMES)
-    assert len(names) == 8
+    assert len(names) == 9
+    assert "pf_materialize" in names
+
+
+def test_resolve_mcp_config_root_falls_back_to_package(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("PRODUCT_FACTORY_ROOT", raising=False)
+    monkeypatch.chdir(tmp_path)
+    root = resolve_mcp_config_root()
+    assert (root / "config" / "models.yaml").exists()
+
+
+def test_resolve_mcp_config_root_respects_env(tmp_path, monkeypatch) -> None:
+    cfg = tmp_path / "pf"
+    (cfg / "config").mkdir(parents=True)
+    (cfg / "config" / "models.yaml").write_text("profiles: {}\n", encoding="utf-8")
+    monkeypatch.setenv("PRODUCT_FACTORY_ROOT", str(cfg))
+    monkeypatch.chdir(tmp_path)
+    assert resolve_mcp_config_root() == cfg.resolve()
 
 
 def test_dispatch_unknown_tool() -> None:
@@ -143,7 +162,14 @@ def test_mcp_server_initialize_and_tools_call(tmp_path) -> None:
 
     listed = server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
     assert listed is not None
-    assert len(listed["result"]["tools"]) == 8
+    assert len(listed["result"]["tools"]) == 9
+
+    prompts = server.handle({"jsonrpc": "2.0", "id": 20, "method": "prompts/list"})
+    assert prompts is not None
+    assert prompts["result"]["prompts"] == []
+    resources = server.handle({"jsonrpc": "2.0", "id": 21, "method": "resources/list"})
+    assert resources is not None
+    assert resources["result"]["resources"] == []
 
     called = server.handle(
         {
@@ -164,7 +190,116 @@ def test_mcp_server_initialize_and_tools_call(tmp_path) -> None:
 def test_content_length_framing_roundtrip(tmp_path) -> None:
     path = tmp_path / "pipe.bin"
     with path.open("wb") as fh:
-        _write_message(fh, {"jsonrpc": "2.0", "id": 1, "method": "ping"})
+        _write_message(
+            fh,
+            {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+            framing="content-length",
+        )
     with path.open("rb") as fh:
-        msg = _read_message(fh)
+        msg, framing = _read_message(fh)
+    assert framing == "content-length"
     assert msg == {"jsonrpc": "2.0", "id": 1, "method": "ping"}
+
+
+def test_ndjson_framing_roundtrip(tmp_path) -> None:
+    path = tmp_path / "pipe.ndjson"
+    with path.open("wb") as fh:
+        _write_message(
+            fh,
+            {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+            framing="ndjson",
+        )
+    with path.open("rb") as fh:
+        msg, framing = _read_message(fh)
+    assert framing == "ndjson"
+    assert msg == {"jsonrpc": "2.0", "id": 1, "method": "ping"}
+
+
+def test_negotiate_protocol_version_echoes_modern_client() -> None:
+    service = MagicMock()
+    server = McpServer(service)
+    init = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {"roots": {}},
+                "clientInfo": {"name": "opencode", "version": "1.18.4"},
+            },
+        }
+    )
+    assert init is not None
+    assert init["result"]["protocolVersion"] == "2025-11-25"
+
+
+def test_pf_materialize_dispatches_to_host_service() -> None:
+    service = MagicMock()
+    service.materialize.return_value = _ok(
+        run_id="run-1",
+        status="awaiting_approval",
+        data={
+            "written_path": "/repo/docs/ARCHITECTURE.md",
+            "artifact": {"logical_name": "ARCHITECTURE.md", "sha256": "abc"},
+        },
+    )
+    payload = dispatch_tool(
+        service,
+        "pf_materialize",
+        {
+            "run_id": "run-1",
+            "artifact": "ARCHITECTURE.md",
+            "dest_path": "docs/ARCHITECTURE.md",
+            "overwrite": True,
+        },
+    )
+    assert payload["ok"] is True
+    assert payload["data"]["written_path"].endswith("ARCHITECTURE.md")
+    service.materialize.assert_called_once_with(
+        "run-1",
+        artifact="ARCHITECTURE.md",
+        dest_path="docs/ARCHITECTURE.md",
+        overwrite=True,
+    )
+
+
+def test_pf_materialize_requires_args() -> None:
+    service = MagicMock()
+    missing = dispatch_tool(service, "pf_materialize", {"run_id": "run-1"})
+    assert missing["ok"] is False
+    assert missing["error"]["code"] == "invalid_arguments"
+    service.materialize.assert_not_called()
+
+
+def test_mcp_server_lazy_host_service_init() -> None:
+    factory = MagicMock()
+    service = MagicMock()
+    service.status.return_value = _ok(run_id="run-z", status="queued")
+    factory.return_value = service
+
+    server = McpServer(service_factory=factory)
+    init = server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-11-25", "capabilities": {}},
+        }
+    )
+    assert init is not None
+    factory.assert_not_called()
+
+    listed = server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    assert listed is not None
+    factory.assert_not_called()
+
+    server.handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "pf_status", "arguments": {"run_id": "run-z"}},
+        }
+    )
+    factory.assert_called_once()

@@ -8,7 +8,13 @@ Plan: Cursor Phase 3 OpenCode host plan (do not treat the plan file as repo trut
 ## Locked defaults (do not reopen)
 
 - Phase 2 (local LLM router) stays deferred — OpenRouter/cloud + mock remain the model backends.
-- **No OpenCode fork / proprietary plugin SDK.** Host surface is: (1) stable PF protocol, (2) MCP adapter, (3) OpenCode config/commands as packaging.
+- **No OpenCode fork.** Host surface is: (1) stable PF protocol, (2) MCP
+  adapter, (3) OpenCode config/commands as packaging.
+  *Amended in Phase 3.G:* an **optional** OpenCode plugin adapter is allowed as
+  packaging (see [`next-work-packages-phase3g.md`](next-work-packages-phase3g.md)),
+  but the MCP adapter and `product-factory.host/v1` protocol remain the source
+  of truth — no PF orchestration logic inside the plugin, and no host-specific
+  protocol branch.
 - Authority model unchanged: hosts submit curated requests; PF owns planning, grants, budgets, validation, approval.
 - Host must not dump full chat transcripts into PF; only named request text + optional curated artifacts.
 - Phase 4 MCP *connectors for workers* stay out of scope; Phase 3 MCP is **PF exposing itself to the host**, not giving workers arbitrary MCP.
