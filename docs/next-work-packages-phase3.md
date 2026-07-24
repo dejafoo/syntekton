@@ -3,6 +3,10 @@
 Implements [`handover_post_mvp.md`](handover_post_mvp.md) §3.1, §3.2, §4 Phase 3.
 Plan: Cursor Phase 3 OpenCode host plan (do not treat the plan file as repo truth).
 
+> **Status: exit criteria met.** Follow-on Phase 3.G (`materialize` + optional
+> OpenCode plugin) is also closed — see
+> [`next-work-packages-phase3g.md`](next-work-packages-phase3g.md).
+
 **Status legend:** `[ ]` pending · `[~]` in progress · `[x]` done
 
 ## Locked defaults (do not reopen)

@@ -167,19 +167,10 @@ Each tool returns `product-factory.host/v1` `HostResponse` JSON (also as MCP
 | --- | --- |
 | Scripts / CI | `product-factory host …` JSON or HTTP control API |
 | HTTP clients | Control routes on observe/`serve` (this section) |
-| OpenCode | MCP + slash commands — see [`examples/opencode/`](../examples/opencode/); optional plugin, below |
+| OpenCode | **Recommended:** plugin below. Alternative: MCP + slash commands — [`examples/opencode/`](../examples/opencode/) |
 | Cursor / Claude Code | Same `product-factory mcp` stdio config (no OpenCode files required) |
 
-OpenCode packaging is config only by default. Merge
-`examples/opencode/opencode.json`, enable the `product-factory` MCP server, then
-try `/pf-investigate …` → `/pf-status` → `/pf-approve`.
-
-When the OpenCode working directory is not the Product Factory repo, launch MCP
-with an absolute command — either the venv binary, or
-`uv --directory /path/to/orchestration run product-factory mcp`. Do not use
-`uv -C …` (unsupported; the process exits and OpenCode appears stuck).
-
-### Optional OpenCode plugin (P3.G.C / P3.G.D)
+### OpenCode plugin (recommended)
 
 A thin plugin package at [`integrations/opencode-plugin/`](../integrations/opencode-plugin/)
 removes the need for slash commands: it exposes model-facing `pf_run` /
@@ -193,6 +184,19 @@ Install / env / UAT: see the package README. Gated OpenCode reality smoke:
 `scripts/opencode_plugin_smoke.sh` (wired into `scripts/verify.sh`; skips when
 `opencode` is absent unless `OPENCODE_INTEGRATION=1`). Tracker:
 [`next-work-packages-phase3g.md`](next-work-packages-phase3g.md).
+
+### MCP + slash commands (non-plugin hosts)
+
+Merge `examples/opencode/opencode.json`, enable the `product-factory` MCP
+server, then try `/pf-investigate …` → `/pf-status` → `/pf-approve`.
+
+When the OpenCode working directory is not the Product Factory repo, launch MCP
+with an absolute command — either the venv binary, or
+`uv --directory /path/to/orchestration run product-factory mcp`. Do not use
+`uv -C …` (unsupported; the process exits and OpenCode appears stuck). Current
+`product-factory mcp` speaks NDJSON on stdio by default (mirrors
+`Content-Length` when the client sends it) and resolves config via
+`PRODUCT_FACTORY_ROOT` / the install tree when cwd has no PF config.
 
 ## Workflow packs (host-facing)
 

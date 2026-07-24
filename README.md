@@ -35,17 +35,25 @@ product-factory run --request request.md --workflow technical_plan --mock
 product-factory eval --limit 10 --mock
 ```
 
-Machine hosts (async JSON, HTTP control, OpenCode MCP):
+Machine hosts (async JSON, HTTP control, MCP, optional OpenCode plugin):
 
 ```bash
 product-factory host submit --request request.md --repo ./repo --mock
 product-factory host status <run_id>
 product-factory host approve <run_id>
+# Land a doc/report artifact into the target repo (after approval):
+product-factory host materialize <run_id> \
+  --artifact ARCHITECTURE.md --to docs/ARCHITECTURE.md
 product-factory mcp --mock   # stdio MCP for OpenCode / Cursor / Claude Code
 ```
 
-See [Host integration](docs/host-integration.md) and
-[examples/opencode/](examples/opencode/).
+For OpenCode, prefer the in-repo plugin
+([`integrations/opencode-plugin/`](integrations/opencode-plugin/)) —
+`pf_run` / `pf_wait` / `pf_review` / `pf_merge` / `pf_decline`, with an
+operator confirmation before any write. MCP + slash commands remain for
+non-plugin hosts ([`examples/opencode/`](examples/opencode/)).
+
+See [Host integration](docs/host-integration.md).
 
 Set `OPENROUTER_API_KEY` for live model calls. Use `--mock` or
 `PRODUCT_FACTORY_FORCE_MOCK=1` for offline runs.
@@ -141,8 +149,9 @@ See [Observability](docs/observability.md) and [Host integration](docs/host-inte
 - [MVP quality closure](docs/next-work-packages-quality.md) — lesson loop, review evidence, soft arch matching
 - [Phase 1 execution kernel](docs/next-work-packages-phase1.md) — budgets, resume, sandbox, concurrency, workflow packs
 - [Phase 3 host integration](docs/next-work-packages-phase3.md) — JSON host protocol, control API, OpenCode MCP, investigation/plan packs
-- [Phase 3.G materialize + OpenCode plugin](docs/next-work-packages-phase3g.md) — `materialize` host action, optional plugin packaging
+- [Phase 3.G materialize + OpenCode plugin](docs/next-work-packages-phase3g.md) — `materialize` host action + optional OpenCode plugin (exit criteria met)
 - [Host integration protocol](docs/host-integration.md) — CLI + HTTP + MCP for OpenCode / Cursor / scripts
+- [OpenCode plugin](integrations/opencode-plugin/) — recommended OpenCode packaging (`pf_run` … `pf_merge`)
 - [Sandbox and durable resume design](docs/architecture/sandbox-and-resume.md)
 
 ## Verify
@@ -150,3 +159,8 @@ See [Observability](docs/observability.md) and [Host integration](docs/host-inte
 ```bash
 ./scripts/verify.sh
 ```
+
+Always-on: dashboard check/build, ruff, basedpyright, unit/contract tests
+(excluding `@integration`). Optionally ends with
+`scripts/opencode_plugin_smoke.sh`, which skips when `opencode` is not on
+`PATH` unless `OPENCODE_INTEGRATION=1` is set.

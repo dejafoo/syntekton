@@ -386,12 +386,13 @@ Exit criteria:
 > [`examples/opencode/`](../examples/opencode/). Live OpenRouter Stage B smoke
 > skipped (mock gate sufficient).
 >
-> **Follow-on (Phase 3.G, in progress):** vendor-neutral `materialize` host
-> action (landed) plus optional OpenCode plugin packaging so the happy path
-> needs no slash commands — tracker
-> [`docs/next-work-packages-phase3g.md`](next-work-packages-phase3g.md). Plugin
-> packaging counts as complete only when the 3.G exit criteria are met; MCP and
-> the host protocol stay the source of truth.
+> **Follow-on (Phase 3.G, exit criteria met):** vendor-neutral `materialize`
+> host action (CLI + MCP + control API) plus optional OpenCode plugin packaging
+> so the happy path needs no slash commands — tracker
+> [`docs/next-work-packages-phase3g.md`](next-work-packages-phase3g.md), plugin
+> at [`integrations/opencode-plugin/`](../integrations/opencode-plugin/). MCP
+> and `product-factory.host/v1` remain the source of truth; the plugin is thin
+> packaging over the host CLI.
 
 **Goal:** make Product Factory useful from an existing development CLI without
 becoming a competing CLI product.
