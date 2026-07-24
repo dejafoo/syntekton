@@ -21,6 +21,7 @@ TOOL_NAMES = (
     "pf_reject",
     "pf_cancel",
     "pf_export",
+    "pf_materialize",
 )
 
 _WORKFLOW_VALUES = {
@@ -187,6 +188,40 @@ def tool_schemas() -> list[dict[str, Any]]:
                 "required": ["run_id"],
             },
         },
+        {
+            "name": "pf_materialize",
+            "description": (
+                "Copy a run artifact into the target repository under repository_path. "
+                "Allowed when status is awaiting_approval or completed. "
+                "Rejects path escape outside the repo root."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "string"},
+                    "artifact": {
+                        "type": "string",
+                        "description": (
+                            "Logical name (e.g. ARCHITECTURE.md, EVIDENCE_REPORT.md) "
+                            "or artifact sha256"
+                        ),
+                    },
+                    "dest_path": {
+                        "type": "string",
+                        "description": (
+                            "Destination path relative to repository_path "
+                            "(e.g. docs/ARCHITECTURE.md)"
+                        ),
+                    },
+                    "overwrite": {
+                        "type": "boolean",
+                        "description": "Replace an existing destination file",
+                        "default": False,
+                    },
+                },
+                "required": ["run_id", "artifact", "dest_path"],
+            },
+        },
     ]
 
 
@@ -298,6 +333,27 @@ def pf_export(service: HostService, arguments: dict[str, Any]) -> dict[str, Any]
     return _as_json(service.export_bundle(run_id, as_zip=as_zip))
 
 
+def pf_materialize(service: HostService, arguments: dict[str, Any]) -> dict[str, Any]:
+    run_id = arguments.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        return _failure("invalid_arguments", "run_id is required")
+    artifact = arguments.get("artifact")
+    if not isinstance(artifact, str) or not artifact.strip():
+        return _failure("invalid_arguments", "artifact is required")
+    dest_path = arguments.get("dest_path")
+    if not isinstance(dest_path, str) or not dest_path.strip():
+        return _failure("invalid_arguments", "dest_path is required")
+    overwrite = bool(arguments.get("overwrite", False))
+    return _as_json(
+        service.materialize(
+            run_id,
+            artifact=artifact.strip(),
+            dest_path=dest_path.strip(),
+            overwrite=overwrite,
+        )
+    )
+
+
 _HANDLERS = {
     "pf_submit": pf_submit,
     "pf_status": pf_status,
@@ -307,6 +363,7 @@ _HANDLERS = {
     "pf_reject": pf_reject,
     "pf_cancel": pf_cancel,
     "pf_export": pf_export,
+    "pf_materialize": pf_materialize,
 }
 
 
