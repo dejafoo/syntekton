@@ -1446,6 +1446,10 @@ class RunCoordinator:
                                     result.task_id
                                 ].allowed_path_patterns,
                                 next_id_start=repair_count + 1,
+                                registered_command_ids=self._resolve_validation_command_ids(
+                                    request
+                                )
+                                or list(self.config.policies.registered_commands),
                             )
                             repair_limit = (
                                 1
@@ -1708,6 +1712,16 @@ class RunCoordinator:
             for t in self.tool_registry.list()
             if t.tool_class in task.required_tool_classes or not task.required_tool_classes
         ]
+        registered_ids = self._resolve_validation_command_ids(request) or list(
+            self.config.policies.registered_commands
+        )
+        if registered_ids:
+            for entry in tool_defs:
+                if entry.get("name") == "run_validation_command":
+                    entry["description"] = (
+                        f"{entry.get('description', '')} Registered ids: "
+                        f"{', '.join(registered_ids)}."
+                    )
         excerpt_root = original_repo
         repository_excerpts: list[dict[str, str]] = []
         context_omissions: list[str] = []
@@ -1721,6 +1735,23 @@ class RunCoordinator:
                     objective=f"{request.request_text}\n{task.objective}",
                     max_chars=max(4_000, task.budget.max_input_tokens),
                 )
+        runtime_directives: list[str] = []
+        if registered_ids and task.capability in {"implementation", "repair"}:
+            runtime_directives.append(
+                "Validation: call run_validation_command only with a registered "
+                f"command_id from [{', '.join(registered_ids)}]. Never use "
+                "validator labels (behavioral:...) or raw executables (pytest)."
+            )
+        if "jitter" in f"{request.request_text}\n{task.objective}".lower() and task.capability in {
+            "implementation",
+            "repair",
+        }:
+            runtime_directives.append(
+                "Retry/jitter: compute the sleep duration with jitter applied "
+                "before calling sleep (e.g. sleep(min(max_delay, delay * "
+                "(1 + random())))). Do not sleep the base delay and only mutate "
+                "delay afterward — tests assert observed sleep values vary."
+            )
         ctx = assemble_context(
             task=task,
             model_profile=profile,
@@ -1730,6 +1761,7 @@ class RunCoordinator:
             repository_excerpts=repository_excerpts,
             dependency_outputs=dependency_outputs,
             context_omissions=context_omissions,
+            runtime_directives=runtime_directives or None,
             package_id=f"pkg-{task.id}",
         )
         (run_dir / "prompts" / f"{task.id}.manifest.json").write_text(
@@ -2048,13 +2080,24 @@ class RunCoordinator:
                                 "editing. Use the provided tools to modify the worktree and inspect "
                                 "the final diff. Finish with a concise summary after the worktree "
                                 "contains the complete change."
+                                + (
+                                    " When re-checking tests, call run_validation_command with a "
+                                    f"registered command_id only ({', '.join(registered_ids)})."
+                                    if task.capability == "repair" and registered_ids
+                                    else ""
+                                )
                             ),
                         )
                     )
                     canonical_tools = [
                         CanonicalToolDefinition(
                             name=definition.name,
-                            description=definition.description,
+                            description=(
+                                f"{definition.description} Registered ids: "
+                                f"{', '.join(registered_ids)}."
+                                if definition.name == "run_validation_command" and registered_ids
+                                else definition.description
+                            ),
                             parameters=definition.input_schema,
                         )
                         for definition in self.tool_registry.list()

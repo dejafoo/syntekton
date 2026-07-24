@@ -324,11 +324,37 @@ class ToolBroker:
         )
         return {"artifact_sha256": art.sha256, "logical_name": art.logical_name}
 
+    @staticmethod
+    def normalize_validation_command_id(command_id: str) -> str:
+        """Map common model mistakes onto registered policy ids.
+
+        Validator results are labeled ``behavioral:<id>``; models often pass that
+        label (or raw ``pytest``) as ``command_id``. Strip the prefix and accept
+        a small alias table so repair does not thrash on ToolAuthorizationError.
+        """
+        raw = (command_id or "").strip()
+        if raw.startswith("behavioral:"):
+            raw = raw[len("behavioral:") :].strip()
+        aliases = {
+            "pytest": "python_tests",
+            "py.test": "python_tests",
+            "tests": "python_tests",
+            "typecheck": "python_typecheck",
+            "basedpyright": "python_typecheck",
+            "pyright": "python_typecheck",
+        }
+        return aliases.get(raw, raw)
+
     def _run_command(self, arguments: dict[str, Any]) -> dict[str, Any]:
         root = self._require_worktree()
-        command_id = arguments["command_id"]
+        requested = str(arguments.get("command_id") or "")
+        command_id = self.normalize_validation_command_id(requested)
         if command_id not in self.registered_commands:
-            raise ToolAuthorizationError(f"Unregistered command: {command_id}")
+            allowed = ", ".join(sorted(self.registered_commands)) or "(none)"
+            raise ToolAuthorizationError(
+                f"Unregistered command: {requested!r} (normalized={command_id!r}). "
+                f"Use one of the registered ids: [{allowed}]"
+            )
         spec = self.registered_commands[command_id]
         executable = spec["executable"]
         args = list(spec.get("args", []))

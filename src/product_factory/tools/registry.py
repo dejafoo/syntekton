@@ -141,11 +141,24 @@ def default_tool_registry() -> ToolRegistry:
         ),
         ToolDefinition(
             name="run_validation_command",
-            description="Run a registered validation command",
+            description=(
+                "Run a registered validation command by policy id "
+                "(e.g. 'python_tests'). Pass only a registered command_id — "
+                "never a validator label like 'behavioral:python_tests', never "
+                "a raw executable like 'pytest'."
+            ),
             tool_class="validation_command",
             input_schema={
                 "type": "object",
-                "properties": {"command_id": {"type": "string"}},
+                "properties": {
+                    "command_id": {
+                        "type": "string",
+                        "description": (
+                            "Registered policy command id from policies.yaml "
+                            "(e.g. python_tests, python_typecheck)."
+                        ),
+                    }
+                },
                 "required": ["command_id"],
                 "additionalProperties": False,
             },

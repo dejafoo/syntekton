@@ -68,6 +68,7 @@ def run_tool_agent(
     seen_patch_fps: dict[str, int] = {}
     inspected_repository = False
     started = time.monotonic()
+    unregistered_command_failures = 0
 
     for round_no in range(1, max_rounds + 1):
         if time.monotonic() - started >= timeout_seconds:
@@ -212,8 +213,34 @@ def run_tool_agent(
                 content = json.dumps(result, default=str)
                 if call.name in {"list_files", "read_file", "search_text"}:
                     inspected_repository = True
+                if call.name == "run_validation_command":
+                    unregistered_command_failures = 0
             except Exception as exc:  # return execution failure to the model
                 content = json.dumps({"error": str(exc), "tool": call.name})
+                if call.name == "run_validation_command" and "Unregistered command" in str(
+                    exc
+                ):
+                    unregistered_command_failures += 1
+                    if unregistered_command_failures >= 2:
+                        history.append(
+                            CanonicalMessage(
+                                role="tool",
+                                content=content,
+                                name=call.name,
+                                tool_call_id=call.id,
+                            )
+                        )
+                        return AgentLoopResult(
+                            status="failed",
+                            usage=usage,
+                            rounds=round_no,
+                            tool_call_ids=tool_call_ids,
+                            termination_reason="no_progress",
+                            error=(
+                                "Repeated unregistered validation command ids; "
+                                "use a registered policy command_id"
+                            ),
+                        )
             if len(content) > 16_000:
                 digest = hashlib.sha256(content.encode()).hexdigest()
                 content = content[:16_000] + f"...<truncated sha256={digest}>"
