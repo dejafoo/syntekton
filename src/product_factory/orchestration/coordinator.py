@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import shutil
 import uuid
 from datetime import UTC, datetime
@@ -21,8 +22,12 @@ from product_factory.domain.artifacts import ResourceRef
 from product_factory.domain.errors import (
     ApprovalBlockedError,
     BudgetExhaustedError,
+    ConfigurationError,
     PlanRejectedError,
     RuntimeFailureError,
+    SkillGrantViolation,
+    ToolAuthorizationError,
+    UnsafeOperationError,
     ValidationFailureError,
 )
 from product_factory.domain.findings import Finding, ValidatorResult
@@ -44,6 +49,8 @@ from product_factory.observability.events import EventLog
 from product_factory.observability.otel import maybe_create_otel_bridge
 from product_factory.observability.recorder import TelemetryRecorder
 from product_factory.orchestration.agent_loop import run_tool_agent
+from product_factory.orchestration.budget_ledger import BudgetLedger, warn_unused_profile_set
+from product_factory.orchestration.concurrency import run_wave
 from product_factory.orchestration.repair import (
     create_repair_tasks,
     patch_fingerprint,
@@ -54,6 +61,7 @@ from product_factory.orchestration.review_findings import (
     parse_raw_findings,
     validate_review_findings,
 )
+from product_factory.orchestration.skill_grants import enforce_skill_grants
 from product_factory.persistence.artifacts import ArtifactStore
 from product_factory.persistence.database import Database
 from product_factory.planning.compiler import compile_plan
@@ -81,6 +89,14 @@ from product_factory.validation.pipeline import (
     validate_path_scope,
     validate_secrets,
 )
+from product_factory.workflows.base import WorkflowPack
+from product_factory.workflows.registry import resolve_workflow_pack
+
+logger = logging.getLogger("product_factory.orchestration.coordinator")
+
+# code_change/repository_change resolve to the same pack (P1.G); every other
+# comparison in this module treats them identically.
+_CODE_CHANGE_WORKFLOW_TYPES = frozenset({"code_change", "repository_change"})
 
 
 def default_code_change_plan(request_text: str) -> PlannerOutput:
@@ -481,9 +497,20 @@ class RunCoordinator:
             content_dir=run_dir / "content",
             otel_exporter=otel,
         )
+        ledger = BudgetLedger(request.budget)
         self.gateway = InstrumentedModelGateway(
-            self._raw_gateway, recorder=recorder, db=self.db
+            self._raw_gateway, recorder=recorder, db=self.db, ledger=ledger
         )
+        note = warn_unused_profile_set(request.model_profile_set)
+        if note:
+            logger.warning(note)
+            recorder.emit(
+                run_id=run_id,
+                event_type="run.deprecation_warning",
+                severity=EventSeverity.WARNING,
+                summary=note,
+                payload={"field": "model_profile_set", "value": request.model_profile_set},
+            )
         recorder.emit(
             run_id=run_id,
             event_type="run.started",
@@ -509,6 +536,19 @@ class RunCoordinator:
         repo_summary: dict[str, Any] | None = None
         worktrees: WorktreeManager | None = None
         original_repo: Path | None = None
+        # Resolve the declarative workflow pack up front (P1.G): unknown
+        # workflow ids fail closed before any planning/execution spend, and
+        # the resolved pack's identity is stamped on the run manifest.
+        # `architecture` is not yet pack-backed and is left untouched.
+        workflow_pack: WorkflowPack | None = None
+        if request.workflow_type in _CODE_CHANGE_WORKFLOW_TYPES:
+            workflow_pack = resolve_workflow_pack(request.workflow_type)
+            recorder.emit(
+                run_id=run_id,
+                event_type="workflow.pack_resolved",
+                summary=f"Workflow pack {workflow_pack.id}@{workflow_pack.version}",
+                payload=workflow_pack.manifest_metadata(),
+            )
 
         try:
             if request.repository_path is not None:
@@ -627,9 +667,56 @@ class RunCoordinator:
                 worktrees=worktrees,
                 original_repo=original_repo,
                 base_commit=base_commit or "",
+                ledger=ledger,
+                workflow_pack=workflow_pack,
             )
             return manifest
-        except (PlanRejectedError, BudgetExhaustedError, ApprovalBlockedError):
+        except (
+            PlanRejectedError,
+            BudgetExhaustedError,
+            ApprovalBlockedError,
+            SkillGrantViolation,
+            ToolAuthorizationError,
+        ) as exc:
+            terminal_status = {
+                BudgetExhaustedError: "budget_exhausted",
+                PlanRejectedError: "plan_rejected",
+                ApprovalBlockedError: "awaiting_approval",
+                SkillGrantViolation: "blocked",
+                ToolAuthorizationError: "blocked",
+            }.get(type(exc), "failed")
+            try:
+                recorder.emit(
+                    run_id=run_id,
+                    event_type="run.failed",
+                    severity=EventSeverity.ERROR,
+                    summary=str(exc),
+                    payload={"error": str(exc), "status": terminal_status},
+                )
+            except Exception:
+                events.emit(run_id, "run.failed", {"error": str(exc)})
+            details = getattr(exc, "details", None)
+            budget_snapshot = (
+                details.get("ledger") if isinstance(details, dict) else None
+            )
+            # `_execute` persists usage after every task; reload it so this
+            # terminal-status write doesn't clobber accumulated usage with `{}`.
+            existing_row = self.db.get_run(run_id)
+            last_usage = (
+                json.loads(existing_row["usage_json"])
+                if existing_row and existing_row.get("usage_json")
+                else None
+            )
+            self.db.upsert_run(
+                run_id=run_id,
+                workflow_type=request.workflow_type,
+                status=terminal_status,
+                request=request.model_dump(mode="json"),
+                base_commit=base_commit,
+                usage=last_usage,
+                budget_snapshot=budget_snapshot,
+                active_operation=None,
+            )
             raise
         except Exception as exc:
             try:
@@ -655,6 +742,250 @@ class RunCoordinator:
             if worktrees is not None:
                 # Keep failed worktrees for inspection; cleanup only empty ones later.
                 pass
+
+    def resume(self, run_id: str) -> RunManifest:
+        """Resume an interrupted run from persisted SQLite/run-dir state (P1.B).
+
+        Rebuilds the live plan by recompiling the persisted planner proposal
+        and re-attaching any dynamically-created repair tasks from the task
+        table (inserted in dependency-consistent order — see
+        `Database.list_tasks_in_creation_order`); skips already-completed
+        (success/skipped) tasks so they incur no new model/tool spend;
+        reattaches worktrees left on disk; restores the budget ledger from
+        its last snapshot so cumulative usage carries over; and retries a
+        task that crashed mid-execution (persisted as `running`) once before
+        giving up on it.
+        """
+        run_row = self.db.get_run(run_id)
+        if run_row is None:
+            raise ConfigurationError(f"Unknown run: {run_id}")
+        if run_row["status"] in {"completed", "awaiting_approval"}:
+            raise ConfigurationError(
+                f"Run {run_id} is already {run_row['status']!r}; nothing to resume"
+            )
+        request = RunRequest.model_validate(json.loads(run_row["request_json"]))
+        base_commit: str | None = run_row.get("base_commit") or None
+        run_dir = self.pf_root / "runs" / run_id
+        if not run_dir.exists():
+            raise ConfigurationError(f"Run directory missing for {run_id}: {run_dir}")
+        for sub in (
+            "input",
+            "worktrees",
+            "scratch",
+            "artifacts",
+            "findings",
+            "prompts",
+            "output",
+            "content",
+        ):
+            (run_dir / sub).mkdir(parents=True, exist_ok=True)
+
+        events = EventLog(run_dir / "events.jsonl")
+        artifacts = ArtifactStore(run_dir / "artifacts")
+        otel = maybe_create_otel_bridge()
+        recorder = TelemetryRecorder(
+            self.db, jsonl=events, content_dir=run_dir / "content", otel_exporter=otel
+        )
+
+        budget_snapshot = (
+            json.loads(run_row["budget_json"]) if run_row.get("budget_json") else None
+        )
+        ledger = (
+            BudgetLedger.restore(request.budget, budget_snapshot)
+            if budget_snapshot
+            else BudgetLedger(request.budget)
+        )
+        self.gateway = InstrumentedModelGateway(
+            self._raw_gateway, recorder=recorder, db=self.db, ledger=ledger
+        )
+        workflow_pack: WorkflowPack | None = None
+        if request.workflow_type in _CODE_CHANGE_WORKFLOW_TYPES:
+            workflow_pack = resolve_workflow_pack(request.workflow_type)
+
+        plan_path = run_dir / "output" / "plan.json"
+        if not plan_path.exists():
+            raise ConfigurationError(
+                f"No persisted plan for run {run_id}; cannot resume before planning completed"
+            )
+        proposal = PlannerOutput.model_validate(
+            json.loads(plan_path.read_text(encoding="utf-8"))
+        )
+        compile_result = compile_plan(
+            proposal,
+            max_tasks=request.budget.max_tasks,
+            max_parallel_tasks=request.budget.max_parallel_tasks,
+        )
+        if not compile_result.ok or compile_result.plan is None:
+            raise PlanRejectedError(
+                "Persisted plan no longer compiles",
+                details={"errors": [e.model_dump() for e in compile_result.errors]},
+            )
+        merged_tasks = dict(compile_result.plan.tasks)
+        merged_order = list(compile_result.plan.task_order)
+
+        task_status: dict[str, str] = {}
+        results: list[TaskResult] = []
+        usage = UsageMetrics()
+        patch_text = ""
+        architecture_md = ""
+        for row in self.db.list_tasks_in_creation_order(run_id):
+            spec = TaskSpec.model_validate(json.loads(row["spec_json"]))
+            if spec.id not in merged_tasks:
+                # Dynamically-created (e.g. repair) task from the interrupted run.
+                merged_tasks[spec.id] = spec
+                merged_order.append(spec.id)
+            status = str(row["status"])
+            if status == "running":
+                # Crashed mid-task: retry once, then give up (idempotent — a
+                # task already retried once has attempt >= 2 persisted).
+                attempt = int(row.get("attempt") or 1)
+                if attempt >= 2:
+                    status = "failed"
+                    self.db.upsert_task(
+                        run_id=run_id,
+                        task_id=spec.id,
+                        capability=spec.capability,
+                        status="failed",
+                        spec=json.loads(row["spec_json"]),
+                        ended_at=datetime.now(UTC).isoformat(),
+                        active_operation=None,
+                    )
+                    results.append(
+                        TaskResult(
+                            task_id=spec.id,
+                            status="failed",
+                            summary="interrupted_twice_gave_up",
+                        )
+                    )
+                else:
+                    status = "pending"
+                    self.db.upsert_task(
+                        run_id=run_id,
+                        task_id=spec.id,
+                        capability=spec.capability,
+                        status="pending",
+                        spec=json.loads(row["spec_json"]),
+                        attempt=attempt + 1,
+                        active_operation=None,
+                    )
+            task_status[spec.id] = status
+            if status in {"success", "failed", "skipped"} and row.get("result_json"):
+                try:
+                    result = TaskResult.model_validate(json.loads(row["result_json"]))
+                except Exception:
+                    continue
+                results.append(result)
+                usage = usage.merge(result.usage)
+                for art in result.artifact_refs:
+                    try:
+                        if art.logical_name.endswith(".patch") or art.media_type == "text/x-diff":
+                            patch_text = artifacts.get_text(art.sha256)
+                        if art.logical_name == "ARCHITECTURE.md":
+                            architecture_md = artifacts.get_text(art.sha256)
+                    except Exception:
+                        continue
+        for tid in merged_tasks:
+            task_status.setdefault(tid, "pending")
+        live_plan = compile_result.plan.model_copy(
+            update={"tasks": merged_tasks, "task_order": merged_order}
+        )
+
+        original_repo: Path | None = None
+        worktrees: WorktreeManager | None = None
+        if request.repository_path is not None and base_commit:
+            original_repo = request.repository_path.resolve()
+            worktrees = WorktreeManager(original_repo, run_dir / "worktrees")
+            for tid in merged_order:
+                if not worktrees.exists_on_disk(tid):
+                    continue
+                writable = merged_tasks[tid].capability in {
+                    "implementation",
+                    "repair",
+                    "test_design",
+                    "composition",
+                }
+                try:
+                    worktrees.reattach(tid, base_commit=base_commit, writable=writable)
+                except KeyError:
+                    continue
+
+        recorder.emit(
+            run_id=run_id,
+            event_type="run.resumed",
+            summary="Run resumed",
+            payload={
+                "completed_tasks": sorted(
+                    tid for tid, st in task_status.items() if st in {"success", "skipped"}
+                ),
+                "pending_tasks": sorted(
+                    tid for tid, st in task_status.items() if st == "pending"
+                ),
+            },
+        )
+        self.db.upsert_run(
+            run_id=run_id,
+            workflow_type=request.workflow_type,
+            status="executing",
+            request=request.model_dump(mode="json"),
+            base_commit=base_commit,
+            usage=usage.model_dump(mode="json"),
+            budget_snapshot=ledger.snapshot(),
+            active_operation="resuming",
+        )
+
+        try:
+            return self._execute(
+                run_id=run_id,
+                request=request,
+                plan=live_plan,
+                run_dir=run_dir,
+                artifacts=artifacts,
+                events=events,
+                recorder=recorder,
+                usage=usage,
+                worktrees=worktrees,
+                original_repo=original_repo,
+                base_commit=base_commit or "",
+                ledger=ledger,
+                workflow_pack=workflow_pack,
+                initial_task_status=task_status,
+                initial_results=results,
+                initial_patch_text=patch_text,
+                initial_architecture_md=architecture_md,
+            )
+        except (
+            PlanRejectedError,
+            BudgetExhaustedError,
+            ApprovalBlockedError,
+            SkillGrantViolation,
+            ToolAuthorizationError,
+        ) as exc:
+            terminal_status = {
+                BudgetExhaustedError: "budget_exhausted",
+                PlanRejectedError: "plan_rejected",
+                ApprovalBlockedError: "awaiting_approval",
+                SkillGrantViolation: "blocked",
+                ToolAuthorizationError: "blocked",
+            }.get(type(exc), "failed")
+            self.db.upsert_run(
+                run_id=run_id,
+                workflow_type=request.workflow_type,
+                status=terminal_status,
+                request=request.model_dump(mode="json"),
+                base_commit=base_commit,
+                active_operation=None,
+            )
+            raise
+        except Exception as exc:
+            self.db.upsert_run(
+                run_id=run_id,
+                workflow_type=request.workflow_type,
+                status="failed",
+                request=request.model_dump(mode="json"),
+                base_commit=base_commit,
+                active_operation=None,
+            )
+            raise RuntimeFailureError(str(exc)) from exc
 
     def _plan(
         self,
@@ -690,7 +1021,7 @@ class RunCoordinator:
                     else None
                 ),
             )
-        if request.workflow_type != "code_change":
+        if request.workflow_type not in _CODE_CHANGE_WORKFLOW_TYPES:
             return proposal
         disable_review = request.metadata.get("disable_review") == "true"
         force_review = request.metadata.get("force_review") == "true"
@@ -801,19 +1132,30 @@ class RunCoordinator:
         worktrees: WorktreeManager | None,
         original_repo: Path | None,
         base_commit: str,
+        ledger: BudgetLedger,
+        workflow_pack: WorkflowPack | None = None,
+        initial_task_status: dict[str, str] | None = None,
+        initial_results: list[TaskResult] | None = None,
+        initial_patch_text: str = "",
+        initial_architecture_md: str = "",
     ) -> RunManifest:
-        task_status = {tid: "pending" for tid in plan.tasks}
-        results: list[TaskResult] = []
-        findings: list[Finding] = []
-        repair_count = 0
+        # `initial_*` are only populated by `resume()` (P1.B): they seed the
+        # wave loop with already-completed task state so resumed runs incur
+        # no new model/tool spend for success/skipped tasks.
+        task_status = initial_task_status or {tid: "pending" for tid in plan.tasks}
+        results: list[TaskResult] = list(initial_results or [])
+        findings: list[Finding] = [f for r in results for f in r.findings]
+        # Repair tasks are always named "R-{idx:03d}" (see `orchestration/repair.py`);
+        # recount them so a resumed run's manifest reports an accurate total.
+        repair_count = sum(1 for tid in plan.tasks if tid.startswith("R-") and tid[2:].isdigit())
         repair_origins: dict[str, str] = {}
         origin_repair_attempts: dict[str, int] = {}
         no_progress_count = 0
         previous_patch_fp: str | None = None
         previous_finding_ids: list[str] = []
         previous_validation_failures: set[str] = set()
-        patch_text = ""
-        architecture_md = ""
+        patch_text = initial_patch_text
+        architecture_md = initial_architecture_md
         validation_results: list[ValidatorResult] = []
 
         self.db.upsert_run(
@@ -839,6 +1181,7 @@ class RunCoordinator:
         while True:
             if spent >= request.budget.max_cost_usd:
                 raise BudgetExhaustedError("Run budget exhausted")
+            ledger.check_wall_clock()
 
             ready = runnable_tasks(
                 live_plan, task_status, max_parallel=request.budget.max_parallel_tasks
@@ -861,21 +1204,55 @@ class RunCoordinator:
                     raise RuntimeFailureError(f"Unsatisfiable dependencies for tasks: {pending}")
                 break
 
-            # Execute wave (sequential in-process but status allows concurrency semantics;
-            # fan-out tested via multiple ready tasks in one wave).
-            wave_results: list[TaskResult] = []
+            # Execute wave: read-only tasks and predicted-disjoint writers run
+            # concurrently (bounded by max_parallel_tasks via `run_wave`);
+            # conflicting writers are serialized. Same-wave tasks never depend
+            # on each other (enforced by `runnable_tasks`), so dependency
+            # context is safely precomputed from the pre-wave `results`
+            # snapshot. Result processing below stays single-threaded and
+            # iterates `ready` (plan order) regardless of completion order,
+            # giving a deterministic merge order (P1.F).
+            if spent >= request.budget.max_cost_usd:
+                raise BudgetExhaustedError("Run budget exhausted before wave")
+            ledger.check_wall_clock()
+            pre_wave_results = list(results)
+            dependency_outputs_by_task = {
+                task.id: [
+                    {
+                        "task_id": prior.task_id,
+                        "dependencies": live_plan.tasks[prior.task_id].dependencies,
+                        "summary": prior.summary,
+                        "artifact_refs": [
+                            ref.model_dump(mode="json") for ref in prior.artifact_refs
+                        ],
+                        "artifact_excerpts": [
+                            {
+                                "logical_name": ref.logical_name,
+                                "sha256": ref.sha256,
+                                "content": artifacts.get_text(ref.sha256)[:12_000],
+                            }
+                            for ref in prior.artifact_refs
+                            if ref.media_type.startswith("text/")
+                            or ref.media_type == "application/json"
+                        ],
+                        "findings": [
+                            finding.model_dump(mode="json") for finding in prior.findings
+                        ],
+                    }
+                    for prior in pre_wave_results
+                    if prior.task_id in transitive_dependencies(live_plan, task.id)
+                ]
+                for task in ready
+            }
             for task in ready:
-                if spent >= request.budget.max_cost_usd:
-                    raise BudgetExhaustedError("Run budget exhausted before task")
                 task_status[task.id] = "running"
-                started_at = datetime.now(UTC).isoformat()
                 self.db.upsert_task(
                     run_id=run_id,
                     task_id=task.id,
                     capability=task.capability,
                     status="running",
                     spec=task.model_dump(mode="json"),
-                    started_at=started_at,
+                    started_at=datetime.now(UTC).isoformat(),
                     active_operation=task.capability,
                 )
                 recorder.emit(
@@ -889,7 +1266,9 @@ class RunCoordinator:
                         "title": task.title,
                     },
                 )
-                result = self._execute_task(
+
+            def _run_one(task: TaskSpec) -> TaskResult:
+                return self._execute_task(
                     run_id=run_id,
                     request=request,
                     task=task,
@@ -899,36 +1278,20 @@ class RunCoordinator:
                     original_repo=original_repo,
                     base_commit=base_commit,
                     recorder=recorder,
-                    dependency_outputs=[
-                        {
-                            "task_id": prior.task_id,
-                            "dependencies": live_plan.tasks[prior.task_id].dependencies,
-                            "summary": prior.summary,
-                            "artifact_refs": [
-                                ref.model_dump(mode="json") for ref in prior.artifact_refs
-                            ],
-                            "artifact_excerpts": [
-                                {
-                                    "logical_name": ref.logical_name,
-                                    "sha256": ref.sha256,
-                                    "content": artifacts.get_text(ref.sha256)[:12_000],
-                                }
-                                for ref in prior.artifact_refs
-                                if ref.media_type.startswith("text/")
-                                or ref.media_type == "application/json"
-                            ],
-                            "findings": [
-                                finding.model_dump(mode="json") for finding in prior.findings
-                            ],
-                        }
-                        for prior in results
-                        if prior.task_id in transitive_dependencies(live_plan, task.id)
-                    ],
+                    ledger=ledger,
+                    dependency_outputs=dependency_outputs_by_task[task.id],
                 )
+
+            wave_results: list[TaskResult] = run_wave(
+                ready,
+                executor_fn=_run_one,
+                max_workers=request.budget.max_parallel_tasks,
+            )
+
+            for task, result in zip(ready, wave_results):
                 usage = usage.merge(result.usage)
                 spent = usage.estimated_cost_usd
                 task_status[task.id] = "success" if result.status == "success" else result.status
-                wave_results.append(result)
                 results.append(result)
                 findings.extend(result.findings)
                 recorder.emit(
@@ -964,6 +1327,7 @@ class RunCoordinator:
                     request=request.model_dump(mode="json"),
                     base_commit=base_commit or None,
                     usage=usage.model_dump(mode="json"),
+                    budget_snapshot=ledger.snapshot(),
                     active_operation=f"task:{task.id}",
                 )
                 if result.changed_files and "patch" in (result.summary.lower()):
@@ -989,6 +1353,7 @@ class RunCoordinator:
                         original_repo=original_repo,
                         task=live_plan.tasks[result.task_id],
                         findings=result.findings,
+                        ledger=ledger,
                     )
                     (run_dir / "output" / "validation-report.json").write_text(
                         json.dumps(
@@ -1165,7 +1530,7 @@ class RunCoordinator:
                 break
 
         # Final artifacts
-        if request.workflow_type == "code_change":
+        if request.workflow_type in _CODE_CHANGE_WORKFLOW_TYPES:
             if not patch_text and worktrees is not None and original_repo is not None:
                 # Try collect from last implementation worktree
                 for tid, _st in task_status.items():
@@ -1211,11 +1576,14 @@ class RunCoordinator:
         terminal_failure = (
             any(status == "failed" for status in task_status.values())
             or has_blocking_failures(validation_results)
-            or (request.workflow_type == "code_change" and not patch_text.strip())
+            or (request.workflow_type in _CODE_CHANGE_WORKFLOW_TYPES and not patch_text.strip())
         )
         if terminal_failure:
             final_status = "failed"
-        elif request.workflow_type == "code_change" and request.approval_policy == "manual_apply":
+        elif (
+            request.workflow_type in _CODE_CHANGE_WORKFLOW_TYPES
+            and request.approval_policy == "manual_apply"
+        ):
             approval = {
                 "run_id": run_id,
                 "base_commit": base_commit,
@@ -1281,6 +1649,7 @@ class RunCoordinator:
                     if task_status.get(result.task_id) == "failed"
                 ],
             ],
+            metadata=workflow_pack.manifest_metadata() if workflow_pack is not None else {},
         )
         (run_dir / "run-manifest.json").write_text(
             manifest.model_dump_json(indent=2), encoding="utf-8"
@@ -1316,6 +1685,7 @@ class RunCoordinator:
         base_commit: str,
         recorder: TelemetryRecorder | None = None,
         dependency_outputs: list[dict[str, Any]] | None = None,
+        ledger: BudgetLedger | None = None,
     ) -> TaskResult:
         profile = resolve_task_model_profile(task, metadata=request.metadata)
         agent_profile = {
@@ -1489,6 +1859,7 @@ class RunCoordinator:
             registered_commands=self.config.policies.registered_commands,
             base_commit=base_commit or None,
             observer=_tool_observer if recorder is not None else None,
+            ledger=ledger,
         )
         granted = {
             t.name
@@ -1513,6 +1884,10 @@ class RunCoordinator:
         if task.capability in {"repository_analysis", "independent_review"}:
             granted.update({"read_file", "list_files", "search_text", "git_diff", "git_status"})
 
+        # Fail closed before granting if a matched skill's declared tool policy
+        # is inconsistent with the task's actual grant (P1.E).
+        enforce_skill_grants(skills=skills, granted_tool_names=granted)
+
         broker.set_grant(
             CapabilityGrant(
                 grant_id=f"grant-{task.id}",
@@ -1529,7 +1904,7 @@ class RunCoordinator:
         )
 
         if lineage_conflicts and task.capability == "composition":
-            return TaskResult(
+            conflict_result = TaskResult(
                 task_id=task.id,
                 status="failed",
                 summary="composition_conflict",
@@ -1543,6 +1918,19 @@ class RunCoordinator:
                 ],
                 model_profile=profile,
             )
+            # Early-exit path (P1.F): still persist the terminal status so the
+            # task row doesn't stay stuck at "running" for resume/observability.
+            self.db.upsert_task(
+                run_id=run_id,
+                task_id=task.id,
+                capability=task.capability,
+                status="failed",
+                spec=task.model_dump(mode="json"),
+                result=conflict_result.model_dump(mode="json"),
+                ended_at=datetime.now(UTC).isoformat(),
+                active_operation=None,
+            )
+            return conflict_result
 
         # Deterministic worker behaviors for MVP vertical slice / mock path
         changed_files: list[str] = []
@@ -1742,6 +2130,10 @@ class RunCoordinator:
                                 else "empty_model_output"
                             )
                         )
+                except (BudgetExhaustedError, SkillGrantViolation, ToolAuthorizationError):
+                    # Typed kernel errors terminate the run; never downgrade to a
+                    # task-level failure summary (P1.A / P1.E).
+                    raise
                 except Exception as exc:
                     reason = "patch_apply_failed" if patch_text else "provider_failed"
                     summary = f"{reason}: {exc}"
@@ -1764,6 +2156,8 @@ class RunCoordinator:
                         )
                         tool_call_ids.append(out["tool_call_id"])
                         changed_files.append(rel_path)
+                    except (BudgetExhaustedError, SkillGrantViolation, ToolAuthorizationError):
+                        raise
                     except Exception as exc:
                         summary = f"Implementation write failed: {exc}"
                 summary = summary or "Implementation files written (deterministic)"
@@ -1780,6 +2174,8 @@ class RunCoordinator:
                 patch_body = diff.get("patch") or ""
                 changed_from_diff = diff.get("changed_files") or []
                 artifact_sha = diff.get("artifact_sha256")
+            except (BudgetExhaustedError, SkillGrantViolation, ToolAuthorizationError):
+                raise
             except Exception:
                 patch_body = (
                     create_patch(broker.worktree_root, base_commit)
@@ -2079,6 +2475,8 @@ class RunCoordinator:
                     )
                     model_usage = model_usage.merge(resp.usage)
                     draft_text = (resp.text or "").strip()
+                except BudgetExhaustedError:
+                    raise
                 except Exception:
                     draft_text = ""
             if draft_text:
@@ -2150,6 +2548,20 @@ class RunCoordinator:
             self.db.record_tool_call(run_id=run_id, record=tc.model_dump(mode="json"))
         return result
 
+    def _resolve_validation_command_ids(self, request: RunRequest) -> list[str]:
+        """`RunRequest.validation_commands` is the source of truth (P1.C).
+
+        Falls back to metadata `smoke_commands` (comma-separated) for bench
+        runners that have not yet been migrated to the first-class field.
+        """
+        if request.validation_commands:
+            return list(request.validation_commands)
+        return [
+            value.strip()
+            for value in str(request.metadata.get("smoke_commands", "")).split(",")
+            if value.strip()
+        ]
+
     def _validate_outputs(
         self,
         *,
@@ -2159,24 +2571,22 @@ class RunCoordinator:
         original_repo: Path | None,
         task: TaskSpec,
         findings: list[Finding] | None = None,
+        ledger: BudgetLedger | None = None,
     ) -> list[ValidatorResult]:
         results: list[ValidatorResult] = []
-        if request.workflow_type == "code_change" and patch_text and original_repo:
+        if request.workflow_type in _CODE_CHANGE_WORKFLOW_TYPES and patch_text and original_repo:
             results.append(validate_patch_applies(original_repo, patch_text))
             changed = self._changed_files_from_patch(patch_text)
             results.append(validate_path_scope(changed, task.allowed_path_patterns))
             results.append(validate_secrets(patch_text))
-            smoke_commands = [
-                value
-                for value in request.metadata.get("smoke_commands", "").split(",")
-                if value
-            ]
+            command_ids = self._resolve_validation_command_ids(request)
             results.extend(
                 validate_behavioral_commands(
                     repository=original_repo,
                     patch=patch_text,
-                    command_ids=smoke_commands,
+                    command_ids=command_ids,
                     registered_commands=self.config.policies.registered_commands,
+                    ledger=ledger,
                 )
             )
         if request.workflow_type == "architecture" and architecture_md:
@@ -2280,6 +2690,8 @@ class RunCoordinator:
                 if not text.lstrip().startswith("#"):
                     text = f"# ARCHITECTURE.md\n\n{text}"
                 return text, usage
+        except BudgetExhaustedError:
+            raise
         except Exception:
             pass
         # Fail closed toward an explicit thin draft rather than silent template success.

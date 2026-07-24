@@ -59,6 +59,21 @@ class WorktreeManager:
             raise KeyError(task_id)
         return self._active[task_id]
 
+    def exists_on_disk(self, task_id: str) -> bool:
+        return (self.worktrees_root / task_id).exists()
+
+    def reattach(self, task_id: str, *, base_commit: str, writable: bool = True) -> Worktree:
+        """Re-register a worktree directory left on disk by a prior process (resume, P1.B).
+
+        Does not re-run `git worktree add` — the directory already exists.
+        """
+        path = self.worktrees_root / task_id
+        if not path.exists():
+            raise KeyError(task_id)
+        wt = Worktree(task_id=task_id, path=path, base_commit=base_commit, writable=writable)
+        self._active[task_id] = wt
+        return wt
+
     def remove(self, task_id: str, *, force: bool = False) -> None:
         wt = self._active.pop(task_id, None)
         if wt is None:

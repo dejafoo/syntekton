@@ -79,3 +79,38 @@ def test_git_diff_includes_untracked(tmp_path: Path) -> None:
     assert diff["patch"].strip()
     # create_patch helper agrees
     assert "cache.py" in create_patch(repo, base)
+
+
+def test_list_files_tolerates_unresolved_worktree_root(tmp_path: Path) -> None:
+    """macOS /var vs /private/var must not break relative path computation."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.txt").write_text("hi\n", encoding="utf-8")
+    # Pass an unresolved path (may differ from resolve() on Darwin).
+    unresolved = Path(str(repo))
+    store = ArtifactStore(tmp_path / "artifacts")
+    broker = ToolBroker(
+        registry=default_tool_registry(),
+        artifact_store=store,
+        worktree_root=unresolved,
+    )
+    assert broker.worktree_root == unresolved.resolve()
+    broker.set_grant(
+        CapabilityGrant(
+            grant_id="g1",
+            run_id="r1",
+            task_id="t1",
+            agent_profile="analysis_worker",
+            tool_names={"list_files"},
+            allowed_path_patterns=["**/*"],
+            readable_path_patterns=["**/*"],
+            max_calls=5,
+        )
+    )
+    listing = broker.execute(
+        task_id="t1",
+        tool_name="list_files",
+        arguments={"directory": ".", "glob": "**/*"},
+    )
+    paths = {entry["path"] for entry in listing["files"]}
+    assert "a.txt" in paths

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
@@ -11,7 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from product_factory.domain.findings import ValidatorResult
+from product_factory.orchestration.budget_ledger import BudgetLedger
 from product_factory.repositories.patches import apply_patch_check
+from product_factory.tools.sandbox import run_sandboxed_command
 
 SECRET_PATTERNS = [
     re.compile(r"AKIA[0-9A-Z]{16}"),
@@ -245,8 +246,15 @@ def validate_behavioral_commands(
     patch: str,
     command_ids: list[str],
     registered_commands: dict[str, Any],
+    ledger: BudgetLedger | None = None,
 ) -> list[ValidatorResult]:
-    """Apply a patch in isolation and execute registered behavioral checks."""
+    """Apply a patch in isolation and execute registered behavioral checks.
+
+    Commands run through `tools/sandbox.run_sandboxed_command` (restricted
+    subprocess + optional bwrap) rather than raw `subprocess` with ambient
+    env (P1.D) — no inherited secrets, hard timeout, worktree-confined cwd.
+    Unknown command ids fail closed; there is no host-shell fallback.
+    """
     if not command_ids:
         return []
     with tempfile.TemporaryDirectory(prefix="pf-validation-") as tmp:
@@ -281,44 +289,38 @@ def validate_behavioral_commands(
                     )
                 )
                 continue
-            try:
-                proc = subprocess.run(
-                    [str(spec["executable"]), *map(str, spec.get("args", []))],
-                    cwd=work,
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                    timeout=int(spec.get("timeout_seconds", 300)),
-                    env={
-                        **os.environ,
-                        "PYTHONPATH": str(work / "src")
-                        + (
-                            f":{os.environ['PYTHONPATH']}"
-                            if os.environ.get("PYTHONPATH")
-                            else ""
-                        ),
+            timeout_seconds = int(spec.get("timeout_seconds", 300))
+            if ledger is not None:
+                ledger.check_before_command(timeout_seconds=timeout_seconds)
+            sandbox_result = run_sandboxed_command(
+                executable=str(spec["executable"]),
+                args=[str(a) for a in spec.get("args", [])],
+                cwd=work,
+                timeout_seconds=timeout_seconds,
+                pythonpath=str(work / "src"),
+            )
+            if ledger is not None:
+                ledger.record_command(duration_seconds=sandbox_result.duration_seconds)
+            timed_out = sandbox_result.returncode == 124
+            results.append(
+                ValidatorResult(
+                    validator_id=f"behavioral:{command_id}",
+                    status="pass" if sandbox_result.returncode == 0 else "fail",
+                    message=(
+                        "ok"
+                        if sandbox_result.returncode == 0
+                        else "Behavioral command timed out"
+                        if timed_out
+                        else "Behavioral command failed"
+                    ),
+                    details={
+                        "exit_code": sandbox_result.returncode,
+                        "stdout": sandbox_result.stdout[-4000:],
+                        "stderr": sandbox_result.stderr[-4000:],
+                        "sandbox": sandbox_result.sandbox,
                     },
                 )
-                results.append(
-                    ValidatorResult(
-                        validator_id=f"behavioral:{command_id}",
-                        status="pass" if proc.returncode == 0 else "fail",
-                        message="ok" if proc.returncode == 0 else "Behavioral command failed",
-                        details={
-                            "exit_code": proc.returncode,
-                            "stdout": proc.stdout[-4000:],
-                            "stderr": proc.stderr[-4000:],
-                        },
-                    )
-                )
-            except subprocess.TimeoutExpired:
-                results.append(
-                    ValidatorResult(
-                        validator_id=f"behavioral:{command_id}",
-                        status="fail",
-                        message="Behavioral command timed out",
-                    )
-                )
+            )
         return results
 
 

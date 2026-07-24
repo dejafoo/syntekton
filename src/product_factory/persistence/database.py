@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,8 @@ CREATE TABLE IF NOT EXISTS runs (
     usage_json TEXT NOT NULL DEFAULT '{}',
     manifest_json TEXT,
     last_progress_at TEXT,
-    active_operation TEXT
+    active_operation TEXT,
+    budget_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -167,6 +169,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     # Additive migrations for existing DBs created before observability columns.
     _ensure_column(conn, "runs", "last_progress_at", "TEXT")
     _ensure_column(conn, "runs", "active_operation", "TEXT")
+    _ensure_column(conn, "runs", "budget_json", "TEXT")
     _ensure_column(conn, "tasks", "started_at", "TEXT")
     _ensure_column(conn, "tasks", "ended_at", "TEXT")
     _ensure_column(conn, "tasks", "attempt", "INTEGER NOT NULL DEFAULT 1")
@@ -191,11 +194,28 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, decl: str)
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
+def _synchronized(method: Any) -> Any:
+    """Serialize writes on the shared connection across concurrent wave threads (P1.F)."""
+
+    def wrapper(self: "Database", *args: Any, **kwargs: Any) -> Any:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    wrapper.__name__ = getattr(method, "__name__", "wrapper")
+    wrapper.__doc__ = method.__doc__
+    return wrapper
+
+
 class Database:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
         self.conn = connect(db_path)
         migrate(self.conn)
+        # Concurrent waves (P1.F) call into this connection from multiple
+        # worker threads; serialize writes rather than rely on SQLite's
+        # own locking, which can otherwise surface as transient
+        # "database is locked" errors even under WAL + busy_timeout.
+        self._lock = threading.RLock()
 
     def close(self) -> None:
         self.conn.close()
@@ -204,6 +224,7 @@ class Database:
         row = self.conn.execute("PRAGMA journal_mode").fetchone()
         return bool(row and str(row[0]).lower() == "wal")
 
+    @_synchronized
     def upsert_run(
         self,
         *,
@@ -216,19 +237,22 @@ class Database:
         manifest: dict[str, Any] | None = None,
         active_operation: str | None = None,
         touch_progress: bool = True,
+        budget_snapshot: dict[str, Any] | None = None,
     ) -> None:
         now = datetime.now(UTC).isoformat()
         existing = self.conn.execute(
             "SELECT run_id FROM runs WHERE run_id = ?", (run_id,)
         ).fetchone()
         progress = now if touch_progress else None
+        budget_json = json.dumps(budget_snapshot, default=str) if budget_snapshot else None
         if existing:
             self.conn.execute(
                 """
                 UPDATE runs SET status=?, updated_at=?, base_commit=?, usage_json=?,
                   manifest_json=?,
                   last_progress_at=COALESCE(?, last_progress_at),
-                  active_operation=COALESCE(?, active_operation)
+                  active_operation=COALESCE(?, active_operation),
+                  budget_json=COALESCE(?, budget_json)
                 WHERE run_id=?
                 """,
                 (
@@ -239,6 +263,7 @@ class Database:
                     json.dumps(manifest) if manifest else None,
                     progress,
                     active_operation,
+                    budget_json,
                     run_id,
                 ),
             )
@@ -247,8 +272,9 @@ class Database:
                 """
                 INSERT INTO runs
                 (run_id, workflow_type, status, request_json, created_at, updated_at,
-                 base_commit, usage_json, manifest_json, last_progress_at, active_operation)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 base_commit, usage_json, manifest_json, last_progress_at, active_operation,
+                 budget_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -262,6 +288,7 @@ class Database:
                     json.dumps(manifest) if manifest else None,
                     now,
                     active_operation,
+                    budget_json,
                 ),
             )
         self.conn.commit()
@@ -282,6 +309,7 @@ class Database:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    @_synchronized
     def upsert_task(
         self,
         *,
@@ -365,6 +393,18 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def list_tasks_in_creation_order(self, run_id: str) -> list[dict[str, Any]]:
+        """Tasks ordered by first-insert (rowid), a valid topological order.
+
+        Used by durable resume (P1.B) to rebuild the live plan's task_order:
+        a task is only ever inserted once its dependencies have already
+        succeeded/skipped, so insertion order is always dependency-consistent.
+        """
+        rows = self.conn.execute(
+            "SELECT rowid AS _rowid, * FROM tasks WHERE run_id = ? ORDER BY _rowid", (run_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def get_task(self, run_id: str, task_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(
             "SELECT * FROM tasks WHERE run_id = ? AND task_id = ?", (run_id, task_id)
@@ -377,6 +417,7 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    @_synchronized
     def record_invocation(
         self,
         *,
@@ -438,6 +479,7 @@ class Database:
         ).fetchone()
         return dict(row) if row else None
 
+    @_synchronized
     def record_tool_call(
         self,
         *,
@@ -475,6 +517,7 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    @_synchronized
     def record_artifact(self, artifact: dict[str, Any]) -> None:
         self.conn.execute(
             """
@@ -512,6 +555,7 @@ class Database:
         ).fetchone()
         return dict(row) if row else None
 
+    @_synchronized
     def record_validator_results(
         self, *, run_id: str, task_id: str | None, results: list[dict[str, Any]]
     ) -> None:
@@ -531,6 +575,7 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    @_synchronized
     def append_event(self, event: ObservabilityEvent) -> int:
         now = datetime.now(UTC).isoformat()
         cur = self.conn.execute(

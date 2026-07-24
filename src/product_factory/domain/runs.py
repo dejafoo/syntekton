@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.usage import UsageMetrics
 
-WorkflowType = Literal["architecture", "code_change"]
+WorkflowType = Literal["architecture", "code_change", "repository_change"]
 
 FinalStatus = Literal[
     "initializing",

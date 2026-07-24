@@ -46,6 +46,12 @@ class ToolAuthorizationError(UnsafeOperationError):
     exit_code = 8
 
 
+class SkillGrantViolation(UnsafeOperationError):
+    """Raised when a task's tool grant conflicts with a matched skill's declared policy."""
+
+    exit_code = 8
+
+
 class ProviderError(RuntimeFailureError):
     exit_code = 4
 

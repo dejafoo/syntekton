@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import tempfile
@@ -17,6 +16,7 @@ from product_factory.domain.findings import ValidatorResult
 from product_factory.evaluation.cases import RUBRIC_DIMENSIONS, EvalCase
 from product_factory.evaluation.judge import JudgeResult
 from product_factory.evaluation.subjects import SubjectArtifact
+from product_factory.tools.sandbox import run_sandboxed_command
 from product_factory.validation.pipeline import (
     has_blocking_failures,
     validate_architecture_document,
@@ -191,48 +191,37 @@ def _run_smoke_commands(
                 )
                 continue
             timeout = int(spec.get("timeout_seconds", 300))
-            argv = [str(spec["executable"]), *[str(v) for v in spec.get("args", [])]]
-            try:
-                proc = subprocess.run(
-                    argv,
-                    cwd=work,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    check=False,
-                    env={
-                        **os.environ,
-                        "PYTHONPATH": str(work / "src")
-                        + (
-                            f":{os.environ['PYTHONPATH']}"
-                            if os.environ.get("PYTHONPATH")
-                            else ""
-                        ),
-                    },
+            # Sandboxed (env-scrubbed, worktree-confined) rather than raw
+            # subprocess with ambient env (P1.D), matching the coordinator's
+            # behavioral-validation path.
+            sandbox_result = run_sandboxed_command(
+                executable=str(spec["executable"]),
+                args=[str(v) for v in spec.get("args", [])],
+                cwd=work,
+                timeout_seconds=timeout,
+                pythonpath=str(work / "src"),
+            )
+            timed_out = sandbox_result.returncode == 124
+            details = {
+                "command_id": command_id,
+                "exit_code": sandbox_result.returncode,
+                "stdout": sandbox_result.stdout[-4000:],
+                "stderr": sandbox_result.stderr[-4000:],
+            }
+            results.append(
+                ValidatorResult(
+                    validator_id=f"smoke:{command_id}",
+                    status="pass" if sandbox_result.returncode == 0 else "fail",
+                    message=(
+                        "ok"
+                        if sandbox_result.returncode == 0
+                        else f"Smoke command timed out after {timeout}s"
+                        if timed_out
+                        else "Smoke command failed"
+                    ),
+                    details=details,
                 )
-                details = {
-                    "command_id": command_id,
-                    "exit_code": proc.returncode,
-                    "stdout": proc.stdout[-4000:],
-                    "stderr": proc.stderr[-4000:],
-                }
-                results.append(
-                    ValidatorResult(
-                        validator_id=f"smoke:{command_id}",
-                        status="pass" if proc.returncode == 0 else "fail",
-                        message="ok" if proc.returncode == 0 else "Smoke command failed",
-                        details=details,
-                    )
-                )
-            except subprocess.TimeoutExpired as exc:
-                results.append(
-                    ValidatorResult(
-                        validator_id=f"smoke:{command_id}",
-                        status="fail",
-                        message=f"Smoke command timed out after {timeout}s",
-                        details={"stdout": str(exc.stdout or "")[-4000:]},
-                    )
-                )
+            )
     return results
 
 

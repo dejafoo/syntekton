@@ -7,13 +7,15 @@ import shutil
 import uuid
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import typer
+import yaml
 from rich.console import Console
 from rich.table import Table
 
 from product_factory import __version__
-from product_factory.config.loader import load_config
+from product_factory.config.loader import PoliciesConfig, load_config
 from product_factory.domain import export_json_schemas
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.errors import ProductFactoryError
@@ -159,6 +161,31 @@ def plan_cmd(
         raise typer.Exit(3)
 
 
+def _parse_validation_commands(
+    validation_command: list[str], validation_commands: str | None
+) -> list[str]:
+    """Merge repeatable `--validation-command` and comma-separated `--validation-commands`."""
+    ids = list(validation_command)
+    if validation_commands:
+        ids.extend(v.strip() for v in validation_commands.split(",") if v.strip())
+    # De-dupe, preserve order.
+    seen: set[str] = set()
+    result = []
+    for cid in ids:
+        if cid not in seen:
+            seen.add(cid)
+            result.append(cid)
+    return result
+
+
+def _load_config_with_policy_override(policy: Path | None):
+    config = load_config()
+    if policy is not None:
+        raw = yaml.safe_load(policy.read_text(encoding="utf-8")) or {}
+        config = config.model_copy(update={"policies": PoliciesConfig.model_validate(raw)})
+    return config
+
+
 @app.command("run")
 def run_cmd(
     request: Path = typer.Option(..., "--request", exists=True, dir_okay=False),
@@ -166,24 +193,44 @@ def run_cmd(
     workflow: str = typer.Option("code_change", "--workflow"),
     profile: str = typer.Option("local-target", "--profile"),
     budget_usd: float = typer.Option(3.0, "--budget-usd"),
+    max_wall_clock_seconds: int | None = typer.Option(
+        None, "--max-wall-clock-seconds", help="Override RunBudget.max_wall_clock_seconds"
+    ),
+    validation_command: list[str] = typer.Option(
+        [],
+        "--validation-command",
+        help="Registered command id to run as behavioral validation (repeatable)",
+    ),
+    validation_commands: str | None = typer.Option(
+        None,
+        "--validation-commands",
+        help="Comma-separated registered command ids for behavioral validation",
+    ),
+    policy: Path | None = typer.Option(
+        None, "--policy", help="Override policies.yaml path (registered_commands, etc.)"
+    ),
     mock: bool = typer.Option(False, "--mock"),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
     """Execute a product-factory run."""
-    config = load_config()
+    config = _load_config_with_policy_override(policy)
     gateway = _gateway_from_config(config, force_mock=mock)
     coord = RunCoordinator(
         config=config,
         gateway=gateway,
         use_deterministic_planner=mock or isinstance(gateway, MockGateway),
     )
+    budget_kwargs: dict[str, Any] = {"max_cost_usd": Decimal(str(budget_usd))}
+    if max_wall_clock_seconds is not None:
+        budget_kwargs["max_wall_clock_seconds"] = max_wall_clock_seconds
     run_request = RunRequest(
         request_id=f"req-{uuid.uuid4().hex[:8]}",
         workflow_type=workflow,  # type: ignore[arg-type]
         request_text=request.read_text(encoding="utf-8"),
         repository_path=repo.resolve() if repo else None,
         model_profile_set=profile,
-        budget=RunBudget(max_cost_usd=Decimal(str(budget_usd))),
+        validation_commands=_parse_validation_commands(validation_command, validation_commands),
+        budget=RunBudget(**budget_kwargs),
     )
     try:
         manifest = coord.run(run_request)
@@ -230,25 +277,54 @@ def inspect_cmd(run_id: str = typer.Argument(...)) -> None:
 
 
 @app.command("resume")
-def resume_cmd(run_id: str = typer.Argument(...)) -> None:
-    """Resume a checkpointed graph thread (graph-level demo)."""
-    graph = build_graph()
-    result = graph.invoke(
-        {
-            "run_id": run_id,
-            "final_status": "executing",
-            "workflow_type": "code_change",
-            "compiler_errors": [],
-            "validation_results": [],
-            "plan_attempt": 1,
-            "repair_count": 0,
-            "task_results": [],
-            "findings": [],
-            "events": [],
-        },
-        config={"configurable": {"thread_id": run_id}},
+def resume_cmd(
+    run_id: str = typer.Argument(...),
+    mock: bool = typer.Option(False, "--mock"),
+    json_out: bool = typer.Option(False, "--json"),
+    graph_demo: bool = typer.Option(
+        False, "--graph-demo", help="Use the legacy graph-level checkpoint demo instead"
+    ),
+) -> None:
+    """Resume an interrupted product-factory run (coordinator + SQLite + run dir, P1.B)."""
+    if graph_demo:
+        graph = build_graph()
+        result = graph.invoke(
+            {
+                "run_id": run_id,
+                "final_status": "executing",
+                "workflow_type": "code_change",
+                "compiler_errors": [],
+                "validation_results": [],
+                "plan_attempt": 1,
+                "repair_count": 0,
+                "task_results": [],
+                "findings": [],
+                "events": [],
+            },
+            config={"configurable": {"thread_id": run_id}},
+        )
+        console.print_json(data={"final_status": result.get("final_status"), "run_id": run_id})
+        return
+
+    config = load_config()
+    gateway = _gateway_from_config(config, force_mock=mock)
+    coord = RunCoordinator(
+        config=config,
+        gateway=gateway,
+        use_deterministic_planner=mock or isinstance(gateway, MockGateway),
     )
-    console.print_json(data={"final_status": result.get("final_status"), "run_id": run_id})
+    try:
+        manifest = coord.resume(run_id)
+    except ProductFactoryError as exc:
+        console.print(f"[red]{exc.__class__.__name__}:[/red] {exc.message}")
+        raise typer.Exit(exc.exit_code) from exc
+    if json_out:
+        console.print_json(data=json.loads(manifest.model_dump_json()))
+    else:
+        console.print(f"Run [bold]{manifest.run_id}[/bold] → {manifest.final_status}")
+        console.print(f"Cost: ${manifest.usage.estimated_cost_usd}")
+    if manifest.final_status in {"failed", "plan_rejected", "budget_exhausted", "blocked"}:
+        raise typer.Exit(4)
 
 
 @app.command("approve")

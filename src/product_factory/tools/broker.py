@@ -13,9 +13,11 @@ from typing import Any
 
 from product_factory.domain.errors import ToolAuthorizationError
 from product_factory.domain.tools import CapabilityGrant, ToolCallRecord
+from product_factory.orchestration.budget_ledger import BudgetLedger
 from product_factory.persistence.artifacts import ArtifactStore
 from product_factory.tools.policies import assert_path_allowed, resolve_under_root
 from product_factory.tools.registry import ToolRegistry
+from product_factory.tools.sandbox import run_sandboxed_command
 
 ToolObserver = Callable[[str, dict[str, Any]], None]
 
@@ -31,16 +33,19 @@ class ToolBroker:
         registered_commands: dict[str, dict[str, Any]] | None = None,
         base_commit: str | None = None,
         observer: ToolObserver | None = None,
+        ledger: BudgetLedger | None = None,
     ) -> None:
         self.registry = registry
         self.artifact_store = artifact_store
-        self.worktree_root = worktree_root
+        # Resolve so macOS /var → /private/var (and similar) matches glob results.
+        self.worktree_root = worktree_root.resolve() if worktree_root else None
         self.original_repo = original_repo.resolve() if original_repo else None
         self.registered_commands = registered_commands or {}
         self.base_commit = base_commit
         self.grants: dict[str, CapabilityGrant] = {}
         self.history: list[ToolCallRecord] = []
         self.observer = observer
+        self.ledger = ledger
 
     def set_grant(self, grant: CapabilityGrant) -> None:
         self.grants[grant.task_id] = grant
@@ -59,6 +64,10 @@ class ToolBroker:
             )
         if grant.calls_made >= grant.max_calls:
             raise ToolAuthorizationError("Grant max_calls exceeded")
+        if self.ledger is not None:
+            # ToolBroker is the sole execution path for tools — enforce the
+            # run-level tool-call budget here (P1.A) before every dispatch.
+            self.ledger.check_before_tool()
 
         started = time.perf_counter()
         tool_call_id = f"tc-{uuid.uuid4().hex[:12]}"
@@ -93,6 +102,8 @@ class ToolBroker:
         finally:
             duration_ms = int((time.perf_counter() - started) * 1000)
             grant.calls_made += 1
+            if self.ledger is not None:
+                self.ledger.record_tool_call()
             record = ToolCallRecord(
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
@@ -157,9 +168,10 @@ class ToolBroker:
         glob = arguments.get("glob", "**/*")
         max_results = int(arguments.get("max_results", 200))
         matches = []
+        root_resolved = root.resolve()
         for p in sorted(path.glob(glob)):
             if p.is_file():
-                rel = str(p.relative_to(root))
+                rel = str(p.resolve().relative_to(root_resolved))
                 matches.append({"path": rel, "size": p.stat().st_size})
                 if len(matches) >= max_results:
                     break
@@ -192,10 +204,11 @@ class ToolBroker:
         path_filter = arguments.get("path_filter", "**/*")
         max_results = int(arguments.get("max_results", 50))
         hits = []
+        root_resolved = root.resolve()
         for path in root.glob(path_filter):
             if not path.is_file():
                 continue
-            rel = str(path.relative_to(root))
+            rel = str(path.resolve().relative_to(root_resolved))
             from product_factory.tools.policies import path_allowed
 
             read_patterns = grant.read_patterns()
@@ -320,17 +333,25 @@ class ToolBroker:
         executable = spec["executable"]
         args = list(spec.get("args", []))
         timeout = int(spec.get("timeout_seconds", 300))
-        proc = subprocess.run(
-            [executable, *args],
+        if self.ledger is not None:
+            # Registered commands run under the run-level command-seconds
+            # budget (P1.A), not just their own configured timeout.
+            self.ledger.check_before_command(timeout_seconds=timeout)
+        # Restricted subprocess sandbox (+ optional bwrap): scrub inherited env,
+        # confine cwd to the worktree (P1.D) — never raw subprocess with ambient env.
+        result = run_sandboxed_command(
+            executable=str(executable),
+            args=[str(a) for a in args],
             cwd=root,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
+            timeout_seconds=timeout,
+            pythonpath=str(root / "src"),
         )
+        if self.ledger is not None:
+            self.ledger.record_command(duration_seconds=result.duration_seconds)
         return {
             "command_id": command_id,
-            "exit_code": proc.returncode,
-            "stdout": proc.stdout[-50_000:],
-            "stderr": proc.stderr[-50_000:],
+            "exit_code": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "sandbox": result.sandbox,
         }

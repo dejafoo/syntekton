@@ -10,6 +10,7 @@ from product_factory.gateway.canonical_messages import ModelRequest, ModelRespon
 from product_factory.observability.contracts import EventSeverity
 from product_factory.observability.ids import new_span_id
 from product_factory.observability.recorder import TelemetryRecorder
+from product_factory.orchestration.budget_ledger import BudgetLedger
 from product_factory.persistence.database import Database
 
 
@@ -20,12 +21,18 @@ class InstrumentedModelGateway(ModelGateway):
         *,
         recorder: TelemetryRecorder | None = None,
         db: Database | None = None,
+        ledger: BudgetLedger | None = None,
     ) -> None:
         self.inner = inner
         self.recorder = recorder
         self.db = db
+        self.ledger = ledger
 
     def complete(self, request: ModelRequest) -> ModelResponse:
+        # Single choke point for every model call (planning, review, architecture,
+        # implementation/repair agent loops) — enforce run-level budgets here (P1.A).
+        if self.ledger is not None:
+            self.ledger.check_before_model()
         started = datetime.now(UTC).isoformat()
         span_id = new_span_id()
         parent_span_id = None
@@ -117,6 +124,8 @@ class InstrumentedModelGateway(ModelGateway):
                 span_id=span_id,
                 parent_span_id=parent_span_id,
             )
+        if self.ledger is not None:
+            self.ledger.record_usage(resp.usage)
         return resp
 
     def refresh_catalog(self) -> dict[str, Any]:

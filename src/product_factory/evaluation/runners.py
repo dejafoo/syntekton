@@ -114,6 +114,10 @@ class FullOrchestrationRunner:
             request_text=_augment_request_text(case),
             repository_path=repo,
             budget=RunBudget(max_cost_usd=case.budgets.max_cost_usd),
+            # `validation_commands` is the source of truth in the coordinator
+            # (P1.C); keep the legacy metadata field in sync for callers still
+            # reading it directly.
+            validation_commands=list(case.smoke_commands),
             metadata={
                 "eval_case": case.id,
                 "subject": self.subject_id,
