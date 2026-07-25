@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from product_factory.config.loader import AppConfig
+from product_factory.connectors.broker import EVENT_INVOKED as CONNECTOR_EVENT_INVOKED
+from product_factory.connectors.broker import ConnectorBroker
+from product_factory.connectors.defaults import default_connector_registry
 from product_factory.context.assembler import (
     assemble_context,
     list_repository_paths,
@@ -553,6 +556,16 @@ class RunCoordinator:
         self.db = Database(self.pf_root / "data" / "product_factory.sqlite")
         self.skills = SkillRegistry.load(config.root / "skills")
         self.tool_registry = default_tool_registry()
+        self.connector_registry = default_connector_registry(config.connectors)
+        # Connector tools share the one registry so `ToolBroker.execute` resolves
+        # and trust-labels them exactly like built-in tools.
+        for definition in self.connector_registry.tool_definitions():
+            self.tool_registry.register(definition)
+        self.connector_broker = ConnectorBroker(
+            self.connector_registry,
+            config=config.connectors,
+            mock=isinstance(gateway, MockGateway),
+        )
         if not isinstance(self.gateway, InstrumentedModelGateway):
             # Will be rebound per-run with a recorder; keep raw gateway reference.
             self._raw_gateway = self.gateway
@@ -2074,6 +2087,24 @@ class RunCoordinator:
                 severity=severity,
             )
 
+        def _connector_audit(event_type: str, payload: dict) -> None:
+            if recorder is None:
+                return
+            severity = (
+                EventSeverity.INFO if event_type == CONNECTOR_EVENT_INVOKED else EventSeverity.ERROR
+            )
+            recorder.emit(
+                run_id=run_id,
+                event_type=event_type,
+                task_id=task.id,
+                tool_call_id=payload.get("tool_call_id"),
+                summary=f"{payload.get('connector_id') or '?'}:{payload.get('tool_name') or '?'}",
+                payload=payload,
+                severity=severity,
+            )
+
+        self.connector_broker.set_audit(_connector_audit if recorder is not None else None)
+
         broker = ToolBroker(
             registry=self.tool_registry,
             artifact_store=artifacts,
@@ -2083,6 +2114,8 @@ class RunCoordinator:
             base_commit=base_commit or None,
             observer=_tool_observer if recorder is not None else None,
             ledger=ledger,
+            connectors=self.connector_broker,
+            run_id=run_id,
         )
         granted = {
             t.name
@@ -2110,6 +2143,15 @@ class RunCoordinator:
         if request.workflow_type in _INVESTIGATION_WORKFLOW_TYPES:
             granted -= _REPOSITORY_WRITE_TOOL_NAMES
             granted.discard("run_validation_command")
+
+        # Connector grants are resolved last so no capability-specific branch above
+        # can hand out an external provider by accident. External tools are never
+        # part of the permissive default: a task reaches one only when its pack
+        # names the tool class *and* an operator enabled the connector.
+        connector_tool_names = self.connector_registry.tool_names()
+        if connector_tool_names:
+            granted -= connector_tool_names
+            granted |= self.connector_broker.grantable_tool_names(task.required_tool_classes)
 
         # Fail closed before granting if a matched skill's declared tool policy
         # is inconsistent with the task's actual grant (P1.E).

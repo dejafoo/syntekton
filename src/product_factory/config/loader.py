@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
+from product_factory.connectors.policy import ConnectorsConfig, load_connectors_config
 from product_factory.domain.errors import ConfigurationError
 
 
@@ -49,6 +50,8 @@ class AppConfig(BaseModel):
     models: ModelsConfig
     policies: PoliciesConfig
     workflows: WorkflowsConfig
+    # `connectors.yaml` is optional; a missing file means no connector is enabled.
+    connectors: ConnectorsConfig = ConnectorsConfig()
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -89,9 +92,16 @@ def load_config(root: Path | None = None) -> AppConfig:
         models = ModelsConfig.model_validate(_load_yaml(config_dir / "models.yaml"))
         policies = PoliciesConfig.model_validate(_load_yaml(config_dir / "policies.yaml"))
         workflows = WorkflowsConfig.model_validate(_load_yaml(config_dir / "workflows.yaml"))
+        connectors = load_connectors_config(config_dir)
     except ConfigurationError:
         raise
     except Exception as exc:
         raise ConfigurationError(f"Failed to load configuration: {exc}") from exc
 
-    return AppConfig(root=project_root, models=models, policies=policies, workflows=workflows)
+    return AppConfig(
+        root=project_root,
+        models=models,
+        policies=policies,
+        workflows=workflows,
+        connectors=connectors,
+    )
