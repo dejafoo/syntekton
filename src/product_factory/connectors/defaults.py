@@ -8,7 +8,7 @@ and a workflow pack still has to request the tool class.
 
 from __future__ import annotations
 
-from product_factory.connectors import tavily
+from product_factory.connectors import filesystem_mcp, tavily
 from product_factory.connectors.policy import ConnectorsConfig
 from product_factory.connectors.registry import ConnectorRegistry
 
@@ -32,6 +32,10 @@ def default_connector_registry(config: ConnectorsConfig | None = None) -> Connec
     registry.register(
         tavily.tavily_manifest(allowed_result_domains=_result_domains(settings)),
         tavily.web_search,
+    )
+    registry.register(
+        filesystem_mcp.filesystem_mcp_manifest(),
+        filesystem_mcp.FilesystemMcpHandler(),
     )
     return registry
 

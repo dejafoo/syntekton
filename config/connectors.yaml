@@ -31,12 +31,19 @@ connectors:
 
   # Local filesystem over MCP (read-only). Roots must be listed explicitly;
   # there is no default root, so an unconfigured server simply cannot read.
+  #
+  # Only read tools are exposed (mcp_read_file, mcp_list_directory,
+  # mcp_search_files). Product Factory resolves and confines every path itself
+  # before calling the server, so a symlink out of a root is rejected here rather
+  # than trusted to the server.
   filesystem_mcp:
     enabled: false
     max_timeout_seconds: 30
     options:
+      # Absolute directories this connector may read. Point at reference material,
+      # not at a home directory.
       roots: []
-      # Command used to start the server. `npx` resolves the pinned package.
+      # Command used to start the server. Roots are appended automatically.
       command: npx
       args:
         - "-y"
