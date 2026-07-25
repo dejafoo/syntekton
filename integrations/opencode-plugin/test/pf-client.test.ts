@@ -5,6 +5,7 @@ import {
   assertProtocol,
   CliPfClient,
   HOST_PROTOCOL,
+  landMapFrom,
   parseHostJson,
   PfProtocolError,
 } from "../src/pf-client.js";
@@ -93,5 +94,108 @@ describe("CliPfClient", () => {
     const stdout = JSON.stringify({ protocol: "bogus/v0", ok: true, artifacts: [], events: [] });
     const client = new CliPfClient({ spawnFn: fakeSpawn(stdout) as never });
     await expect(client.status("run-x")).rejects.toBeInstanceOf(PfProtocolError);
+  });
+});
+
+/** Records the argv the client would hand to `product-factory`. */
+function recordingSpawn(argvSink: string[][], stdout: string) {
+  return (_bin: string, argv: string[]) => {
+    argvSink.push(argv);
+    return fakeSpawn(stdout)() as never;
+  };
+}
+
+const OK_ENVELOPE = JSON.stringify({
+  protocol: HOST_PROTOCOL,
+  ok: true,
+  run_id: "run-1",
+  artifacts: [],
+  events: [],
+});
+
+describe("CliPfClient artifact naming", () => {
+  it("passes artifact overrides to host submit", async () => {
+    const argvs: string[][] = [];
+    const client = new CliPfClient({ spawnFn: recordingSpawn(argvs, OK_ENVELOPE) as never });
+
+    await client.submit({
+      requestText: "Design integration testing",
+      workflow: "technical_plan",
+      artifactOverrides: {
+        architecture_document: { destPath: "docs/integration_testing_architecture.md" },
+        evidence_report: { logicalName: "notes.md" },
+      },
+    });
+
+    const argv = argvs[0]!;
+    expect(argv).toContain("--artifact-override");
+    expect(argv).toContain("architecture_document=docs/integration_testing_architecture.md");
+    expect(argv).toContain("--artifact-name");
+    expect(argv).toContain("evidence_report=notes.md");
+  });
+
+  it("builds a materialize-all invocation with roles and overwrite", async () => {
+    const argvs: string[][] = [];
+    const client = new CliPfClient({ spawnFn: recordingSpawn(argvs, OK_ENVELOPE) as never });
+
+    await client.materializeAll("run-1", { roles: ["test_plan"], overwrite: true });
+
+    expect(argvs[0]).toEqual([
+      "host",
+      "materialize-all",
+      "run-1",
+      "--role",
+      "test_plan",
+      "--overwrite",
+    ]);
+  });
+});
+
+describe("landMapFrom", () => {
+  it("reads well-formed land map entries", () => {
+    const res = parseHostJson(
+      JSON.stringify({
+        protocol: HOST_PROTOCOL,
+        ok: true,
+        artifacts: [],
+        events: [],
+        data: {
+          artifact_land_map: [
+            {
+              role: "architecture_document",
+              logical_name: "scoped.md",
+              suggested_dest_path: "docs/scoped.md",
+            },
+          ],
+        },
+      }),
+    );
+    expect(landMapFrom(res)).toEqual([
+      {
+        role: "architecture_document",
+        logical_name: "scoped.md",
+        suggested_dest_path: "docs/scoped.md",
+      },
+    ]);
+  });
+
+  it("returns nothing for hosts that predate the land map", () => {
+    const res = parseHostJson(
+      JSON.stringify({ protocol: HOST_PROTOCOL, ok: true, artifacts: [], events: [] }),
+    );
+    expect(landMapFrom(res)).toEqual([]);
+  });
+
+  it("drops malformed entries rather than trusting them", () => {
+    const res = parseHostJson(
+      JSON.stringify({
+        protocol: HOST_PROTOCOL,
+        ok: true,
+        artifacts: [],
+        events: [],
+        data: { artifact_land_map: [{ role: "x" }, null, "nope"] },
+      }),
+    );
+    expect(landMapFrom(res)).toEqual([]);
   });
 });

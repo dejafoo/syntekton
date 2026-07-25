@@ -19,6 +19,16 @@ WorkflowType = Literal[
     "repository_investigation",
 ]
 
+
+class ArtifactOverride(BaseModel):
+    """Host-chosen name and/or destination for one pack deliverable role."""
+
+    model_config = {"extra": "forbid"}
+
+    logical_name: str | None = None
+    dest_path: str | None = None
+
+
 FinalStatus = Literal[
     "initializing",
     "planning",
@@ -43,7 +53,9 @@ class RunRequest(BaseModel):
     project_profile: str = "default"
     model_profile_set: str = "local-target"
     validation_commands: list[str] = Field(default_factory=list)
+    # Deprecated one-release alias for `artifact_overrides`, as `ROLE=dest/path.md`.
     requested_artifacts: list[str] = Field(default_factory=list)
+    artifact_overrides: dict[str, ArtifactOverride] = Field(default_factory=dict)
     budget: RunBudget = Field(default_factory=RunBudget)
     approval_policy: str = "manual_apply"
     metadata: dict[str, str] = Field(default_factory=dict)

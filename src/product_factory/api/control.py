@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from product_factory.api.auth import require_write_auth
 from product_factory.api.deps import ApiState
 from product_factory.domain.budgets import RunBudget
-from product_factory.domain.runs import RunRequest, WorkflowType
+from product_factory.domain.runs import ArtifactOverride, RunRequest, WorkflowType
 from product_factory.host.protocol import HostResponse
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_write_auth)])
@@ -26,6 +26,7 @@ class SubmitRunBody(BaseModel):
     repository_path: Path | None = None
     model_profile_set: str = "local-target"
     validation_commands: list[str] = Field(default_factory=list)
+    artifact_overrides: dict[str, ArtifactOverride] = Field(default_factory=dict)
     budget_usd: float = 3.0
     max_wall_clock_seconds: int | None = None
     request_id: str | None = None
@@ -45,6 +46,11 @@ class ReviseBody(BaseModel):
 class MaterializeBody(BaseModel):
     artifact: str
     dest_path: str
+    overwrite: bool = False
+
+
+class MaterializeAllBody(BaseModel):
+    roles: list[str] = Field(default_factory=list)
     overwrite: bool = False
 
 
@@ -88,6 +94,7 @@ def _run_request(body: SubmitRunBody) -> RunRequest:
         repository_path=body.repository_path.resolve() if body.repository_path else None,
         model_profile_set=body.model_profile_set,
         validation_commands=list(body.validation_commands),
+        artifact_overrides=dict(body.artifact_overrides),
         budget=RunBudget(**budget_kwargs),
     )
 
@@ -142,6 +149,21 @@ def materialize_run(run_id: str, request: Request, body: MaterializeBody) -> JSO
             run_id,
             artifact=body.artifact,
             dest_path=body.dest_path,
+            overwrite=body.overwrite,
+        )
+    )
+
+
+@router.post("/runs/{run_id}/materialize-all")
+def materialize_run_all(
+    run_id: str, request: Request, body: MaterializeAllBody = MaterializeAllBody()
+) -> JSONResponse:
+    """Land every resolved deliverable of a run at its suggested destination."""
+    host = _state(request).host(observe_base_url=_observe_base(request))
+    return _host_json(
+        host.materialize_all(
+            run_id,
+            roles=list(body.roles) or None,
             overwrite=body.overwrite,
         )
     )

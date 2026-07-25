@@ -20,8 +20,9 @@ def _ok(**kwargs: Any) -> HostResponse:
 def test_tool_schemas_match_small_tool_set() -> None:
     names = [t["name"] for t in tool_schemas()]
     assert names == list(TOOL_NAMES)
-    assert len(names) == 9
+    assert len(names) == 10
     assert "pf_materialize" in names
+    assert "pf_materialize_all" in names
 
 
 def test_resolve_mcp_config_root_falls_back_to_package(tmp_path, monkeypatch) -> None:
@@ -162,7 +163,7 @@ def test_mcp_server_initialize_and_tools_call(tmp_path) -> None:
 
     listed = server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
     assert listed is not None
-    assert len(listed["result"]["tools"]) == 9
+    assert len(listed["result"]["tools"]) == 10
 
     prompts = server.handle({"jsonrpc": "2.0", "id": 20, "method": "prompts/list"})
     assert prompts is not None
@@ -270,6 +271,86 @@ def test_pf_materialize_requires_args() -> None:
     assert missing["ok"] is False
     assert missing["error"]["code"] == "invalid_arguments"
     service.materialize.assert_not_called()
+
+
+def test_pf_submit_passes_artifact_overrides() -> None:
+    service = MagicMock()
+    service.submit.return_value = _ok(run_id="run-named", status="queued")
+    payload = dispatch_tool(
+        service,
+        "pf_submit",
+        {
+            "request_text": "Design an integration testing architecture.",
+            "workflow": "technical_plan",
+            "artifact_overrides": {
+                "architecture_document": {
+                    "dest_path": "docs/integration_testing_architecture.md"
+                }
+            },
+        },
+    )
+    assert payload["ok"] is True
+    request = service.submit.call_args.args[0]
+    override = request.artifact_overrides["architecture_document"]
+    assert override.dest_path == "docs/integration_testing_architecture.md"
+
+
+def test_pf_submit_accepts_dest_path_shorthand() -> None:
+    service = MagicMock()
+    service.submit.return_value = _ok(run_id="run-named", status="queued")
+    dispatch_tool(
+        service,
+        "pf_submit",
+        {
+            "request_text": "Design it.",
+            "workflow": "technical_plan",
+            "artifact_overrides": {"architecture_document": "docs/scoped.md"},
+        },
+    )
+    request = service.submit.call_args.args[0]
+    assert request.artifact_overrides["architecture_document"].dest_path == "docs/scoped.md"
+
+
+def test_pf_submit_rejects_malformed_artifact_overrides() -> None:
+    service = MagicMock()
+    payload = dispatch_tool(
+        service,
+        "pf_submit",
+        {
+            "request_text": "Design it.",
+            "artifact_overrides": {"architecture_document": 42},
+        },
+    )
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_artifact_override"
+    service.submit.assert_not_called()
+
+
+def test_pf_materialize_all_dispatches_to_host_service() -> None:
+    service = MagicMock()
+    service.materialize_all.return_value = _ok(
+        run_id="run-1",
+        status="completed",
+        data={"landed": [{"role": "architecture_document"}], "skipped": []},
+    )
+    payload = dispatch_tool(
+        service,
+        "pf_materialize_all",
+        {"run_id": "run-1", "roles": ["architecture_document"], "overwrite": True},
+    )
+    assert payload["ok"] is True
+    service.materialize_all.assert_called_once_with(
+        "run-1",
+        roles=["architecture_document"],
+        overwrite=True,
+    )
+
+
+def test_pf_materialize_all_defaults_to_every_role() -> None:
+    service = MagicMock()
+    service.materialize_all.return_value = _ok(run_id="run-1", status="completed")
+    dispatch_tool(service, "pf_materialize_all", {"run_id": "run-1"})
+    assert service.materialize_all.call_args.kwargs["roles"] is None
 
 
 def test_mcp_server_lazy_host_service_init() -> None:

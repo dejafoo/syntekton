@@ -7,6 +7,7 @@ the report itself.
 
 from __future__ import annotations
 
+from product_factory.workflows.artifacts import ROLE_EVIDENCE_REPORT, ArtifactLandSpec
 from product_factory.workflows.base import WorkflowPack
 
 REPOSITORY_INVESTIGATION_PACK = WorkflowPack(
@@ -49,6 +50,14 @@ REPOSITORY_INVESTIGATION_PACK = WorkflowPack(
     },
     skill_policy={"grant_enforcement": "fail_closed"},
     routing_defaults={"coding_worker_tier": "mid"},
+    artifacts=(
+        ArtifactLandSpec(
+            role=ROLE_EVIDENCE_REPORT,
+            default_logical_name="EVIDENCE_REPORT.md",
+            default_dest_path="docs/EVIDENCE_REPORT.md",
+            description="Cited evidence report for a read-only investigation.",
+        ),
+    ),
     description=(
         "Read-only repository investigation producing an evidence report with "
         "cited paths and an assumptions section — no repository write grants."

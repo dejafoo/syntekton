@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+from product_factory.workflows.artifacts import ArtifactLandSpec
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,8 @@ class WorkflowPack:
     skill_policy: dict[str, Any]
     routing_defaults: dict[str, Any]
     description: str = ""
+    # Deliverables keyed by stable role; names are defaults hosts may override.
+    artifacts: tuple[ArtifactLandSpec, ...] = field(default_factory=tuple)
 
     def content_hash(self) -> str:
         """Stable hash recorded on the run manifest to prove pack identity/version."""
@@ -40,6 +44,7 @@ class WorkflowPack:
             "validation_policy": self.validation_policy,
             "skill_policy": self.skill_policy,
             "routing_defaults": self.routing_defaults,
+            "artifacts": [spec.as_payload() for spec in self.artifacts],
         }
         encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()

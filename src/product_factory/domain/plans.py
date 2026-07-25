@@ -18,6 +18,10 @@ class Assumption(BaseModel):
 class FinalArtifactSpec(BaseModel):
     logical_name: str
     composer_task_id: str
+    # Stable deliverable role from the workflow pack's land map. When set, the
+    # planner may also propose a request-specific name and destination.
+    role: str | None = None
+    dest_path: str | None = None
 
 
 class PlannerOutput(BaseModel):

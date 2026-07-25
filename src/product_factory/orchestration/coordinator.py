@@ -93,8 +93,14 @@ from product_factory.validation.pipeline import (
     validate_path_scope,
     validate_secrets,
 )
+from product_factory.workflows.artifacts import (
+    ROLE_ARCHITECTURE_DOCUMENT,
+    ROLE_EVIDENCE_REPORT,
+    ROLE_PROPOSED_PATCH,
+    ArtifactLandMap,
+)
 from product_factory.workflows.base import WorkflowPack
-from product_factory.workflows.registry import resolve_workflow_pack
+from product_factory.workflows.registry import land_map_for_request, resolve_workflow_pack
 
 logger = logging.getLogger("product_factory.orchestration.coordinator")
 
@@ -193,7 +199,11 @@ def default_code_change_plan(request_text: str) -> PlannerOutput:
             ),
         ],
         final_artifacts=[
-            FinalArtifactSpec(logical_name="proposed.patch", composer_task_id="T-004")
+            FinalArtifactSpec(
+                logical_name="proposed.patch",
+                composer_task_id="T-004",
+                role=ROLE_PROPOSED_PATCH,
+            )
         ],
         validation_strategy="deterministic then independent review",
         risk_classification="low",
@@ -297,7 +307,11 @@ def default_architecture_plan(request_text: str) -> PlannerOutput:
             ),
         ],
         final_artifacts=[
-            FinalArtifactSpec(logical_name="ARCHITECTURE.md", composer_task_id="T-003")
+            FinalArtifactSpec(
+                logical_name="ARCHITECTURE.md",
+                composer_task_id="T-003",
+                role=ROLE_ARCHITECTURE_DOCUMENT,
+            )
         ],
         validation_strategy="section checks then review",
         risk_classification="low",
@@ -351,7 +365,11 @@ def default_investigation_plan(request_text: str) -> PlannerOutput:
             ),
         ],
         final_artifacts=[
-            FinalArtifactSpec(logical_name="EVIDENCE_REPORT.md", composer_task_id="T-002")
+            FinalArtifactSpec(
+                logical_name="EVIDENCE_REPORT.md",
+                composer_task_id="T-002",
+                role=ROLE_EVIDENCE_REPORT,
+            )
         ],
         validation_strategy="section checks, citation presence, secret scan",
         risk_classification="low",
@@ -609,13 +627,19 @@ class RunCoordinator:
         # workflow ids fail closed before any planning/execution spend, and
         # the resolved pack's identity is stamped on the run manifest.
         workflow_pack: WorkflowPack | None = None
+        land_map = ArtifactLandMap()
         if request.workflow_type in _PACK_BACKED_WORKFLOW_TYPES:
             workflow_pack = resolve_workflow_pack(request.workflow_type)
+            # Bad artifact overrides fail here, before any planning spend.
+            land_map = land_map_for_request(request)
             recorder.emit(
                 run_id=run_id,
                 event_type="workflow.pack_resolved",
                 summary=f"Workflow pack {workflow_pack.id}@{workflow_pack.version}",
-                payload=workflow_pack.manifest_metadata(),
+                payload={
+                    **workflow_pack.manifest_metadata(),
+                    "artifact_land_map": land_map.as_payload(),
+                },
             )
 
         try:
@@ -739,6 +763,7 @@ class RunCoordinator:
                 base_commit=base_commit or "",
                 ledger=ledger,
                 workflow_pack=workflow_pack,
+                land_map=land_map,
             )
             return manifest
         except RunCancelledError as exc:
@@ -896,8 +921,10 @@ class RunCoordinator:
             self._raw_gateway, recorder=recorder, db=self.db, ledger=ledger
         )
         workflow_pack: WorkflowPack | None = None
+        land_map = ArtifactLandMap()
         if request.workflow_type in _PACK_BACKED_WORKFLOW_TYPES:
             workflow_pack = resolve_workflow_pack(request.workflow_type)
+            land_map = land_map_for_request(request)
 
         plan_path = run_dir / "output" / "plan.json"
         if not plan_path.exists():
@@ -978,9 +1005,10 @@ class RunCoordinator:
                     try:
                         if art.logical_name.endswith(".patch") or art.media_type == "text/x-diff":
                             patch_text = artifacts.get_text(art.sha256)
-                        if art.logical_name == "ARCHITECTURE.md":
+                        role = land_map.role_for_logical_name(art.logical_name)
+                        if role == ROLE_ARCHITECTURE_DOCUMENT:
                             architecture_md = artifacts.get_text(art.sha256)
-                        if art.logical_name == "EVIDENCE_REPORT.md":
+                        if role == ROLE_EVIDENCE_REPORT:
                             evidence_report_md = artifacts.get_text(art.sha256)
                     except Exception:
                         continue
@@ -1048,6 +1076,7 @@ class RunCoordinator:
                 base_commit=base_commit or "",
                 ledger=ledger,
                 workflow_pack=workflow_pack,
+                land_map=land_map,
                 initial_task_status=task_status,
                 initial_results=results,
                 initial_patch_text=patch_text,
@@ -1254,6 +1283,7 @@ class RunCoordinator:
         base_commit: str,
         ledger: BudgetLedger,
         workflow_pack: WorkflowPack | None = None,
+        land_map: ArtifactLandMap | None = None,
         initial_task_status: dict[str, str] | None = None,
         initial_results: list[TaskResult] | None = None,
         initial_patch_text: str = "",
@@ -1263,6 +1293,14 @@ class RunCoordinator:
         # `initial_*` are only populated by `resume()` (P1.B): they seed the
         # wave loop with already-completed task state so resumed runs incur
         # no new model/tool spend for success/skipped tasks.
+        land_map = land_map or ArtifactLandMap()
+        architecture_name = land_map.logical_name_for(
+            ROLE_ARCHITECTURE_DOCUMENT, default="ARCHITECTURE.md"
+        )
+        evidence_name = land_map.logical_name_for(
+            ROLE_EVIDENCE_REPORT, default="EVIDENCE_REPORT.md"
+        )
+        patch_name = land_map.logical_name_for(ROLE_PROPOSED_PATCH, default="proposed.patch")
         task_status = initial_task_status or {tid: "pending" for tid in plan.tasks}
         results: list[TaskResult] = list(initial_results or [])
         findings: list[Finding] = [f for r in results for f in r.findings]
@@ -1403,6 +1441,7 @@ class RunCoordinator:
                     recorder=recorder,
                     ledger=ledger,
                     dependency_outputs=dependency_outputs_by_task[task.id],
+                    land_map=land_map,
                 )
 
             wave_results: list[TaskResult] = run_wave(
@@ -1459,9 +1498,10 @@ class RunCoordinator:
                 for art in result.artifact_refs:
                     if art.logical_name.endswith(".patch") or art.media_type == "text/x-diff":
                         patch_text = artifacts.get_text(art.sha256)
-                    if art.logical_name == "ARCHITECTURE.md":
+                    role = land_map.role_for_logical_name(art.logical_name)
+                    if role == ROLE_ARCHITECTURE_DOCUMENT:
                         architecture_md = artifacts.get_text(art.sha256)
-                    if art.logical_name == "EVIDENCE_REPORT.md":
+                    if role == ROLE_EVIDENCE_REPORT:
                         evidence_report_md = artifacts.get_text(art.sha256)
 
             # After wave: deterministic validation for implementation outputs
@@ -1676,11 +1716,11 @@ class RunCoordinator:
                         except Exception:
                             continue
             if patch_text:
-                (run_dir / "output" / "proposed.patch").write_text(patch_text, encoding="utf-8")
+                (run_dir / "output" / patch_name).write_text(patch_text, encoding="utf-8")
                 artifacts.put_text(
                     patch_text,
                     media_type="text/x-diff",
-                    logical_name="proposed.patch",
+                    logical_name=patch_name,
                     created_by_task_id="compose",
                 )
         elif request.workflow_type in _INVESTIGATION_WORKFLOW_TYPES:
@@ -1689,8 +1729,9 @@ class RunCoordinator:
                     request.request_text,
                     findings=findings,
                     dependency_outputs=[],
+                    document_name=evidence_name,
                 )
-            (run_dir / "output" / "EVIDENCE_REPORT.md").write_text(
+            (run_dir / "output" / evidence_name).write_text(
                 evidence_report_md, encoding="utf-8"
             )
             validation_results.append(validate_investigation_document(evidence_report_md))
@@ -1698,8 +1739,12 @@ class RunCoordinator:
             validation_results.append(validate_secrets(evidence_report_md))
         else:
             if not architecture_md:
-                architecture_md = self._compose_architecture(request.request_text, findings)
-            (run_dir / "output" / "ARCHITECTURE.md").write_text(architecture_md, encoding="utf-8")
+                architecture_md = self._compose_architecture(
+                    request.request_text, findings, document_name=architecture_name
+                )
+            (run_dir / "output" / architecture_name).write_text(
+                architecture_md, encoding="utf-8"
+            )
             validation_results.append(validate_architecture_document(architecture_md))
             must_cover = [
                 item.strip()
@@ -1834,7 +1879,9 @@ class RunCoordinator:
         recorder: TelemetryRecorder | None = None,
         dependency_outputs: list[dict[str, Any]] | None = None,
         ledger: BudgetLedger | None = None,
+        land_map: ArtifactLandMap | None = None,
     ) -> TaskResult:
+        land_map = land_map or ArtifactLandMap()
         profile = resolve_task_model_profile(task, metadata=request.metadata)
         agent_profile = {
             "repository_analysis": "repository_explorer",
@@ -2595,8 +2642,13 @@ class RunCoordinator:
             summary = summary or "Independent review complete"
         elif task.capability == "composition":
             if request.workflow_type in _TECHNICAL_PLAN_WORKFLOW_TYPES:
+                document_name = land_map.logical_name_for(
+                    ROLE_ARCHITECTURE_DOCUMENT, default="ARCHITECTURE.md"
+                )
                 if isinstance(self._raw_gateway, MockGateway):
-                    architecture_md = self._compose_architecture(request.request_text, [])
+                    architecture_md = self._compose_architecture(
+                        request.request_text, [], document_name=document_name
+                    )
                 else:
                     architecture_md, gen_usage = self._generate_architecture_document(
                         request=request,
@@ -2605,26 +2657,31 @@ class RunCoordinator:
                         run_id=run_id,
                         profile=profile,
                         dependency_outputs=dependency_outputs or [],
+                        document_name=document_name,
                     )
                     model_usage = model_usage.merge(gen_usage)
                 art = artifacts.put_text(
                     architecture_md,
                     media_type="text/markdown",
-                    logical_name="ARCHITECTURE.md",
+                    logical_name=document_name,
                     created_by_task_id=task.id,
                 )
                 artifact_refs.append(art)
                 summary = "Architecture composed"
             elif request.workflow_type in _INVESTIGATION_WORKFLOW_TYPES:
+                evidence_name = land_map.logical_name_for(
+                    ROLE_EVIDENCE_REPORT, default="EVIDENCE_REPORT.md"
+                )
                 evidence_report_md = self._compose_evidence_report(
                     request.request_text,
                     findings=task_findings,
                     dependency_outputs=dependency_outputs or [],
+                    document_name=evidence_name,
                 )
                 art = artifacts.put_text(
                     evidence_report_md,
                     media_type="text/markdown",
-                    logical_name="EVIDENCE_REPORT.md",
+                    logical_name=evidence_name,
                     created_by_task_id=task.id,
                 )
                 artifact_refs.append(art)
@@ -2636,7 +2693,9 @@ class RunCoordinator:
                     art = artifacts.put_text(
                         patch,
                         media_type="text/x-diff",
-                        logical_name="proposed.patch",
+                        logical_name=land_map.logical_name_for(
+                            ROLE_PROPOSED_PATCH, default="proposed.patch"
+                        ),
                         created_by_task_id=task.id,
                     )
                     artifact_refs.append(art)
@@ -2843,8 +2902,14 @@ class RunCoordinator:
         run_id: str,
         profile: str,
         dependency_outputs: list[dict[str, Any]],
+        document_name: str = "ARCHITECTURE.md",
     ) -> tuple[str, UsageMetrics]:
-        """Ask the live model for a request-specific ARCHITECTURE.md."""
+        """Ask the live model for a request-specific architecture document.
+
+        `document_name` is the resolved deliverable name, so a run that asked for
+        `integration_testing_architecture.md` gets a document scoped to that
+        subject rather than a whole-system template.
+        """
         must_cover = [
             item.strip()
             for item in str(request.metadata.get("must_cover") or "").split("|")
@@ -2852,7 +2917,7 @@ class RunCoordinator:
         ]
         section_list = ", ".join(ARCHITECTURE_REQUIRED_SECTIONS)
         system = (
-            "You are the architecture composer. Write a complete ARCHITECTURE.md "
+            f"You are the architecture composer. Write a complete {document_name} "
             "markdown document for the user request. Use these section headings "
             f"(as markdown ## headings): {section_list}. "
             "Every section must contain request-specific detail — never generic "
@@ -2862,6 +2927,7 @@ class RunCoordinator:
         )
         payload = {
             "request": request.request_text,
+            "deliverable_name": document_name,
             "task_objective": task.objective,
             "must_cover_topics": must_cover,
             "reference_hints": request.metadata.get("reference_hints") or "",
@@ -2898,7 +2964,7 @@ class RunCoordinator:
             text = (resp.text or "").strip()
             if text:
                 if not text.lstrip().startswith("#"):
-                    text = f"# ARCHITECTURE.md\n\n{text}"
+                    text = f"# {document_name}\n\n{text}"
                 return text, usage
         except BudgetExhaustedError:
             raise
@@ -2906,7 +2972,7 @@ class RunCoordinator:
             pass
         # Fail closed toward an explicit thin draft rather than silent template success.
         fallback = (
-            f"# ARCHITECTURE.md\n\n## Objective\n{request.request_text.strip()}\n\n"
+            f"# {document_name}\n\n## Objective\n{request.request_text.strip()}\n\n"
             "## Scope\nGeneration failed; document incomplete.\n\n"
             "## Assumptions\n- None captured.\n\n"
             "## Functional requirements\n- None captured.\n\n"
@@ -2921,9 +2987,15 @@ class RunCoordinator:
         )
         return fallback, usage
 
-    def _compose_architecture(self, request_text: str, findings: list[Finding]) -> str:
+    def _compose_architecture(
+        self,
+        request_text: str,
+        findings: list[Finding],
+        *,
+        document_name: str = "ARCHITECTURE.md",
+    ) -> str:
         sections = [
-            "# ARCHITECTURE.md",
+            f"# {document_name}",
             "",
             "## Objective",
             request_text.strip() or "TBD",
@@ -2998,6 +3070,7 @@ class RunCoordinator:
         *,
         findings: list[Finding],
         dependency_outputs: list[dict[str, Any]],
+        document_name: str = "EVIDENCE_REPORT.md",
     ) -> str:
         """Deterministic evidence report with cited paths and assumptions (P3.D)."""
         cited_paths: list[str] = []
@@ -3035,7 +3108,7 @@ class RunCoordinator:
             "- Scope is limited to files visible in the snapshotted worktree.",
         ]
         sections = [
-            "# EVIDENCE_REPORT.md",
+            f"# {document_name}",
             "",
             "## Summary",
             request_text.strip() or "Repository investigation",

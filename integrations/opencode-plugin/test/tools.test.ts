@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { PfClient, PfResponse } from "../src/pf-client.js";
 import {
+  normalizeArtifactOverrides,
   pfDecline,
   pfMerge,
   pfRun,
@@ -37,6 +38,11 @@ function mockClient(overrides: Partial<Record<keyof PfClient, PfResponse>> = {})
       async () =>
         overrides.materialize ??
         res({ run_id: "run-1", status: "completed", data: { written_path: "docs/ARCHITECTURE.md" } }),
+    ),
+    materializeAll: vi.fn(
+      async () =>
+        overrides.materializeAll ??
+        res({ run_id: "run-1", status: "completed", data: { landed: [], skipped: [] } }),
     ),
   };
   return { client: calls as unknown as PfClient, calls: calls as never };
@@ -147,6 +153,178 @@ describe("pf_merge confirmation gate", () => {
   });
 });
 
+/** Inspect envelope carrying a resolved land map, as P4.A hosts return. */
+function landMapInspect(entries: Array<Record<string, unknown>>): PfResponse {
+  return res({
+    run_id: "run-1",
+    status: "awaiting_approval",
+    data: { artifact_land_map: entries },
+  });
+}
+
+describe("pf_merge land map", () => {
+  it("lands the run's named deliverable instead of the generic default", async () => {
+    const { client, calls } = mockClient({
+      status: res({
+        run_id: "run-1",
+        status: "awaiting_approval",
+        data: { workflow_type: "technical_plan" },
+      }),
+      inspect: landMapInspect([
+        {
+          role: "architecture_document",
+          logical_name: "integration_testing_architecture.md",
+          suggested_dest_path: "docs/integration_testing_architecture.md",
+          landable: true,
+        },
+      ]),
+    });
+
+    await pfMerge({ client }, { ask: allow }, { run_id: "run-1" });
+
+    expect(calls.approve).toHaveBeenCalledWith("run-1", { apply: false });
+    expect(calls.materializeAll).toHaveBeenCalledWith("run-1", {
+      roles: undefined,
+      overwrite: false,
+    });
+    // The generic single-file default must not be used when a land map exists.
+    expect(calls.materialize).not.toHaveBeenCalled();
+  });
+
+  it("shows every destination in the confirmation prompt", async () => {
+    const asked: Array<{ patterns?: string[]; metadata?: Record<string, unknown> }> = [];
+    const ask: PfToolContext["ask"] = async (input) => {
+      asked.push(input);
+    };
+    const { client } = mockClient({
+      status: res({ run_id: "run-1", status: "completed", data: { workflow_type: "quality_gate" } }),
+      inspect: landMapInspect([
+        {
+          role: "test_plan",
+          logical_name: "TEST_PLAN.md",
+          suggested_dest_path: "docs/TEST_PLAN.md",
+          landable: true,
+        },
+        {
+          role: "quality_findings",
+          logical_name: "QUALITY_FINDINGS.md",
+          suggested_dest_path: "docs/QUALITY_FINDINGS.md",
+          landable: true,
+        },
+      ]),
+    });
+
+    await pfMerge({ client }, { ask }, { run_id: "run-1" });
+
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.patterns).toEqual([
+      "run-1",
+      "docs/TEST_PLAN.md",
+      "docs/QUALITY_FINDINGS.md",
+    ]);
+    expect(asked[0]?.metadata?.destinations).toEqual([
+      "docs/TEST_PLAN.md",
+      "docs/QUALITY_FINDINGS.md",
+    ]);
+  });
+
+  it("declining a multi-deliverable merge lands nothing", async () => {
+    const { client, calls } = mockClient({
+      status: res({ run_id: "run-1", status: "completed", data: { workflow_type: "technical_plan" } }),
+      inspect: landMapInspect([
+        {
+          role: "architecture_document",
+          logical_name: "scoped.md",
+          suggested_dest_path: "docs/scoped.md",
+          landable: true,
+        },
+      ]),
+    });
+
+    const out = await pfMerge({ client }, { ask: deny }, { run_id: "run-1" });
+
+    expect(out).toContain("merge_declined");
+    expect(calls.materializeAll).not.toHaveBeenCalled();
+    expect(calls.materialize).not.toHaveBeenCalled();
+  });
+
+  it("limits the merge to requested roles", async () => {
+    const { client, calls } = mockClient({
+      status: res({ run_id: "run-1", status: "completed", data: { workflow_type: "quality_gate" } }),
+      inspect: landMapInspect([
+        {
+          role: "test_plan",
+          logical_name: "TEST_PLAN.md",
+          suggested_dest_path: "docs/TEST_PLAN.md",
+          landable: true,
+        },
+        {
+          role: "quality_findings",
+          logical_name: "QUALITY_FINDINGS.md",
+          suggested_dest_path: "docs/QUALITY_FINDINGS.md",
+          landable: true,
+        },
+      ]),
+    });
+
+    await pfMerge({ client }, { ask: allow }, { run_id: "run-1", roles: ["test_plan"] });
+
+    expect(calls.materializeAll).toHaveBeenCalledWith("run-1", {
+      roles: ["test_plan"],
+      overwrite: false,
+    });
+  });
+
+  it("ignores non-landable land-map entries", async () => {
+    const { client, calls } = mockClient({
+      status: res({ run_id: "run-1", status: "completed", data: { workflow_type: "technical_plan" } }),
+      inspect: landMapInspect([
+        {
+          role: "proposed_patch",
+          logical_name: "proposed.patch",
+          suggested_dest_path: "proposed.patch",
+          landable: false,
+        },
+      ]),
+    });
+
+    await pfMerge({ client }, { ask: allow }, { run_id: "run-1" });
+
+    expect(calls.materializeAll).not.toHaveBeenCalled();
+    expect(calls.materialize).toHaveBeenCalled();
+  });
+
+  it("explicit artifact/dest_path skips the land-map lookup entirely", async () => {
+    const { client, calls } = mockClient({
+      status: res({ run_id: "run-1", status: "completed", data: { workflow_type: "technical_plan" } }),
+    });
+
+    await pfMerge({ client }, { ask: allow }, {
+      run_id: "run-1",
+      dest_path: "design/plan.md",
+    });
+
+    expect(calls.inspect).not.toHaveBeenCalled();
+    expect(calls.materializeAll).not.toHaveBeenCalled();
+    expect(calls.materialize).toHaveBeenCalled();
+  });
+
+  it("patch workflows never consult the land map", async () => {
+    const { client, calls } = mockClient({
+      status: res({
+        run_id: "run-1",
+        status: "awaiting_approval",
+        data: { workflow_type: "repository_change" },
+      }),
+    });
+
+    await pfMerge({ client }, { ask: allow }, { run_id: "run-1" });
+
+    expect(calls.inspect).not.toHaveBeenCalled();
+    expect(calls.approve).toHaveBeenCalledWith("run-1", { apply: true });
+  });
+});
+
 describe("pf_run", () => {
   it("defaults repository_path to the OpenCode worktree", async () => {
     const { client, calls } = mockClient();
@@ -162,6 +340,42 @@ describe("pf_run", () => {
         repositoryPath: "/proj/wt",
       }),
     );
+  });
+
+  it("forwards artifact overrides so the deliverable is named up front", async () => {
+    const { client, calls } = mockClient();
+
+    await pfRun({ client }, {}, {
+      request: "Design integration testing",
+      workflow: "technical_plan",
+      artifact_overrides: {
+        architecture_document: "docs/integration_testing_architecture.md",
+      },
+    });
+
+    expect(calls.submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        artifactOverrides: {
+          architecture_document: { destPath: "docs/integration_testing_architecture.md" },
+        },
+      }),
+    );
+  });
+});
+
+describe("normalizeArtifactOverrides", () => {
+  it("accepts the string shorthand and the object form", () => {
+    expect(normalizeArtifactOverrides({ architecture_document: "docs/x.md" })).toEqual({
+      architecture_document: { destPath: "docs/x.md" },
+    });
+    expect(
+      normalizeArtifactOverrides({ architecture_document: { logicalName: "x.md" } }),
+    ).toEqual({ architecture_document: { logicalName: "x.md" } });
+  });
+
+  it("drops empty entries and returns undefined when nothing is left", () => {
+    expect(normalizeArtifactOverrides({ architecture_document: "   " })).toBeUndefined();
+    expect(normalizeArtifactOverrides(undefined)).toBeUndefined();
   });
 });
 
