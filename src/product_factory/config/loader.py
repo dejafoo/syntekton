@@ -9,6 +9,7 @@ import yaml
 from pydantic import BaseModel, Field
 
 from product_factory.connectors.policy import ConnectorsConfig, load_connectors_config
+from product_factory.domain.budgets import BudgetsConfig
 from product_factory.domain.errors import ConfigurationError
 
 
@@ -31,12 +32,29 @@ class ModelsConfig(BaseModel):
     profiles: dict[str, ModelProfileConfig]
 
 
+class ContextPackingConfig(BaseModel):
+    """Operator-tunable limits for repository excerpt / prompt packing."""
+
+    max_excerpt_files: int = Field(default=12, ge=1)
+    min_excerpt_chars: int = Field(default=4_000, ge=0)
+    max_excerpt_chars: int = Field(default=20_000, ge=1)
+    max_file_list_paths: int = Field(default=80, ge=1)
+    max_manifest_excerpts: int = Field(default=20, ge=1)
+    min_manifest_chars: int = Field(default=2_000, ge=0)
+    max_manifest_chars: int = Field(default=40_000, ge=1)
+    clamp_to_model_window: bool = True
+    chars_per_token: int = Field(default=4, ge=1)
+    model_window_reserve_ratio: float = Field(default=0.45, ge=0.0, le=0.9)
+
+
 class PoliciesConfig(BaseModel):
     allow_dirty_repo: bool = False
     max_artifact_bytes: int = 5_000_000
     prohibited_path_globs: list[str] = Field(
         default_factory=lambda: [".env", "**/.env", "**/secrets/**"]
     )
+    budgets: BudgetsConfig = Field(default_factory=BudgetsConfig)
+    context: ContextPackingConfig = Field(default_factory=ContextPackingConfig)
     registered_commands: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 

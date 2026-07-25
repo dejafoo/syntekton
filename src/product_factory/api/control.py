@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from product_factory.api.auth import require_write_auth
 from product_factory.api.deps import ApiState
-from product_factory.domain.budgets import RunBudget
+from product_factory.domain.budgets import run_budget_from_policy
 from product_factory.domain.runs import ArtifactOverride, RunRequest, WorkflowType
 from product_factory.host.protocol import HostResponse
 
@@ -83,10 +83,7 @@ def _host_json(response: HostResponse, *, success_status: int = 200) -> JSONResp
     return JSONResponse(content=response.model_dump(mode="json"), status_code=status)
 
 
-def _run_request(body: SubmitRunBody) -> RunRequest:
-    budget_kwargs: dict[str, Any] = {"max_cost_usd": Decimal(str(body.budget_usd))}
-    if body.max_wall_clock_seconds is not None:
-        budget_kwargs["max_wall_clock_seconds"] = body.max_wall_clock_seconds
+def _run_request(body: SubmitRunBody, *, budgets: Any = None) -> RunRequest:
     return RunRequest(
         request_id=body.request_id or f"req-{uuid.uuid4().hex[:8]}",
         workflow_type=body.workflow_type,
@@ -95,7 +92,11 @@ def _run_request(body: SubmitRunBody) -> RunRequest:
         model_profile_set=body.model_profile_set,
         validation_commands=list(body.validation_commands),
         artifact_overrides=dict(body.artifact_overrides),
-        budget=RunBudget(**budget_kwargs),
+        budget=run_budget_from_policy(
+            max_cost_usd=Decimal(str(body.budget_usd)),
+            budgets=budgets,
+            max_wall_clock_seconds=body.max_wall_clock_seconds,
+        ),
     )
 
 
@@ -104,7 +105,7 @@ def submit_run(body: SubmitRunBody, request: Request) -> JSONResponse:
     """Submit a curated request; returns run_id + SSE subscription immediately."""
     host = _state(request).host(mock=body.mock, observe_base_url=_observe_base(request))
     response = host.submit(
-        _run_request(body),
+        _run_request(body, budgets=host.config.policies.budgets),
         mock=body.mock,
         detach=not body.inline and not body.sync,
         inline_thread=body.inline and not body.sync,

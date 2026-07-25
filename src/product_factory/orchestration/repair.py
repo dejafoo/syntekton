@@ -118,9 +118,9 @@ def create_repair_tasks(
                 ],
                 allowed_path_patterns=allowed_path_patterns,
                 budget=TaskBudget(
-                    max_input_tokens=32_000,
+                    max_input_tokens=28_000,
                     max_output_tokens=8_000,
-                    max_tool_calls=15,
+                    max_tool_calls=40,
                     max_repair_attempts=1,
                     max_wall_clock_seconds=600,
                 ),

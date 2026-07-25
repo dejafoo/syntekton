@@ -20,9 +20,11 @@ from product_factory.connectors.defaults import default_connector_registry
 from product_factory.context.assembler import (
     assemble_context,
     list_repository_paths,
+    resolve_context_limits,
     select_repository_excerpts,
 )
 from product_factory.domain.artifacts import ResourceRef
+from product_factory.domain.budgets import TaskBudgetDefaults, clamp_task_budget
 from product_factory.domain.errors import (
     ApprovalBlockedError,
     BudgetExhaustedError,
@@ -545,6 +547,19 @@ def default_quality_gate_plan(request_text: str) -> PlannerOutput:
         validation_strategy="section checks, citation presence, secret scan",
         risk_classification="low",
     )
+
+
+def _clamp_proposal_budgets(proposal: PlannerOutput, config: AppConfig) -> PlannerOutput:
+    """Apply policy floors/ceilings to every task budget in a planned DAG."""
+    defaults = getattr(config.policies, "budgets", None)
+    task_defaults: TaskBudgetDefaults = (
+        defaults.task if defaults is not None else TaskBudgetDefaults()
+    )
+    clamped = [
+        task.model_copy(update={"budget": clamp_task_budget(task.budget, defaults=task_defaults)})
+        for task in proposal.tasks
+    ]
+    return proposal.model_copy(update={"tasks": clamped})
 
 
 def extract_unified_diff(text: str) -> str:
@@ -1350,6 +1365,7 @@ class RunCoordinator:
                     else None
                 ),
             )
+        proposal = _clamp_proposal_budgets(proposal, self.config)
         if request.workflow_type not in _CODE_CHANGE_WORKFLOW_TYPES:
             return proposal
         disable_review = request.metadata.get("disable_review") == "true"
@@ -2137,14 +2153,25 @@ class RunCoordinator:
         repository_excerpts: list[dict[str, str]] = []
         context_omissions: list[str] = []
         context_mode = str(request.metadata.get("context_mode") or "targeted").strip().lower()
+        profile_cfg = self.config.models.profiles.get(profile)
+        soft_limit = profile_cfg.context_soft_limit if profile_cfg is not None else None
+        packing_limits = resolve_context_limits(
+            self.config.policies.context,
+            task_max_input_tokens=task.budget.max_input_tokens,
+            model_context_soft_limit=soft_limit,
+        )
         if excerpt_root is not None:
             if context_mode in {"file_list_only", "file-list-only", "paths_only"}:
-                repository_excerpts, context_omissions = list_repository_paths(excerpt_root)
+                repository_excerpts, context_omissions = list_repository_paths(
+                    excerpt_root,
+                    max_files=packing_limits.max_file_list_paths,
+                )
             else:
                 repository_excerpts, context_omissions = select_repository_excerpts(
                     excerpt_root,
                     objective=f"{request.request_text}\n{task.objective}",
-                    max_chars=max(4_000, task.budget.max_input_tokens),
+                    max_files=packing_limits.max_excerpt_files,
+                    max_chars=packing_limits.max_excerpt_chars,
                 )
         runtime_directives: list[str] = []
         if registered_ids and task.capability in {"implementation", "repair"}:
@@ -2174,6 +2201,7 @@ class RunCoordinator:
             context_omissions=context_omissions,
             runtime_directives=runtime_directives or None,
             package_id=f"pkg-{task.id}",
+            packing=packing_limits,
         )
         (run_dir / "prompts" / f"{task.id}.manifest.json").write_text(
             ctx.manifest.model_dump_json(indent=2), encoding="utf-8"

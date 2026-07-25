@@ -17,7 +17,7 @@ from rich.table import Table
 from product_factory import __version__
 from product_factory.config.loader import PoliciesConfig, load_config
 from product_factory.domain import export_json_schemas
-from product_factory.domain.budgets import RunBudget
+from product_factory.domain.budgets import run_budget_from_policy
 from product_factory.domain.errors import ProductFactoryError
 from product_factory.domain.runs import RunRequest
 from product_factory.gateway.mock import MockGateway
@@ -228,7 +228,7 @@ def run_cmd(
         gateway=gateway,
         use_deterministic_planner=mock or isinstance(gateway, MockGateway),
     )
-    budget_kwargs: dict[str, Any] = {"max_cost_usd": Decimal(str(budget_usd))}
+    budget_kwargs: dict[str, Any] = {}
     if max_wall_clock_seconds is not None:
         budget_kwargs["max_wall_clock_seconds"] = max_wall_clock_seconds
     run_request = RunRequest(
@@ -238,7 +238,11 @@ def run_cmd(
         repository_path=repo.resolve() if repo else None,
         model_profile_set=profile,
         validation_commands=_parse_validation_commands(validation_command, validation_commands),
-        budget=RunBudget(**budget_kwargs),
+        budget=run_budget_from_policy(
+            max_cost_usd=Decimal(str(budget_usd)),
+            budgets=config.policies.budgets,
+            **budget_kwargs,
+        ),
     )
     try:
         manifest = coord.run(run_request)

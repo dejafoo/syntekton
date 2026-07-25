@@ -233,7 +233,7 @@ Skill packs keyed by domain (`coding/`, `architecture/`, `quality/`, `security/`
 | --- | --- |
 | `models.yaml` | Change model profiles, providers, pricing metadata |
 | `workflows.yaml` | Add workflow types / baseline validator lists |
-| `policies.yaml` | Register smoke commands, path prohibitions |
+| `policies.yaml` | Budgets, context packing, smoke commands, path prohibitions |
 | `connectors.yaml` | Enable / narrow connectors (egress, timeouts, write allowlist) |
 | `benchmarks.yaml` | Name ablations, default subjects, judge defaults |
 

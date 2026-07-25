@@ -8,13 +8,12 @@ import sys
 import uuid
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
 
 import typer
 import yaml
 
 from product_factory.config.loader import PoliciesConfig, load_config
-from product_factory.domain.budgets import RunBudget
+from product_factory.domain.budgets import run_budget_from_policy
 from product_factory.domain.errors import ProductFactoryError
 from product_factory.domain.runs import ArtifactOverride, RunRequest
 from product_factory.gateway.mock import MockGateway
@@ -159,9 +158,6 @@ def host_submit_cmd(
 ) -> None:
     """Submit a curated request and return run_id + subscription immediately."""
     service = _service(mock=mock, policy=policy)
-    budget_kwargs: dict[str, Any] = {"max_cost_usd": Decimal(str(budget_usd))}
-    if max_wall_clock_seconds is not None:
-        budget_kwargs["max_wall_clock_seconds"] = max_wall_clock_seconds
     run_request = RunRequest(
         request_id=f"req-{uuid.uuid4().hex[:8]}",
         workflow_type=workflow,  # type: ignore[arg-type]
@@ -170,7 +166,11 @@ def host_submit_cmd(
         model_profile_set=profile,
         validation_commands=_parse_validation_commands(validation_command, validation_commands),
         artifact_overrides=_parse_artifact_overrides(artifact_override, artifact_name),
-        budget=RunBudget(**budget_kwargs),
+        budget=run_budget_from_policy(
+            max_cost_usd=Decimal(str(budget_usd)),
+            budgets=service.config.policies.budgets,
+            max_wall_clock_seconds=max_wall_clock_seconds,
+        ),
     )
     response = service.submit(
         run_request,

@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from product_factory.domain.budgets import RunBudget
+from product_factory.domain.budgets import run_budget_from_policy
 from product_factory.domain.runs import ArtifactOverride, RunRequest
 from product_factory.host.protocol import HostResponse
 from product_factory.host.service import HostService
@@ -314,7 +314,10 @@ def pf_submit(service: HostService, arguments: dict[str, Any]) -> dict[str, Any]
         model_profile_set=profile,
         validation_commands=[str(c) for c in validation_commands],
         artifact_overrides=artifact_overrides,
-        budget=RunBudget(max_cost_usd=Decimal(str(budget_usd))),
+        budget=run_budget_from_policy(
+            max_cost_usd=Decimal(str(budget_usd)),
+            budgets=service.config.policies.budgets,
+        ),
     )
     return _as_json(
         service.submit(

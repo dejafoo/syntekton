@@ -140,11 +140,11 @@ def coerce_run_budget(
     max_tool_calls: int | None = None,
     max_command_seconds: int | None = None,
 ) -> RunBudget:
-    kwargs: dict[str, object] = {"max_cost_usd": parse_decimal(max_cost_usd)}
-    if max_wall_clock_seconds is not None:
-        kwargs["max_wall_clock_seconds"] = max_wall_clock_seconds
-    if max_tool_calls is not None:
-        kwargs["max_tool_calls"] = max_tool_calls
-    if max_command_seconds is not None:
-        kwargs["max_command_seconds"] = max_command_seconds
-    return RunBudget(**kwargs)  # type: ignore[arg-type]
+    from product_factory.domain.budgets import run_budget_from_policy
+
+    return run_budget_from_policy(
+        max_cost_usd=max_cost_usd,
+        max_wall_clock_seconds=max_wall_clock_seconds,
+        max_tool_calls=max_tool_calls,
+        max_command_seconds=max_command_seconds,
+    )
