@@ -35,11 +35,15 @@ def _broker(config: ConnectorsConfig) -> ConnectorBroker:
     )
 
 
-def test_no_connector_ships_enabled() -> None:
-    """A fresh install has no connectors registered, so nothing can be granted."""
+def test_shipped_connectors_are_registered_but_not_grantable_by_default() -> None:
+    """A fresh install registers connectors and grants none of them."""
     registry = default_connector_registry(ConnectorsConfig())
-    assert registry.tool_names() == frozenset()
-    assert ConnectorBroker(registry).grantable_tool_names({"web_read"}) == frozenset()
+    assert registry.tool_names(), "expected shipped connectors to be registered"
+
+    broker = ConnectorBroker(registry, config=ConnectorsConfig())
+    assert broker.enabled_tool_names() == frozenset()
+    for tool_class in registry.tool_names_by_class():
+        assert broker.grantable_tool_names({tool_class}) == frozenset()
 
 
 def test_requesting_the_tool_class_grants_an_enabled_connector() -> None:

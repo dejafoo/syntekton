@@ -40,7 +40,7 @@ def test_resolve_broker_tool_names_concrete_tool_passthrough() -> None:
     assert resolve_broker_tool_names("git_diff") == {"git_diff"}
 
 
-def test_resolve_broker_tool_names_network_access_always_empty() -> None:
+def test_resolve_broker_tool_names_network_access_is_empty_without_connectors() -> None:
     assert resolve_broker_tool_names("network_access") == frozenset()
 
 
@@ -48,8 +48,31 @@ def test_resolve_broker_tool_names_unknown_name_fails_closed_to_empty() -> None:
     assert resolve_broker_tool_names("totally_unknown_tool_name") == frozenset()
 
 
+def test_network_access_covers_every_registered_connector() -> None:
+    """The umbrella name must widen as connectors are added, not stay stale."""
+    connector_tools = {
+        "web_read": frozenset({"web_search"}),
+        "mcp_filesystem_read": frozenset({"mcp_read_file", "mcp_list_directory"}),
+    }
+    assert resolve_broker_tool_names("network_access", connector_tools=connector_tools) == {
+        "web_search",
+        "mcp_read_file",
+        "mcp_list_directory",
+    }
+
+
+def test_a_connector_tool_class_resolves_to_its_tools() -> None:
+    connector_tools = {"web_read": frozenset({"web_search"})}
+    assert resolve_broker_tool_names("web_read", connector_tools=connector_tools) == {"web_search"}
+    assert resolve_broker_tool_names("web_search", connector_tools=connector_tools) == {
+        "web_search"
+    }
+
+
 def test_matching_required_and_absent_prohibited_passes() -> None:
-    skill = _skill(required_tools=["repository_read", "git_diff"], prohibited_tools=["network_access"])
+    skill = _skill(
+        required_tools=["repository_read", "git_diff"], prohibited_tools=["network_access"]
+    )
     enforce_skill_grants(
         skills=[skill], granted_tool_names={"read_file", "list_files", "search_text", "git_diff"}
     )
@@ -75,12 +98,41 @@ def test_prohibited_tool_present_in_grant_fails_closed() -> None:
     assert "create_file" in excinfo.value.details["overlap"]
 
 
-def test_prohibited_network_access_never_violated_by_current_tool_surface() -> None:
+def test_prohibited_network_access_allows_a_repository_only_grant() -> None:
     skill = _skill(prohibited_tools=["network_access"])
     enforce_skill_grants(
         skills=[skill],
         granted_tool_names={"read_file", "list_files", "search_text", "create_file", "apply_patch"},
+        connector_tools={"web_read": frozenset({"web_search"})},
     )
+
+
+def test_prohibited_network_access_rejects_a_grant_holding_a_connector_tool() -> None:
+    """A skill that forbids egress must actually block a connector-backed grant."""
+    skill = _skill(prohibited_tools=["network_access"])
+    with pytest.raises(SkillGrantViolation) as excinfo:
+        enforce_skill_grants(
+            skills=[skill],
+            granted_tool_names={"read_file", "web_search"},
+            connector_tools={"web_read": frozenset({"web_search"})},
+        )
+    assert excinfo.value.details["overlap"] == ["web_search"]
+
+
+def test_a_skill_requiring_web_read_needs_the_connector_tool_granted() -> None:
+    skill = _skill(required_tools=["web_read"])
+    connector_tools = {"web_read": frozenset({"web_search"})}
+    enforce_skill_grants(
+        skills=[skill],
+        granted_tool_names={"read_file", "web_search"},
+        connector_tools=connector_tools,
+    )
+    with pytest.raises(SkillGrantViolation):
+        enforce_skill_grants(
+            skills=[skill],
+            granted_tool_names={"read_file"},
+            connector_tools=connector_tools,
+        )
 
 
 def test_multiple_skills_all_checked() -> None:

@@ -2155,7 +2155,11 @@ class RunCoordinator:
 
         # Fail closed before granting if a matched skill's declared tool policy
         # is inconsistent with the task's actual grant (P1.E).
-        enforce_skill_grants(skills=skills, granted_tool_names=granted)
+        enforce_skill_grants(
+            skills=skills,
+            granted_tool_names=granted,
+            connector_tools=self.connector_registry.tool_names_by_class(),
+        )
 
         broker.set_grant(
             CapabilityGrant(

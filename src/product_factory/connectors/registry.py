@@ -133,6 +133,13 @@ class ConnectorRegistry:
             return None
         return self._connectors[connector_id].manifest.tool_class
 
+    def tool_names_by_class(self) -> dict[str, frozenset[str]]:
+        """Connector tool names grouped by tool class."""
+        grouped: dict[str, set[str]] = {}
+        for entry in self._connectors.values():
+            grouped.setdefault(entry.manifest.tool_class, set()).update(entry.manifest.tool_names)
+        return {tool_class: frozenset(names) for tool_class, names in grouped.items()}
+
     def tool_names_for_classes(self, tool_classes: Iterable[str]) -> frozenset[str]:
         wanted = set(tool_classes)
         return frozenset(
