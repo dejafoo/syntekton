@@ -199,7 +199,7 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, decl: str)
 def _synchronized(method: Any) -> Any:
     """Serialize writes on the shared connection across concurrent wave threads (P1.F)."""
 
-    def wrapper(self: "Database", *args: Any, **kwargs: Any) -> Any:
+    def wrapper(self: Database, *args: Any, **kwargs: Any) -> Any:
         with self._lock:
             return method(self, *args, **kwargs)
 

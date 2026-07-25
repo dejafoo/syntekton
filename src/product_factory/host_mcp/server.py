@@ -15,7 +15,7 @@ import json
 import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, BinaryIO, TextIO, Literal
+from typing import Any, BinaryIO, Literal, TextIO
 
 from product_factory import __version__
 from product_factory.host.service import HostService

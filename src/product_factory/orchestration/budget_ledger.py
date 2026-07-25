@@ -104,7 +104,7 @@ class BudgetLedger:
         )
 
     @classmethod
-    def restore(cls, budget: RunBudget, snapshot: dict[str, object]) -> "BudgetLedger":
+    def restore(cls, budget: RunBudget, snapshot: dict[str, object]) -> BudgetLedger:
         """Rebuild a ledger from a persisted `snapshot()` for durable resume (P1.B).
 
         Cumulative usage/tool-calls/command-seconds carry over so a resumed
