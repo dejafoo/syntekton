@@ -257,9 +257,7 @@ def tool_schemas() -> list[dict[str, Any]]:
                     "roles": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": (
-                            "Limit to these deliverable roles (default: all landable)"
-                        ),
+                        "description": ("Limit to these deliverable roles (default: all landable)"),
                     },
                     "overwrite": {
                         "type": "boolean",

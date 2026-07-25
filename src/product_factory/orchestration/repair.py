@@ -90,9 +90,7 @@ def create_repair_tasks(
         idx += 1
         command_id = behavioral_command_id(fail.validator_id)
         title = (
-            f"Repair: behavioral ({command_id})"
-            if command_id
-            else f"Repair: {fail.validator_id}"
+            f"Repair: behavioral ({command_id})" if command_id else f"Repair: {fail.validator_id}"
         )
         repairs.append(
             TaskSpec(

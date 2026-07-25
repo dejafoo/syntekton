@@ -105,13 +105,9 @@ def test_pf_status_inspect_approve_reject_cancel_export() -> None:
 
     assert dispatch_tool(service, "pf_status", {"run_id": "run-1"})["status"] == "executing"
     assert (
-        dispatch_tool(service, "pf_inspect", {"run_id": "run-1"})["status"]
-        == "awaiting_approval"
+        dispatch_tool(service, "pf_inspect", {"run_id": "run-1"})["status"] == "awaiting_approval"
     )
-    assert (
-        dispatch_tool(service, "pf_approve", {"run_id": "run-1", "apply": True})["ok"]
-        is True
-    )
+    assert dispatch_tool(service, "pf_approve", {"run_id": "run-1", "apply": True})["ok"] is True
     service.approve.assert_called_with("run-1", apply=True)
     assert dispatch_tool(service, "pf_reject", {"run_id": "run-1"})["status"] == "blocked"
     assert dispatch_tool(service, "pf_cancel", {"run_id": "run-1"})["status"] == "cancelled"
@@ -282,9 +278,7 @@ def test_pf_submit_passes_artifact_overrides() -> None:
             "request_text": "Design an integration testing architecture.",
             "workflow": "technical_plan",
             "artifact_overrides": {
-                "architecture_document": {
-                    "dest_path": "docs/integration_testing_architecture.md"
-                }
+                "architecture_document": {"dest_path": "docs/integration_testing_architecture.md"}
             },
         },
     )

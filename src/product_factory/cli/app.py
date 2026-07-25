@@ -410,9 +410,7 @@ def bench_run_cmd(
     oracle_budget_usd: float = typer.Option(5.0, "--oracle-budget-usd"),
     mock: bool = typer.Option(True, "--mock/--live"),
     seeds: int = typer.Option(1, "--seeds", min=1, help="Independent runs per case/subject"),
-    case_ids: str | None = typer.Option(
-        None, "--case-ids", help="Comma-separated exact case ids"
-    ),
+    case_ids: str | None = typer.Option(None, "--case-ids", help="Comma-separated exact case ids"),
     resume: str | None = typer.Option(
         None,
         "--resume",
@@ -498,7 +496,9 @@ def bench_lessons_cmd(run_id: str = typer.Argument(..., help="Bench id")) -> Non
 @lessons_app.command("list")
 def lessons_list_cmd(
     bench: str = typer.Option(..., "--bench", help="Bench id"),
-    orch_only: bool = typer.Option(True, "--orch-only/--all", help="Default: actionable orch subjects"),
+    orch_only: bool = typer.Option(
+        True, "--orch-only/--all", help="Default: actionable orch subjects"
+    ),
     status: str | None = typer.Option(None, "--status", help="proposed|accepted|rejected|promoted"),
     theme: str | None = typer.Option(None, "--theme"),
 ) -> None:
@@ -582,9 +582,7 @@ def lessons_reject_cmd(
     if not lesson_id:
         console.print("[red]lesson id or --filter required[/red]")
         raise typer.Exit(2)
-    lesson = update_lesson_status(
-        pf_root, lesson_id, status="rejected", note=note, bench_id=bench
-    )
+    lesson = update_lesson_status(pf_root, lesson_id, status="rejected", note=note, bench_id=bench)
     console.print(f"[yellow]rejected[/yellow] {lesson.id}")
 
 
@@ -641,9 +639,7 @@ def _serve_api(
         except ProductFactoryError:
             root = Path(".product-factory")
     origins = [o.strip() for o in cors.split(",") if o.strip()] or None
-    console.print(
-        f"Control + observability API on http://{host}:{port} (data={root.resolve()})"
-    )
+    console.print(f"Control + observability API on http://{host}:{port} (data={root.resolve()})")
     serve(root, host=host, port=port, cors_origins=origins)
 
 

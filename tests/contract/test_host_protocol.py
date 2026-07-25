@@ -789,9 +789,7 @@ def test_host_quality_gate_submit_inspect_and_materialize_all(tmp_path: Path) ->
             repository_path=fixture,
             budget=RunBudget(max_cost_usd=Decimal("3.00")),
             approval_policy="none",
-            artifact_overrides={
-                "quality_findings": {"dest_path": "docs/qa/release_readiness.md"}
-            },
+            artifact_overrides={"quality_findings": {"dest_path": "docs/qa/release_readiness.md"}},
         ),
         mock=True,
         detach=False,

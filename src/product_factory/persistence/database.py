@@ -570,9 +570,7 @@ class Database:
         return [dict(r) for r in rows]
 
     def get_artifact(self, sha256: str) -> dict[str, Any] | None:
-        row = self.conn.execute(
-            "SELECT * FROM artifacts WHERE sha256 = ?", (sha256,)
-        ).fetchone()
+        row = self.conn.execute("SELECT * FROM artifacts WHERE sha256 = ?", (sha256,)).fetchone()
         return dict(row) if row else None
 
     @_synchronized
@@ -673,7 +671,7 @@ class Database:
         params.append(limit)
         sql = f"""
             SELECT * FROM events
-            WHERE {' AND '.join(clauses)}
+            WHERE {" AND ".join(clauses)}
             ORDER BY seq ASC
             LIMIT ?
         """

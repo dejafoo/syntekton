@@ -53,9 +53,7 @@ def test_mock_investigation_produces_report_without_write_tools(tmp_path: Path) 
     assert validate_investigation_document(report).status == "pass"
     assert validate_citations(report).status == "pass"
 
-    tool_names = {
-        row["tool_name"] for row in coord.db.list_tool_calls(manifest.run_id)
-    }
+    tool_names = {row["tool_name"] for row in coord.db.list_tool_calls(manifest.run_id)}
     assert "create_file" not in tool_names
     assert "apply_patch" not in tool_names
     assert tool_names & {"list_files", "read_file", "search_text", "git_diff", "git_status"}

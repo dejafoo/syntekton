@@ -118,9 +118,7 @@ def test_events_cursor_and_filter(api_env) -> None:
         "/api/v1/runs/run-api/events", params={"after_seq": cursor, "limit": 10}
     ).json()
     assert len(page2["items"]) == 2
-    filtered = client.get(
-        "/api/v1/runs/run-api/events", params={"types": "task.started"}
-    ).json()
+    filtered = client.get("/api/v1/runs/run-api/events", params={"types": "task.started"}).json()
     assert all(i["type"] == "task.started" for i in filtered["items"])
 
 
@@ -167,7 +165,10 @@ def test_dashboard_projections_and_scoped_content(api_env) -> None:
     assert metadata_body.json()["capture_level"] == "metadata"
 
     db.upsert_run(run_id="run-other", workflow_type="code_change", status="completed", request={})
-    assert client.get(f"/api/v1/runs/run-other/artifacts/{artifact['sha256']}/content").status_code == 404
+    assert (
+        client.get(f"/api/v1/runs/run-other/artifacts/{artifact['sha256']}/content").status_code
+        == 404
+    )
 
 
 def test_dashboard_shell_is_packaged(api_env) -> None:

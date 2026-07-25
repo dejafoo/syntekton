@@ -161,7 +161,11 @@ def score_seeded_review_detection(
     cited = False
     for finding in blocking:
         blob = " ".join(
-            [finding.summary, finding.explanation or "", *(r.scope or "" for r in finding.evidence_refs)]
+            [
+                finding.summary,
+                finding.explanation or "",
+                *(r.scope or "" for r in finding.evidence_refs),
+            ]
         )
         if any(path in blob for path in seeded_paths):
             cited = True

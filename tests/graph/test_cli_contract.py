@@ -38,9 +38,7 @@ def _request_file(tmp_path: Path, text: str) -> Path:
     return path
 
 
-def test_run_cli_mock_completes_and_writes_validation_commands(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_run_cli_mock_completes_and_writes_validation_commands(tmp_path: Path, monkeypatch) -> None:
     project = _project_root(tmp_path)
     fixture = _fixture_repo(tmp_path)
     request = _request_file(tmp_path, "Add a validated health-check endpoint with tests.")

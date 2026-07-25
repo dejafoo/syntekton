@@ -242,9 +242,7 @@ def default_code_change_plan(request_text: str) -> PlannerOutput:
     high_risk = any(term in request_text.lower() for term in risk_terms)
     if not high_risk:
         implementation = proposal.tasks[1].model_copy(update={"dependencies": []})
-        composition = proposal.tasks[3].model_copy(
-            update={"dependencies": [implementation.id]}
-        )
+        composition = proposal.tasks[3].model_copy(update={"dependencies": [implementation.id]})
         proposal = proposal.model_copy(
             update={
                 "tasks": [implementation, composition],
@@ -576,7 +574,9 @@ def extract_unified_diff(text: str) -> str:
     return ""
 
 
-def deterministic_impl_files(request_text: str, *, task_objective: str = "") -> list[tuple[str, str]]:
+def deterministic_impl_files(
+    request_text: str, *, task_objective: str = ""
+) -> list[tuple[str, str]]:
     """
     Request-aware offline/mock implementation.
 
@@ -1001,9 +1001,7 @@ class RunCoordinator:
             except Exception:
                 events.emit(run_id, "run.failed", {"error": str(exc)})
             details = getattr(exc, "details", None)
-            budget_snapshot = (
-                details.get("ledger") if isinstance(details, dict) else None
-            )
+            budget_snapshot = details.get("ledger") if isinstance(details, dict) else None
             # `_execute` persists usage after every task; reload it so this
             # terminal-status write doesn't clobber accumulated usage with `{}`.
             existing_row = self.db.get_run(run_id)
@@ -1092,9 +1090,7 @@ class RunCoordinator:
             self.db, jsonl=events, content_dir=run_dir / "content", otel_exporter=otel
         )
 
-        budget_snapshot = (
-            json.loads(run_row["budget_json"]) if run_row.get("budget_json") else None
-        )
+        budget_snapshot = json.loads(run_row["budget_json"]) if run_row.get("budget_json") else None
         ledger = (
             BudgetLedger.restore(request.budget, budget_snapshot)
             if budget_snapshot
@@ -1114,9 +1110,7 @@ class RunCoordinator:
             raise ConfigurationError(
                 f"No persisted plan for run {run_id}; cannot resume before planning completed"
             )
-        proposal = PlannerOutput.model_validate(
-            json.loads(plan_path.read_text(encoding="utf-8"))
-        )
+        proposal = PlannerOutput.model_validate(json.loads(plan_path.read_text(encoding="utf-8")))
         compile_result = compile_plan(
             proposal,
             max_tasks=request.budget.max_tasks,
@@ -1233,9 +1227,7 @@ class RunCoordinator:
                 "completed_tasks": sorted(
                     tid for tid, st in task_status.items() if st in {"success", "skipped"}
                 ),
-                "pending_tasks": sorted(
-                    tid for tid, st in task_status.items() if st == "pending"
-                ),
+                "pending_tasks": sorted(tid for tid, st in task_status.items() if st == "pending"),
             },
         )
         self.db.upsert_run(
@@ -1333,10 +1325,7 @@ class RunCoordinator:
         planner_mode = str(request.metadata.get("planner_mode") or "").strip().lower()
         force_fixed = planner_mode in {"fixed", "complexity_sensitive", "deterministic"}
         force_live = planner_mode == "live"
-        use_deterministic = (
-            force_fixed
-            or (self.use_deterministic_planner and not force_live)
-        )
+        use_deterministic = force_fixed or (self.use_deterministic_planner and not force_live)
         if use_deterministic:
             if request.workflow_type in _TECHNICAL_PLAN_WORKFLOW_TYPES:
                 proposal = default_technical_plan(request.request_text)
@@ -1385,9 +1374,7 @@ class RunCoordinator:
             tasks = [
                 task.model_copy(
                     update={
-                        "dependencies": [
-                            dep for dep in task.dependencies if dep not in review_ids
-                        ]
+                        "dependencies": [dep for dep in task.dependencies if dep not in review_ids]
                     }
                 )
                 for task in tasks
@@ -1564,9 +1551,7 @@ class RunCoordinator:
                         if result.status not in {"success", "partial"}
                     ]
                     if failed:
-                        raise RuntimeFailureError(
-                            "Dependency failed; " + "; ".join(failed)
-                        )
+                        raise RuntimeFailureError("Dependency failed; " + "; ".join(failed))
                     raise RuntimeFailureError(f"Unsatisfiable dependencies for tasks: {pending}")
                 break
 
@@ -1601,9 +1586,7 @@ class RunCoordinator:
                             if ref.media_type.startswith("text/")
                             or ref.media_type == "application/json"
                         ],
-                        "findings": [
-                            finding.model_dump(mode="json") for finding in prior.findings
-                        ],
+                        "findings": [finding.model_dump(mode="json") for finding in prior.findings],
                     }
                     for prior in pre_wave_results
                     if prior.task_id in transitive_dependencies(live_plan, task.id)
@@ -1672,9 +1655,7 @@ class RunCoordinator:
                 findings.extend(result.findings)
                 recorder.emit(
                     run_id=run_id,
-                    event_type="task.completed"
-                    if result.status == "success"
-                    else "task.failed",
+                    event_type="task.completed" if result.status == "success" else "task.failed",
                     task_id=task.id,
                     summary=f"Task {task.id} {result.status}",
                     payload={
@@ -1778,10 +1759,9 @@ class RunCoordinator:
                         # Reporting packs surface defects for a human to act on;
                         # they hold no write grants and cannot repair anything.
                         blocking_findings = []
-                    if (
-                        live_plan.tasks[result.task_id].capability == "repair"
-                        and not has_blocking_failures(validation_results)
-                    ):
+                    if live_plan.tasks[
+                        result.task_id
+                    ].capability == "repair" and not has_blocking_failures(validation_results):
                         origin = repair_origins.get(result.task_id)
                         if origin is not None and task_status.get(origin) == "failed":
                             task_status[origin] = "skipped"
@@ -1795,9 +1775,7 @@ class RunCoordinator:
                             or has_blocking_failures(validation_results)
                             or blocking_findings
                         )
-                        and repair_count < (
-                            request.budget.max_total_repair_tasks
-                        )
+                        and repair_count < (request.budget.max_total_repair_tasks)
                     ):
                         origin_task = live_plan.tasks[result.task_id]
                         attempts = origin_repair_attempts.get(result.task_id, 0)
@@ -1810,9 +1788,7 @@ class RunCoordinator:
                                 summary="Per-task repair budget exhausted",
                                 payload={
                                     "attempts": attempts,
-                                    "max_repair_attempts": (
-                                        origin_task.budget.max_repair_attempts
-                                    ),
+                                    "max_repair_attempts": (origin_task.budget.max_repair_attempts),
                                 },
                             )
                         else:
@@ -1834,15 +1810,11 @@ class RunCoordinator:
                                     result.task_id
                                 ].allowed_path_patterns,
                                 next_id_start=repair_count + 1,
-                                registered_command_ids=self._resolve_validation_command_ids(
-                                    request
-                                )
+                                registered_command_ids=self._resolve_validation_command_ids(request)
                                 or list(self.config.policies.registered_commands),
                             )
                             repair_limit = (
-                                1
-                                if result.status != "success"
-                                else request.budget.max_task_repairs
+                                1 if result.status != "success" else request.budget.max_task_repairs
                             )
                             created_any = False
                             for rt in repairs[:repair_limit]:
@@ -1869,9 +1841,7 @@ class RunCoordinator:
                                             update={
                                                 "dependencies": (
                                                     [
-                                                        rt.id
-                                                        if dep == result.task_id
-                                                        else dep
+                                                        rt.id if dep == result.task_id else dep
                                                         for dep in downstream.dependencies
                                                     ]
                                                     if result.status != "success"
@@ -1952,9 +1922,7 @@ class RunCoordinator:
                     dependency_outputs=[],
                     document_name=evidence_name,
                 )
-            (run_dir / "output" / evidence_name).write_text(
-                evidence_report_md, encoding="utf-8"
-            )
+            (run_dir / "output" / evidence_name).write_text(evidence_report_md, encoding="utf-8")
             validation_results.append(validate_investigation_document(evidence_report_md))
             validation_results.append(validate_citations(evidence_report_md))
             validation_results.append(validate_secrets(evidence_report_md))
@@ -1976,9 +1944,7 @@ class RunCoordinator:
                             )
                         )
                     continue
-                (run_dir / "output" / entry.logical_name).write_text(
-                    document, encoding="utf-8"
-                )
+                (run_dir / "output" / entry.logical_name).write_text(document, encoding="utf-8")
                 validation_results.append(
                     validate_document_sections(
                         document,
@@ -1997,9 +1963,7 @@ class RunCoordinator:
                 architecture_md = self._compose_architecture(
                     request.request_text, findings, document_name=architecture_name
                 )
-            (run_dir / "output" / architecture_name).write_text(
-                architecture_md, encoding="utf-8"
-            )
+            (run_dir / "output" / architecture_name).write_text(architecture_md, encoding="utf-8")
             validation_results.append(validate_architecture_document(architecture_md))
             must_cover = [
                 item.strip()
@@ -2254,13 +2218,11 @@ class RunCoordinator:
                     "composition",
                     "independent_review",
                 }:
-                    superseded = (
-                        {
-                            predecessor
-                            for dependency in dependency_outputs or []
-                            for predecessor in dependency.get("dependencies", [])
-                        }
-                    )
+                    superseded = {
+                        predecessor
+                        for dependency in dependency_outputs or []
+                        for predecessor in dependency.get("dependencies", [])
+                    }
                     owned_paths: dict[str, str] = {}
                     for dependency in dependency_outputs or []:
                         if dependency.get("task_id") in superseded:
@@ -2475,19 +2437,13 @@ class RunCoordinator:
             )
             tool_call_ids.append(listing["tool_call_id"])
             listed_paths = [
-                str(entry.get("path", ""))
-                if isinstance(entry, dict)
-                else str(entry)
+                str(entry.get("path", "")) if isinstance(entry, dict) else str(entry)
                 for entry in listing.get("files", [])
             ]
             report = {
                 "files": listed_paths[:50],
                 "languages": sorted(
-                    {
-                        Path(path).suffix.lstrip(".")
-                        for path in listed_paths
-                        if Path(path).suffix
-                    }
+                    {Path(path).suffix.lstrip(".") for path in listed_paths if Path(path).suffix}
                 ),
                 "entry_points": [
                     path
@@ -2495,16 +2451,11 @@ class RunCoordinator:
                     if Path(path).name
                     in {"main.py", "app.py", "cli.py", "index.ts", "package.json"}
                 ][:20],
-                "tests": [
-                    path
-                    for path in listed_paths
-                    if "test" in Path(path).name.lower()
-                ][:20],
+                "tests": [path for path in listed_paths if "test" in Path(path).name.lower()][:20],
                 "configuration": [
                     path
                     for path in listed_paths
-                    if Path(path).name
-                    in {"pyproject.toml", "package.json", "Cargo.toml", "go.mod"}
+                    if Path(path).name in {"pyproject.toml", "package.json", "Cargo.toml", "go.mod"}
                 ][:20],
                 "relevant_excerpts": repository_excerpts,
                 "conventions": "Derived from repository paths and targeted excerpts",
@@ -2643,9 +2594,7 @@ class RunCoordinator:
                         )
                         tool_call_ids.append(out["tool_call_id"])
                         changed_files.extend(self._changed_files_from_patch(patch_text))
-                    diff_probe = broker.execute(
-                        task_id=task.id, tool_name="git_diff", arguments={}
-                    )
+                    diff_probe = broker.execute(task_id=task.id, tool_name="git_diff", arguments={})
                     tool_call_ids.append(diff_probe["tool_call_id"])
                     applied = bool((diff_probe.get("patch") or "").strip())
                     if applied:
@@ -2746,9 +2695,7 @@ class RunCoordinator:
                 if lineage_path.exists():
                     lineage = json.loads(lineage_path.read_text(encoding="utf-8"))
                     lineage["post_patch_fingerprint"] = patch_fingerprint(patch_body)
-                    lineage_path.write_text(
-                        json.dumps(lineage, indent=2), encoding="utf-8"
-                    )
+                    lineage_path.write_text(json.dumps(lineage, indent=2), encoding="utf-8")
             elif not is_offline:
                 result_status = "failed"
                 summary = summary or "invalid_patch_format"
@@ -2786,8 +2733,7 @@ class RunCoordinator:
                 )
             if self.allow_deterministic_workers:
                 expect_blocking = (
-                    str(request.metadata.get("seed_review_expect_blocking") or "").lower()
-                    == "true"
+                    str(request.metadata.get("seed_review_expect_blocking") or "").lower() == "true"
                 )
                 seeded_paths = [
                     p.strip()
@@ -2807,9 +2753,7 @@ class RunCoordinator:
                                 "Deterministic mock reviewer detected the seeded broken "
                                 f"implementation at {evidence_path}."
                             ),
-                            evidence_refs=[
-                                patch_ref.model_copy(update={"scope": evidence_path})
-                            ],
+                            evidence_refs=[patch_ref.model_copy(update={"scope": evidence_path})],
                             recommended_action=f"Repair the defect in {evidence_path}",
                             confidence=0.9,
                             produced_by=profile,
@@ -2824,9 +2768,7 @@ class RunCoordinator:
                             severity="minor",
                             summary=f"Style-only note on {evidence_path}",
                             explanation="Cosmetic naming preference; not a correctness defect.",
-                            evidence_refs=[
-                                patch_ref.model_copy(update={"scope": evidence_path})
-                            ],
+                            evidence_refs=[patch_ref.model_copy(update={"scope": evidence_path})],
                             recommended_action="Optional rename; do not block merge",
                             confidence=0.8,
                             produced_by=profile,
@@ -3030,9 +2972,7 @@ class RunCoordinator:
                             patch_fingerprint(patch) if patch else None
                         )
                         lineage["post_patch_fingerprint"] = lineage["final_patch_fingerprint"]
-                        lineage_path.write_text(
-                            json.dumps(lineage, indent=2), encoding="utf-8"
-                        )
+                        lineage_path.write_text(json.dumps(lineage, indent=2), encoding="utf-8")
                 else:
                     summary = "Nothing to compose"
         elif task.capability in {"architecture", "requirements"}:
@@ -3416,10 +3356,7 @@ class RunCoordinator:
         if not cited_paths:
             cited_paths = ["README.md"]
         cited_paths = cited_paths[:20]
-        finding_lines = [
-            f"- {f.summary} (see `{cited_paths[0]}`)"
-            for f in findings
-        ] or [
+        finding_lines = [f"- {f.summary} (see `{cited_paths[0]}`)" for f in findings] or [
             f"- Request focuses on: {request_text.strip()[:240] or 'repository structure'}",
             f"- Observed entry points and modules under `{cited_paths[0]}`",
         ]
@@ -3592,9 +3529,7 @@ class RunCoordinator:
             ]
             return "\n".join(sections) + "\n"
 
-        blocking = [
-            finding for finding in inherited if str(finding.get("severity")) == "blocking"
-        ]
+        blocking = [finding for finding in inherited if str(finding.get("severity")) == "blocking"]
         finding_lines = [
             f"- [{finding.get('severity') or 'minor'}] "
             f"{finding.get('summary') or 'Finding'} — see "
@@ -3730,9 +3665,7 @@ class RunCoordinator:
                         approval = {}
                     approval["status"] = "cancelled"
                     approval["decided_at"] = datetime.now(UTC).isoformat()
-                    approval_path.write_text(
-                        json.dumps(approval, indent=2), encoding="utf-8"
-                    )
+                    approval_path.write_text(json.dumps(approval, indent=2), encoding="utf-8")
             recorder.emit(
                 run_id=run_id,
                 event_type="run.cancelled",
@@ -3784,9 +3717,7 @@ class RunCoordinator:
         revised_text = request.request_text.rstrip()
         if note not in revised_text:
             revised_text = f"{revised_text}\n\n## Operator revision\n{note}\n"
-        revised = request.model_copy(
-            update={"request_text": revised_text, "metadata": metadata}
-        )
+        revised = request.model_copy(update={"request_text": revised_text, "metadata": metadata})
 
         revisions_path = run_dir / "output" / "revisions.jsonl"
         with revisions_path.open("a", encoding="utf-8") as fh:

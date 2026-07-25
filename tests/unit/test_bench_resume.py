@@ -19,7 +19,9 @@ def test_resume_skips_scored_pairs(tmp_path: Path, monkeypatch) -> None:
     for name in ("models.yaml", "policies.yaml", "workflows.yaml"):
         src = root / "config" / name
         if src.exists():
-            (tmp_path / "config" / name).write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+            (tmp_path / "config" / name).write_text(
+                src.read_text(encoding="utf-8"), encoding="utf-8"
+            )
     cases = tmp_path / "cases"
     cases.mkdir()
     # Copy two tiny cases from repo if present, else write stubs

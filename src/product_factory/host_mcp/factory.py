@@ -22,9 +22,7 @@ def _gateway_from_config(config, *, force_mock: bool = False):
         }
         for name, p in config.models.profiles.items()
     }
-    if os.environ.get("OPENROUTER_API_KEY") and not os.environ.get(
-        "PRODUCT_FACTORY_FORCE_MOCK"
-    ):
+    if os.environ.get("OPENROUTER_API_KEY") and not os.environ.get("PRODUCT_FACTORY_FORCE_MOCK"):
         return OpenRouterGateway(profile_models=profiles)
     return MockGateway()
 
@@ -74,9 +72,7 @@ def build_host_service(
 ) -> HostService:
     """Construct HostService from env / cwd / package config."""
     force_mock = (
-        bool(mock)
-        if mock is not None
-        else bool(os.environ.get("PRODUCT_FACTORY_FORCE_MOCK"))
+        bool(mock) if mock is not None else bool(os.environ.get("PRODUCT_FACTORY_FORCE_MOCK"))
     )
     root = resolve_mcp_config_root(project_root)
     config = load_config(root)

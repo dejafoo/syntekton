@@ -39,14 +39,10 @@ def test_git_diff_includes_untracked(tmp_path: Path) -> None:
     subprocess.run(
         ["git", "config", "user.email", "t@example.com"], cwd=repo, check=True, capture_output=True
     )
-    subprocess.run(
-        ["git", "config", "user.name", "t"], cwd=repo, check=True, capture_output=True
-    )
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, capture_output=True)
     (repo / "README").write_text("x\n", encoding="utf-8")
     subprocess.run(["git", "add", "README"], cwd=repo, check=True, capture_output=True)
-    subprocess.run(
-        ["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True
-    )
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True)
     base = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
     ).stdout.strip()

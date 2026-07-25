@@ -45,9 +45,7 @@ def build_comparison(
     for case_id in case_ids:
         matrix[case_id] = {}
         for subject in subjects:
-            hits = [
-                s for s in scores if s.case_id == case_id and s.subject_id == subject
-            ]
+            hits = [s for s in scores if s.case_id == case_id and s.subject_id == subject]
             if hits:
                 matrix[case_id][subject] = {
                     "usable": all(h.final_usable for h in hits),
@@ -84,19 +82,16 @@ def build_comparison(
         ]
         entry: dict[str, Any] = {}
         if orch and single:
-            entry["orch_minus_single_quality"] = (
-                sum(s.normalized_quality for s in orch) / len(orch)
-                - sum(s.normalized_quality for s in single) / len(single)
-            )
-            entry["orch_minus_single_usable_rate"] = (
-                sum(s.final_usable for s in orch) / len(orch)
-                - sum(s.final_usable for s in single) / len(single)
-            )
+            entry["orch_minus_single_quality"] = sum(s.normalized_quality for s in orch) / len(
+                orch
+            ) - sum(s.normalized_quality for s in single) / len(single)
+            entry["orch_minus_single_usable_rate"] = sum(s.final_usable for s in orch) / len(
+                orch
+            ) - sum(s.final_usable for s in single) / len(single)
         if orch and frontier:
-            entry["orch_minus_frontier_quality"] = (
-                sum(s.normalized_quality for s in orch) / len(orch)
-                - sum(s.normalized_quality for s in frontier) / len(frontier)
-            )
+            entry["orch_minus_frontier_quality"] = sum(s.normalized_quality for s in orch) / len(
+                orch
+            ) - sum(s.normalized_quality for s in frontier) / len(frontier)
         if entry:
             deltas[case_id] = entry
 
@@ -129,9 +124,7 @@ def build_comparison(
                 else None
             ),
             "total_subject_cost_usd": str(total_cost),
-            "cost_per_usable_artifact": (
-                str(total_cost / usable_count) if usable_count else None
-            ),
+            "cost_per_usable_artifact": (str(total_cost / usable_count) if usable_count else None),
             "latency_per_usable_artifact_ms": (
                 sum(score.subject_latency_ms for score in hits) / usable_count
                 if usable_count
@@ -159,11 +152,7 @@ def build_comparison(
         case = case_map.get(score.case_id)
         labels = [
             f"workflow:{case.workflow_type}" if case else "workflow:unknown",
-            (
-                "validation:behavioral"
-                if case and case.smoke_commands
-                else "validation:structural"
-            ),
+            ("validation:behavioral" if case and case.smoke_commands else "validation:structural"),
             (
                 f"complexity:{case.metadata.get('complexity', 'unspecified')}"
                 if case
@@ -215,9 +204,7 @@ def _wilson_interval(successes: int, total: int, z: float = 1.96) -> list[float]
     return [max(0.0, center - margin), min(1.0, center + margin)]
 
 
-def _paired_usable_bootstrap(
-    scores: list[EvaluationScore], samples: int = 2000
-) -> dict[str, Any]:
+def _paired_usable_bootstrap(scores: list[EvaluationScore], samples: int = 2000) -> dict[str, Any]:
     by_key = {(s.case_id, s.seed, s.subject_id): s for s in scores}
     pairs: list[float] = []
     for case_id, seed, subject in sorted(by_key):
@@ -230,9 +217,7 @@ def _paired_usable_bootstrap(
     if not pairs:
         return {}
     rng = random.Random(0)
-    boot = sorted(
-        sum(rng.choice(pairs) for _ in pairs) / len(pairs) for _ in range(samples)
-    )
+    boot = sorted(sum(rng.choice(pairs) for _ in pairs) / len(pairs) for _ in range(samples))
     return {
         "orch_minus_single_usable_rate": {
             "estimate": sum(pairs) / len(pairs),
@@ -267,9 +252,7 @@ def report_to_markdown(report: ComparisonReport) -> str:
                 cells.append("-")
             else:
                 mark = "OK" if cell["usable_rate"] >= 0.5 else "FAIL"
-                cells.append(
-                    f"{mark} usable={cell['usable_rate']:.0%} q={cell['quality']:.2f}"
-                )
+                cells.append(f"{mark} usable={cell['usable_rate']:.0%} q={cell['quality']:.2f}")
         lines.append(f"| {case_id} | " + " | ".join(cells) + " |")
     if report.deltas:
         lines.extend(["", "## Deltas (orchestration vs baselines)", ""])

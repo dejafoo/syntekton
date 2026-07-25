@@ -50,7 +50,14 @@ def _decimal(value: Any) -> Decimal:
 
 
 def _usage_totals(items: list[dict[str, Any]]) -> dict[str, Any]:
-    keys = ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens", "latency_ms", "retries")
+    keys = (
+        "input_tokens",
+        "cached_input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "latency_ms",
+        "retries",
+    )
     result: dict[str, Any] = {key: 0 for key in keys}
     result["estimated_cost_usd"] = Decimal("0")
     result["reported_cost_usd"] = Decimal("0")
@@ -163,9 +170,7 @@ class ObservabilityQueryService:
         limit: int = 200,
         types: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        rows = self.db.list_events(
-            run_id=run_id, after_seq=after_seq, limit=limit, types=types
-        )
+        rows = self.db.list_events(run_id=run_id, after_seq=after_seq, limit=limit, types=types)
         out: list[dict[str, Any]] = []
         for r in rows:
             out.append(
@@ -259,10 +264,12 @@ class ObservabilityQueryService:
             # runs (for example every plan has a `plan` task).
             owned_blob = run_dir / "artifacts" / "blobs" / a["sha256"]
             if owned_blob.is_file() and (
-                a.get("created_by_task_id") in task_ids or a.get("created_by_task_id") in {
-                "compose",
-                "plan",
-                "system",
+                a.get("created_by_task_id") in task_ids
+                or a.get("created_by_task_id")
+                in {
+                    "compose",
+                    "plan",
+                    "system",
                 }
             ):
                 views.append(
@@ -311,7 +318,9 @@ class ObservabilityQueryService:
             if task.capability != "repair":
                 continue
             direct = [dep for dep in task.dependencies if dep in task_by_id]
-            origin = next((dep for dep in direct if task_by_id[dep].status in {"failed", "blocked"}), None)
+            origin = next(
+                (dep for dep in direct if task_by_id[dep].status in {"failed", "blocked"}), None
+            )
             # Older runs can replace a failed task's dependency with its repair.
             # The best durable derivation available is the most recent failed task.
             if origin is None and failed:
@@ -330,7 +339,8 @@ class ObservabilityQueryService:
                     "supersedes": [
                         candidate.task_id
                         for candidate in tasks
-                        if candidate.task_id != task.task_id and task.task_id in candidate.dependencies
+                        if candidate.task_id != task.task_id
+                        and task.task_id in candidate.dependencies
                     ],
                 }
             )
@@ -353,7 +363,9 @@ class ObservabilityQueryService:
         by_model: dict[tuple[str | None, str | None, str], list[dict[str, Any]]] = defaultdict(list)
         for item in parsed:
             by_task[item["task_id"]].append(item["usage"])
-            by_model[(item.get("provider"), item.get("resolved_model_id"), item["model_profile"])].append(item["usage"])
+            by_model[
+                (item.get("provider"), item.get("resolved_model_id"), item["model_profile"])
+            ].append(item["usage"])
         task_rows = [self._cost_row({"task_id": key}, values) for key, values in by_task.items()]
         model_rows = [
             self._cost_row(
@@ -368,14 +380,26 @@ class ObservabilityQueryService:
             req = _json_loads(row.get("request_json"), {})
             budget = req.get("budget") if isinstance(req, dict) else {}
         max_cost = _decimal(budget.get("max_cost_usd") if isinstance(budget, dict) else 0)
-        spend = _decimal(total["reported_cost_usd"] if basis == "reported" else total["estimated_cost_usd"])
+        spend = _decimal(
+            total["reported_cost_usd"] if basis == "reported" else total["estimated_cost_usd"]
+        )
         total["remaining_budget_usd"] = str(max(max_cost - spend, Decimal("0")))
-        return CostView(run_id=run_id, basis=basis, total=total, budget=budget or {}, ledger=ledger if isinstance(ledger, dict) else {}, by_task=task_rows, by_model=model_rows)
+        return CostView(
+            run_id=run_id,
+            basis=basis,
+            total=total,
+            budget=budget or {},
+            ledger=ledger if isinstance(ledger, dict) else {},
+            by_task=task_rows,
+            by_model=model_rows,
+        )
 
     def artifact_content(self, run_id: str, sha256: str) -> ContentView | None:
         if not _SHA256.fullmatch(sha256):
             return None
-        artifact = next((item for item in self.list_artifacts_for_run(run_id) if item.sha256 == sha256), None)
+        artifact = next(
+            (item for item in self.list_artifacts_for_run(run_id) if item.sha256 == sha256), None
+        )
         run_dir = self._run_dir(run_id)
         if artifact is None or run_dir is None:
             return None
@@ -396,14 +420,32 @@ class ObservabilityQueryService:
         except ValueError:
             level = CaptureLevel.METADATA
         if level in {CaptureLevel.OFF, CaptureLevel.METADATA}:
-            return ContentView(sha256=sha256, available=False, capture_level=level, media_type=ref.get("media_type"), byte_count=ref.get("byte_count"))
+            return ContentView(
+                sha256=sha256,
+                available=False,
+                capture_level=level,
+                media_type=ref.get("media_type"),
+                byte_count=ref.get("byte_count"),
+            )
         run_dir = self._run_dir(run_id)
         if run_dir is None:
             return None
         path = run_dir / "content" / sha256
         if not path.is_file():
-            return ContentView(sha256=sha256, available=False, capture_level=level, media_type=ref.get("media_type"), byte_count=ref.get("byte_count"))
-        return self._content_view(sha256, path, media_type=ref.get("media_type"), capture_level=level, byte_count=ref.get("byte_count"))
+            return ContentView(
+                sha256=sha256,
+                available=False,
+                capture_level=level,
+                media_type=ref.get("media_type"),
+                byte_count=ref.get("byte_count"),
+            )
+        return self._content_view(
+            sha256,
+            path,
+            media_type=ref.get("media_type"),
+            capture_level=level,
+            byte_count=ref.get("byte_count"),
+        )
 
     def _cost_row(self, labels: dict[str, Any], usages: list[dict[str, Any]]) -> dict[str, Any]:
         totals = _usage_totals(usages)

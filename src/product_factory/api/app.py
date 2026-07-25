@@ -65,7 +65,11 @@ def create_app(
     if dashboard_dir.is_dir():
         # Deliberately mounted after /api/v1 and docs: this is a single-user
         # local UI, not a second backend or a mutation surface.
-        app.mount("/dashboard/assets", StaticFiles(directory=dashboard_dir / "assets"), name="dashboard-assets")
+        app.mount(
+            "/dashboard/assets",
+            StaticFiles(directory=dashboard_dir / "assets"),
+            name="dashboard-assets",
+        )
 
         @app.get("/dashboard/{path:path}", include_in_schema=False)
         async def dashboard(path: str = "") -> FileResponse:
@@ -80,9 +84,7 @@ def create_app(
             raw = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
             sub = json.loads(raw)
         except Exception as exc:  # noqa: BLE001
-            await websocket.send_json(
-                {"type": "error", "summary": f"Invalid subscription: {exc}"}
-            )
+            await websocket.send_json({"type": "error", "summary": f"Invalid subscription: {exc}"})
             await websocket.close(code=1003)
             return
 

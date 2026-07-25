@@ -36,9 +36,7 @@ def _write_fingerprint(name: str, arguments: dict) -> str | None:
         patch = str(arguments.get("patch") or "")
         return patch_fingerprint(patch) if patch.strip() else None
     if name == "create_file":
-        return patch_fingerprint(
-            f"{arguments.get('path', '')}\n{arguments.get('content', '')}"
-        )
+        return patch_fingerprint(f"{arguments.get('path', '')}\n{arguments.get('content', '')}")
     return None
 
 
@@ -99,9 +97,7 @@ def run_tool_agent(
                 model_profile=model_profile,
                 messages=history,
                 tools=tools,
-                max_output_tokens=max(
-                    1, min(6000, max_output_tokens - usage.output_tokens)
-                ),
+                max_output_tokens=max(1, min(6000, max_output_tokens - usage.output_tokens)),
                 temperature=0.1,
                 timeout_seconds=min(timeout_seconds, 120),
                 seed=seed,
@@ -217,9 +213,7 @@ def run_tool_agent(
                     unregistered_command_failures = 0
             except Exception as exc:  # return execution failure to the model
                 content = json.dumps({"error": str(exc), "tool": call.name})
-                if call.name == "run_validation_command" and "Unregistered command" in str(
-                    exc
-                ):
+                if call.name == "run_validation_command" and "Unregistered command" in str(exc):
                     unregistered_command_failures += 1
                     if unregistered_command_failures >= 2:
                         history.append(

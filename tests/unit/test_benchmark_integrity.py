@@ -80,14 +80,7 @@ def test_smoke_command_controls_deterministic_result(tmp_path: Path) -> None:
     (repo / "x.py").write_text("x = 1\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True)
-    patch = (
-        "diff --git a/x.py b/x.py\n"
-        "--- a/x.py\n"
-        "+++ b/x.py\n"
-        "@@ -1 +1 @@\n"
-        "-x = 1\n"
-        "+x = 2\n"
-    )
+    patch = "diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-x = 1\n+x = 2\n"
     case = _case(smoke_commands=["check"])
     results = run_deterministic_checks(
         case,
@@ -96,7 +89,10 @@ def test_smoke_command_controls_deterministic_result(tmp_path: Path) -> None:
         registered_commands={
             "check": {
                 "executable": "python3",
-                "args": ["-c", "import pathlib; assert 'x = 2' in pathlib.Path('x.py').read_text()"],
+                "args": [
+                    "-c",
+                    "import pathlib; assert 'x = 2' in pathlib.Path('x.py').read_text()",
+                ],
                 "timeout_seconds": 5,
             }
         },
@@ -140,11 +136,11 @@ def test_comparison_aggregates_seeds_and_cost_per_usable() -> None:
                     seed=seed,
                     deterministic_pass=ok,
                     deterministic_results=[
-                            ValidatorResult(
-                                validator_id="x",
-                                status="pass" if ok else "fail",
-                                message="ok" if ok else "fail",
-                            )
+                        ValidatorResult(
+                            validator_id="x",
+                            status="pass" if ok else "fail",
+                            message="ok" if ok else "fail",
+                        )
                     ],
                     artifact_produced=True,
                     patch_applies=ok,
@@ -159,9 +155,5 @@ def test_comparison_aggregates_seeds_and_cost_per_usable() -> None:
     assert report.aggregates["full_orchestration"]["usable_rate"] == 2 / 3
     assert report.aggregates["full_orchestration"]["cost_per_usable_artifact"] == "0.15"
     assert (
-        report.paired_confidence_intervals["orch_minus_single_usable_rate"][
-            "paired_samples"
-        ]
-        == 3
+        report.paired_confidence_intervals["orch_minus_single_usable_rate"]["paired_samples"] == 3
     )
-

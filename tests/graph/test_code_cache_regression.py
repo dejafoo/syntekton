@@ -41,8 +41,6 @@ def test_orchestration_code_cache_produces_cache_patch(tmp_path: Path) -> None:
     assert "Cache" in artifact.artifact_text or "InMemoryCache" in artifact.artifact_text
     assert artifact.run_id
     lineage_files = list(
-        (work / ".product-factory" / "runs" / artifact.run_id / "output").glob(
-            "*-lineage.json"
-        )
+        (work / ".product-factory" / "runs" / artifact.run_id / "output").glob("*-lineage.json")
     )
     assert lineage_files, "composition must persist predecessor lineage"

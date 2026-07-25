@@ -57,6 +57,7 @@ class TaskSpec(BaseModel):
 
     def effective_write_patterns(self) -> list[str]:
         return self.writable_path_patterns or self.allowed_path_patterns
+
     budget: TaskBudget = Field(
         default_factory=lambda: TaskBudget(
             max_input_tokens=32_000,

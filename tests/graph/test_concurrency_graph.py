@@ -109,7 +109,9 @@ def _read_only_overlap_plan(request_text: str) -> PlannerOutput:
     return PlannerOutput(
         objective=request_text[:200],
         tasks=[read_a, read_b, implementation, composition],
-        final_artifacts=[FinalArtifactSpec(logical_name="proposed.patch", composer_task_id="T-003")],
+        final_artifacts=[
+            FinalArtifactSpec(logical_name="proposed.patch", composer_task_id="T-003")
+        ],
         validation_strategy="deterministic behavioral validation",
         risk_classification="low",
     )
@@ -236,7 +238,9 @@ def _writer_conflict_plan(request_text: str) -> PlannerOutput:
     return PlannerOutput(
         objective=request_text[:200],
         tasks=[impl_a, impl_b, composition],
-        final_artifacts=[FinalArtifactSpec(logical_name="proposed.patch", composer_task_id="T-COMP")],
+        final_artifacts=[
+            FinalArtifactSpec(logical_name="proposed.patch", composer_task_id="T-COMP")
+        ],
         validation_strategy="deterministic behavioral validation",
         risk_classification="low",
     )
@@ -249,8 +253,8 @@ def test_conflicting_writers_yield_typed_composition_conflict(tmp_path: Path, mo
     monkeypatch.setattr(
         RunCoordinator,
         "_plan",
-        lambda self, run_id, request, repo_summary=None, repair_errors=None: (
-            _writer_conflict_plan(request.request_text)
+        lambda self, run_id, request, repo_summary=None, repair_errors=None: _writer_conflict_plan(
+            request.request_text
         ),
     )
     monkeypatch.setattr(

@@ -55,9 +55,7 @@ def clone_fixture(fixture: Path, dest: Path) -> Path:
                 check=True,
             )
             if status.stdout.strip():
-                subprocess.run(
-                    ["git", "clean", "-fdx"], cwd=dest, check=True, capture_output=True
-                )
+                subprocess.run(["git", "clean", "-fdx"], cwd=dest, check=True, capture_output=True)
                 subprocess.run(
                     ["git", "checkout", "--", "."],
                     cwd=dest,

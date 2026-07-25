@@ -29,9 +29,7 @@ def test_seeded_repair_mock_recovers_and_triggers_repair(tmp_path: Path) -> None
     case = EvalCase(
         id="code_health",
         workflow_type="code_change",
-        request=(
-            "Add a validated health-check function in a dedicated module, with unit tests."
-        ),
+        request=("Add a validated health-check function in a dedicated module, with unit tests."),
         repository="tests/fixtures/sample_api",
         expected_files=["src/app/health.py", "tests/test_health.py"],
         smoke_commands=["python_tests"],

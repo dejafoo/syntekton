@@ -219,9 +219,5 @@ def test_deterministic_checks_wire_must_cover() -> None:
         artifact_kind="architecture",
     )
     results = run_deterministic_checks(case, artifact)
-    assert any(
-        r.validator_id == "architecture_boilerplate" and r.status == "fail" for r in results
-    )
-    assert any(
-        r.validator_id == "architecture_must_cover" and r.status == "fail" for r in results
-    )
+    assert any(r.validator_id == "architecture_boilerplate" and r.status == "fail" for r in results)
+    assert any(r.validator_id == "architecture_must_cover" and r.status == "fail" for r in results)

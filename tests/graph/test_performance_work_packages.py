@@ -132,17 +132,13 @@ def test_live_review_receives_patch_and_returns_structured_findings(tmp_path: Pa
             response(
                 "tool_calls",
                 calls=[
-                    CanonicalToolCall(
-                        id="list", name="list_files", arguments={"directory": "."}
-                    )
+                    CanonicalToolCall(id="list", name="list_files", arguments={"directory": "."})
                 ],
             ),
             response(
                 "tool_calls",
                 calls=[
-                    CanonicalToolCall(
-                        id="read", name="read_file", arguments={"path": "service.py"}
-                    )
+                    CanonicalToolCall(id="read", name="read_file", arguments={"path": "service.py"})
                 ],
             ),
             response(
@@ -151,10 +147,10 @@ def test_live_review_receives_patch_and_returns_structured_findings(tmp_path: Pa
                     CanonicalToolCall(
                         id="write",
                         name="create_file",
-                            arguments={
-                                "path": "src/auth.py",
-                                "content": "AUTHORIZED = True\n",
-                            },
+                        arguments={
+                            "path": "src/auth.py",
+                            "content": "AUTHORIZED = True\n",
+                        },
                     )
                 ],
             ),
@@ -418,4 +414,3 @@ def test_validation_repair_ablation_strips_analysis(tmp_path: Path) -> None:
     assert "repository_analysis" not in {task.capability for task in proposal.tasks}
     assert "independent_review" not in {task.capability for task in proposal.tasks}
     assert "implementation" in {task.capability for task in proposal.tasks}
-

@@ -113,9 +113,7 @@ def submit_run(body: SubmitRunBody, request: Request) -> JSONResponse:
 
 
 @router.post("/runs/{run_id}/approve")
-def approve_run(
-    run_id: str, request: Request, body: ApproveBody = ApproveBody()
-) -> JSONResponse:
+def approve_run(run_id: str, request: Request, body: ApproveBody = ApproveBody()) -> JSONResponse:
     host = _state(request).host(observe_base_url=_observe_base(request))
     return _host_json(host.approve(run_id, apply=body.apply))
 
@@ -133,9 +131,7 @@ def cancel_run(run_id: str, request: Request) -> JSONResponse:
 
 
 @router.post("/runs/{run_id}/revise")
-def revise_run(
-    run_id: str, request: Request, body: ReviseBody = ReviseBody()
-) -> JSONResponse:
+def revise_run(run_id: str, request: Request, body: ReviseBody = ReviseBody()) -> JSONResponse:
     host = _state(request).host(observe_base_url=_observe_base(request))
     return _host_json(host.revise(run_id, note=body.note))
 
@@ -173,6 +169,4 @@ def materialize_run_all(
 def plan_preview(body: PlanPreviewBody, request: Request) -> JSONResponse:
     """Plan-preview: compile a plan without creating or executing a run."""
     host = _state(request).host(mock=body.mock, observe_base_url=_observe_base(request))
-    return _host_json(
-        host.plan_preview(body.request_text, workflow_type=body.workflow_type)
-    )
+    return _host_json(host.plan_preview(body.request_text, workflow_type=body.workflow_type))

@@ -83,9 +83,7 @@ class HostService:
             gateway, MockGateway
         )
         self.observe_base_url = (
-            observe_base_url
-            or os.environ.get("PRODUCT_FACTORY_OBSERVE_URL")
-            or DEFAULT_OBSERVE_URL
+            observe_base_url or os.environ.get("PRODUCT_FACTORY_OBSERVE_URL") or DEFAULT_OBSERVE_URL
         ).rstrip("/")
         self.coord = RunCoordinator(
             config=config,
@@ -99,8 +97,7 @@ class HostService:
     def subscription_for(self, run_id: str, *, after_seq: int = 0) -> HostSubscription:
         return HostSubscription(
             sse_url=(
-                f"{self.observe_base_url}/api/v1/runs/{run_id}/events/stream"
-                f"?after_seq={after_seq}"
+                f"{self.observe_base_url}/api/v1/runs/{run_id}/events/stream?after_seq={after_seq}"
             ),
             cli_tail=f"product-factory host tail {run_id}",
         )
@@ -430,9 +427,7 @@ class HostService:
                 as_zip=as_zip,
             )
         except FileNotFoundError as exc:
-            return HostResponse.failure(
-                code="not_found", message=str(exc), run_id=run_id
-            )
+            return HostResponse.failure(code="not_found", message=str(exc), run_id=run_id)
         except OSError as exc:
             return HostResponse.failure(
                 code="export_failed",
@@ -469,8 +464,7 @@ class HostService:
             return HostResponse.failure(
                 code="invalid_state",
                 message=(
-                    f"materialize requires status awaiting_approval or completed; "
-                    f"got {status!r}"
+                    f"materialize requires status awaiting_approval or completed; got {status!r}"
                 ),
                 run_id=run_id,
                 status=status,
@@ -665,15 +659,10 @@ class HostService:
         raw = Path(dest_path).expanduser()
         candidate = raw.resolve() if raw.is_absolute() else (repo_root / raw).resolve()
         if not candidate.is_relative_to(repo_root):
-            raise ValueError(
-                f"Destination escapes repository_path: {dest_path} "
-                f"(repo={repo_root})"
-            )
+            raise ValueError(f"Destination escapes repository_path: {dest_path} (repo={repo_root})")
         return candidate
 
-    def _resolve_materialize_source(
-        self, run_id: str, artifact: str
-    ) -> dict[str, Any] | None:
+    def _resolve_materialize_source(self, run_id: str, artifact: str) -> dict[str, Any] | None:
         """Locate a materializable artifact by logical name or sha256."""
         run_dir = self.pf_root / "runs" / run_id
         output_dir = run_dir / "output"
@@ -854,9 +843,7 @@ class HostService:
         url = f"{self.observe_base_url}/api/v1/runs/{run_id}/events"
         try:
             with httpx.Client(timeout=0.75) as client:
-                response = client.get(
-                    url, params={"after_seq": after_seq, "limit": limit}
-                )
+                response = client.get(url, params={"after_seq": after_seq, "limit": limit})
                 if response.status_code != 200:
                     return None
                 payload = response.json()
@@ -908,9 +895,7 @@ class HostService:
         return {
             "objective": plan.get("objective"),
             "task_count": len(tasks) if isinstance(tasks, list) else 0,
-            "task_ids": [
-                t.get("id") for t in tasks if isinstance(t, dict) and t.get("id")
-            ]
+            "task_ids": [t.get("id") for t in tasks if isinstance(t, dict) and t.get("id")]
             if isinstance(tasks, list)
             else [],
         }

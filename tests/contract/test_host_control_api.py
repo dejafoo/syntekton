@@ -161,9 +161,7 @@ def test_control_cancel_via_host_service(control_env) -> None:
         },
     )
     run_id = submitted.json()["run_id"]
-    _wait_for_status(
-        client, run_id, wanted={"awaiting_approval", "completed", "failed", "blocked"}
-    )
+    _wait_for_status(client, run_id, wanted={"awaiting_approval", "completed", "failed", "blocked"})
 
     cancel = client.post(f"/api/v1/runs/{run_id}/cancel")
     cancel_body = HostResponse.model_validate(cancel.json())
@@ -303,9 +301,7 @@ def test_control_materialize_all_lands_named_deliverable(control_env) -> None:
         "model_profile_set": "local-target",
         "validation_commands": [],
         "artifact_overrides": {
-            "architecture_document": {
-                "dest_path": "docs/integration_testing_architecture.md"
-            }
+            "architecture_document": {"dest_path": "docs/integration_testing_architecture.md"}
         },
         "budget": {"max_cost_usd": "3.00"},
         "metadata": {},
@@ -336,9 +332,7 @@ def test_control_submit_rejects_unsafe_artifact_override(control_env) -> None:
         json={
             "request_text": "Design it",
             "workflow_type": "technical_plan",
-            "artifact_overrides": {
-                "architecture_document": {"dest_path": "../../escape.md"}
-            },
+            "artifact_overrides": {"architecture_document": {"dest_path": "../../escape.md"}},
             "mock": True,
             "sync": True,
         },
