@@ -421,6 +421,20 @@ Exit criteria:
 
 ### Phase 4 — Controlled connector expansion and quality workflows
 
+> **Status: exit criteria met.** Tracker
+> [`docs/next-work-packages-phase4.md`](next-work-packages-phase4.md). Connector
+> framework behind `ToolBroker` with typed errors and per-call audit; read-only
+> Tavily `web_search` and `@modelcontextprotocol/server-filesystem` connectors,
+> both disabled until an operator enables them in
+> [`config/connectors.yaml`](../config/connectors.yaml); `quality_gate` pack
+> emitting three documents. Also closed the deliverable-naming gap: an
+> artifact land map splits stable role keys from land filenames, so a host can
+> request `docs/integration_testing_architecture.md` and land it via
+> `materialize-all`. Connector suites (**133 passed, 2 skipped**) and the
+> `quality_gate` graph (**7 passed**) are offline and always-on; live Tavily and
+> MCP smokes are env-gated. OpenCode UAT passed on `opencode 1.18.4` for named
+> and multi-document landing.
+
 **Goal:** add useful external information and quality work without weakening
 the authority model.
 

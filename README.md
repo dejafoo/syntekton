@@ -9,6 +9,11 @@ Workflows:
 - `code_change` / `repository_change` — proposed unified diff (approval before apply)
 - `repository_investigation` — read-only evidence report with cited paths
 - `technical_plan` — requirements / architecture decision / acceptance criteria (`architecture` aliases here)
+- `quality_gate` — read-only test plan, quality findings, and security evidence
+
+Deliverable filenames are not fixed: each workflow declares artifact *roles*, and
+a host can name any of them per run (e.g. land an architecture document as
+`docs/integration_testing_architecture.md`).
 
 ## Requirements
 
@@ -44,6 +49,10 @@ product-factory host approve <run_id>
 # Land a doc/report artifact into the target repo (after approval):
 product-factory host materialize <run_id> \
   --artifact ARCHITECTURE.md --to docs/ARCHITECTURE.md
+# Or name the deliverable up front and land everything the run produced:
+product-factory host submit --request request.md --workflow technical_plan \
+  --artifact-override architecture_document=docs/integration_testing_architecture.md
+product-factory host materialize-all <run_id>
 product-factory mcp --mock   # stdio MCP for OpenCode / Cursor / Claude Code
 ```
 
@@ -150,6 +159,7 @@ See [Observability](docs/observability.md) and [Host integration](docs/host-inte
 - [Phase 1 execution kernel](docs/next-work-packages-phase1.md) — budgets, resume, sandbox, concurrency, workflow packs
 - [Phase 3 host integration](docs/next-work-packages-phase3.md) — JSON host protocol, control API, OpenCode MCP, investigation/plan packs
 - [Phase 3.G materialize + OpenCode plugin](docs/next-work-packages-phase3g.md) — `materialize` host action + optional OpenCode plugin (exit criteria met)
+- [Phase 4 connectors, `quality_gate`, named deliverables](docs/next-work-packages-phase4.md) — artifact land map, connector policy layer, read-only Tavily + filesystem MCP (exit criteria met)
 - [Host integration protocol](docs/host-integration.md) — CLI + HTTP + MCP for OpenCode / Cursor / scripts
 - [OpenCode plugin](integrations/opencode-plugin/) — recommended OpenCode packaging (`pf_run` … `pf_merge`)
 - [Sandbox and durable resume design](docs/architecture/sandbox-and-resume.md)
@@ -161,6 +171,11 @@ See [Observability](docs/observability.md) and [Host integration](docs/host-inte
 ```
 
 Always-on: dashboard check/build, ruff, basedpyright, unit/contract tests
-(excluding `@integration`). Optionally ends with
-`scripts/opencode_plugin_smoke.sh`, which skips when `opencode` is not on
-`PATH` unless `OPENCODE_INTEGRATION=1` is set.
+(excluding `@integration`), and the connector policy / injection / audit suites
+(offline — connectors are disabled by default and providers run in mock mode).
+Optionally ends with `scripts/opencode_plugin_smoke.sh`, which skips when
+`opencode` is not on `PATH` unless `OPENCODE_INTEGRATION=1` is set.
+
+Opt-in smokes that need credentials or network egress:
+`TAVILY_INTEGRATION=1` (needs `TAVILY_API_KEY`) and
+`MCP_FILESYSTEM_INTEGRATION=1` (needs `npx`).

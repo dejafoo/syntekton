@@ -27,10 +27,10 @@ clear "upgrade the CLI or the plugin" error.
 
 | Tool | Behavior | CLI it drives |
 | --- | --- | --- |
-| `pf_run` | Submit a curated request (workflow + text). Defaults `repository_path` to the OpenCode worktree/directory. Returns a `run_id`. Never approves/applies. | `product-factory host submit --request … --workflow … [--repo …] [--mock]` |
+| `pf_run` | Submit a curated request (workflow + text). Defaults `repository_path` to the OpenCode worktree/directory. Accepts `artifact_overrides` to name deliverables. Returns a `run_id`. Never approves/applies. | `product-factory host submit --request … --workflow … [--repo …] [--artifact-override ROLE=PATH] [--mock]` |
 | `pf_wait` | Bounded polling until `awaiting_approval` or terminal status. | `product-factory host status <run_id>` |
 | `pf_review` | Inspect + summarize plan / validations / artifacts. | `product-factory host inspect <run_id>` |
-| `pf_merge` | **Asks the operator to confirm first.** Then: patch workflows → `approve --apply`; doc/report workflows → `approve` (if still awaiting) + `materialize`. | `host approve <run_id> [--apply]` and/or `host materialize <run_id> --artifact … --to …` |
+| `pf_merge` | **Asks the operator to confirm first.** Then: patch workflows → `approve --apply`; doc/report workflows → `approve` (if still awaiting) + land every land-map deliverable. | `host approve <run_id> [--apply]` and/or `host materialize-all <run_id>` |
 | `pf_decline` | `reject` (when awaiting approval) or `cancel` (in flight). | `product-factory host reject|cancel <run_id>` |
 
 ### `pf_merge` safety invariant
@@ -45,10 +45,38 @@ Merge routing by workflow:
 | Workflow | Action | Default destination |
 | --- | --- | --- |
 | `code_change`, `repository_change` | `approve(apply=true)` (patch) | — (patch applied in repo) |
-| `technical_plan`, `architecture` | `approve` if needed + `materialize` | `docs/ARCHITECTURE.md` |
-| `repository_investigation` | `approve` if needed + `materialize` | `docs/EVIDENCE_REPORT.md` |
+| `technical_plan`, `architecture` | `approve` if needed + land | `docs/ARCHITECTURE.md` |
+| `repository_investigation` | `approve` if needed + land | `docs/EVIDENCE_REPORT.md` |
+| `quality_gate` | `approve` if needed + land all three | `docs/TEST_PLAN.md`, `docs/QUALITY_FINDINGS.md`, `docs/SECURITY_EVIDENCE.md` |
 
-`artifact` / `dest_path` / `overwrite` can be overridden per call.
+The table above is only a fallback. `pf_merge` first reads the run's **artifact
+land map** from `pf_review`/`inspect` and lands exactly what the run produced,
+wherever the run says it belongs — so a renamed or multi-document deliverable
+needs no plugin change. `artifact` / `dest_path` / `overwrite` still override a
+single file per call, and one confirmation covers the whole set.
+
+### Named deliverables
+
+Product Factory separates a stable **role** (`architecture_document`) from the
+**filename** it lands as. Pass `artifact_overrides` on `pf_run` when the default
+name would be misleading — e.g. an integration-testing architecture rather than a
+whole-system one:
+
+```json
+{
+  "workflow": "technical_plan",
+  "artifact_overrides": {
+    "architecture_document": "docs/integration_testing_architecture.md"
+  }
+}
+```
+
+A value may be a path (directory + filename) or an object with `logical_name`
+and/or `dest_path`. Roles: `architecture_document`, `evidence_report`,
+`test_plan`, `quality_findings`, `security_evidence`. Destinations that escape the
+repository root are rejected at submit time, and `proposed_patch` cannot be
+renamed. The injected agent guidance tells the model to do this unprompted when
+the request is narrower than the pack default.
 
 ## Install
 
@@ -132,6 +160,12 @@ data, not exceptions).
 4. `pf_review` → plan / evidence / proposed patch summarized.
 5. `pf_merge` → **confirmation prompt** → on allow, a file appears
    (`docs/ARCHITECTURE.md` / `docs/EVIDENCE_REPORT.md`) or the patch is applied.
+6. Named deliverable: `pf_run` with
+   `artifact_overrides={"architecture_document": "docs/integration_testing_architecture.md"}`
+   → after merge the document exists under that exact path, not `ARCHITECTURE.md`.
+7. Multi-document: `pf_run` with `workflow="quality_gate"` → one `pf_merge`
+   confirmation lands `docs/TEST_PLAN.md`, `docs/QUALITY_FINDINGS.md`, and
+   `docs/SECURITY_EVIDENCE.md`.
 
 ## Automated OpenCode smoke (Tier 2, P3.G.D)
 
@@ -160,18 +194,27 @@ What it does:
    `pf_merge` / `pf_decline` appear on `GET /experimental/tool/ids`.
 5. Drives a mock `technical_plan` through the same host CLI the plugin uses and
    asserts `docs/ARCHITECTURE.md` is materialized under the temp project.
+6. Repeats the submit with `--artifact-override`, asserts the inspected land map
+   carries the requested name, and lands
+   `docs/integration_testing_architecture.md` via `materialize-all` (P4.A).
+7. Runs a mock `quality_gate` and asserts one `materialize-all` lands all three
+   quality documents (P4.E).
 
 `scripts/verify.sh` runs this as an optional trailing step (skip when no
 `opencode` binary).
 
-## Phase 4 extension points
+## Extension points
 
 - **`PfClient` interface** (`src/pf-client.ts`) — swap the CLI transport for an
   HTTP (control API) transport, or a connector-backed client, without touching
-  the tool layer. Just implement `submit/status/inspect/tail/approve/reject/cancel/materialize`.
-- **`createPfTools` + handlers** (`src/tools.ts`) — add new tools (e.g. a
-  `pf_quality_gate` for Phase 4 quality artifacts) alongside the existing ones;
-  `materialize` already accepts any artifact selector (logical name or sha256),
-  so connector-produced artifacts land the same audited way.
+  the tool layer. Just implement
+  `submit/status/inspect/tail/approve/reject/cancel/materialize/materializeAll`.
+- **Land map over presets** — `pf_merge` reads roles and destinations from the
+  run. A new pack deliverable needs a pack-side `ArtifactLandSpec` only; the
+  plugin picks it up with no code change, and `MATERIALIZE_DEFAULTS` stays a
+  fallback for runs whose land map cannot be read.
+- **`createPfTools` + handlers** (`src/tools.ts`) — add tools alongside the
+  existing ones; `materialize` accepts any artifact selector (logical name or
+  sha256), so connector-produced artifacts land the same audited way.
 - **Protocol version** — the plugin checks `product-factory.host/v1`; bump both
   sides together when the protocol evolves.
