@@ -52,6 +52,9 @@ MATERIALIZE_ALLOWED_STATUSES = frozenset({"awaiting_approval", "completed"})
 KNOWN_MATERIALIZE_OUTPUTS = (
     "ARCHITECTURE.md",
     "EVIDENCE_REPORT.md",
+    "TEST_PLAN.md",
+    "QUALITY_FINDINGS.md",
+    "SECURITY_EVIDENCE.md",
     "proposed.patch",
     "plan.json",
     "run-summary.md",
@@ -740,6 +743,7 @@ class HostService:
         from product_factory.orchestration.coordinator import (
             default_code_change_plan,
             default_investigation_plan,
+            default_quality_gate_plan,
             default_technical_plan,
         )
         from product_factory.planning.compiler import compile_plan
@@ -748,6 +752,8 @@ class HostService:
             proposal = default_technical_plan(request_text)
         elif workflow_type == "repository_investigation":
             proposal = default_investigation_plan(request_text)
+        elif workflow_type == "quality_gate":
+            proposal = default_quality_gate_plan(request_text)
         else:
             proposal = default_code_change_plan(request_text)
         result = compile_plan(proposal)

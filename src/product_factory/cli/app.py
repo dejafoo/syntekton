@@ -146,6 +146,7 @@ def plan_cmd(
     from product_factory.orchestration.coordinator import (
         default_code_change_plan,
         default_investigation_plan,
+        default_quality_gate_plan,
         default_technical_plan,
     )
     from product_factory.planning.compiler import compile_plan
@@ -158,6 +159,8 @@ def plan_cmd(
         proposal = default_technical_plan(text)
     elif workflow == "repository_investigation":
         proposal = default_investigation_plan(text)
+    elif workflow == "quality_gate":
+        proposal = default_quality_gate_plan(text)
     else:
         proposal = default_code_change_plan(text)
     result = compile_plan(proposal)

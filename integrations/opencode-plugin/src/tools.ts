@@ -30,6 +30,9 @@ export const MATERIALIZE_DEFAULTS: Record<string, { artifact: string; dest: stri
   technical_plan: { artifact: "ARCHITECTURE.md", dest: "docs/ARCHITECTURE.md" },
   architecture: { artifact: "ARCHITECTURE.md", dest: "docs/ARCHITECTURE.md" },
   repository_investigation: { artifact: "EVIDENCE_REPORT.md", dest: "docs/EVIDENCE_REPORT.md" },
+  // A quality run has three deliverables; without a land map only the primary
+  // report can be placed, so `pf_merge` lands that and reports what it skipped.
+  quality_gate: { artifact: "QUALITY_FINDINGS.md", dest: "docs/QUALITY_FINDINGS.md" },
 };
 
 const AWAITING = "awaiting_approval";
@@ -347,7 +350,10 @@ export function createPfTools(tool: ToolHelper, deps: PfToolDeps): Record<string
         workflow: s
           .string()
           .optional()
-          .describe("Workflow pack id (code_change, repository_change, technical_plan, repository_investigation)."),
+          .describe(
+            "Workflow pack id (code_change, repository_change, technical_plan, " +
+              "repository_investigation, quality_gate).",
+          ),
         repository_path: s.string().optional().describe("Target repo; defaults to the OpenCode workspace root."),
         budget_usd: s.number().optional().describe("Cost ceiling in USD."),
         validation_commands: s.array(s.string()).optional().describe("Validation command ids to run."),

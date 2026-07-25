@@ -294,6 +294,22 @@ describe("pf_merge land map", () => {
     expect(calls.materialize).toHaveBeenCalled();
   });
 
+  it("falls back to the quality report when a host returns no land map", async () => {
+    const { client, calls } = mockClient({
+      status: res({ run_id: "run-1", status: "completed", data: { workflow_type: "quality_gate" } }),
+      inspect: res({ run_id: "run-1", status: "completed", data: {} }),
+    });
+
+    await pfMerge({ client }, { ask: allow }, { run_id: "run-1" });
+
+    expect(calls.materializeAll).not.toHaveBeenCalled();
+    expect(calls.materialize).toHaveBeenCalledWith("run-1", {
+      artifact: "QUALITY_FINDINGS.md",
+      destPath: "docs/QUALITY_FINDINGS.md",
+      overwrite: false,
+    });
+  });
+
   it("explicit artifact/dest_path skips the land-map lookup entirely", async () => {
     const { client, calls } = mockClient({
       status: res({ run_id: "run-1", status: "completed", data: { workflow_type: "technical_plan" } }),

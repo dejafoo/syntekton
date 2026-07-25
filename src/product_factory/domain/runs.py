@@ -17,6 +17,7 @@ WorkflowType = Literal[
     "code_change",
     "repository_change",
     "repository_investigation",
+    "quality_gate",
 ]
 
 

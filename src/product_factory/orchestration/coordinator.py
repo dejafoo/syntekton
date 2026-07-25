@@ -32,7 +32,6 @@ from product_factory.domain.errors import (
     RuntimeFailureError,
     SkillGrantViolation,
     ToolAuthorizationError,
-    UnsafeOperationError,
     ValidationFailureError,
 )
 from product_factory.domain.findings import Finding, ValidatorResult
@@ -91,6 +90,7 @@ from product_factory.validation.pipeline import (
     validate_architecture_request_specificity,
     validate_behavioral_commands,
     validate_citations,
+    validate_document_sections,
     validate_investigation_document,
     validate_patch_applies,
     validate_path_scope,
@@ -100,9 +100,16 @@ from product_factory.workflows.artifacts import (
     ROLE_ARCHITECTURE_DOCUMENT,
     ROLE_EVIDENCE_REPORT,
     ROLE_PROPOSED_PATCH,
+    ROLE_QUALITY_FINDINGS,
+    ROLE_SECURITY_EVIDENCE,
+    ROLE_TEST_PLAN,
     ArtifactLandMap,
 )
 from product_factory.workflows.base import WorkflowPack
+from product_factory.workflows.quality_gate import (
+    QUALITY_GATE_REQUIRED_SECTIONS,
+    QUALITY_GATE_VALIDATOR_IDS,
+)
 from product_factory.workflows.registry import land_map_for_request, resolve_workflow_pack
 
 logger = logging.getLogger("product_factory.orchestration.coordinator")
@@ -112,14 +119,24 @@ logger = logging.getLogger("product_factory.orchestration.coordinator")
 _CODE_CHANGE_WORKFLOW_TYPES = frozenset({"code_change", "repository_change"})
 _TECHNICAL_PLAN_WORKFLOW_TYPES = frozenset({"architecture", "technical_plan"})
 _INVESTIGATION_WORKFLOW_TYPES = frozenset({"repository_investigation"})
+_QUALITY_GATE_WORKFLOW_TYPES = frozenset({"quality_gate"})
 _PACK_BACKED_WORKFLOW_TYPES = (
     _CODE_CHANGE_WORKFLOW_TYPES
     | _TECHNICAL_PLAN_WORKFLOW_TYPES
     | _INVESTIGATION_WORKFLOW_TYPES
+    | _QUALITY_GATE_WORKFLOW_TYPES
 )
 
-# Repository mutation tools — never granted for investigation packs by default.
+# Repository mutation tools — never granted for investigation or quality packs.
 _REPOSITORY_WRITE_TOOL_NAMES = frozenset({"create_file", "apply_patch"})
+
+# Quality-gate deliverable roles and their fallback names. Keyed by role so a
+# composer task resolves its document from the plan, not from the workflow id.
+_QUALITY_GATE_ROLES: dict[str, str] = {
+    ROLE_TEST_PLAN: "TEST_PLAN.md",
+    ROLE_QUALITY_FINDINGS: "QUALITY_FINDINGS.md",
+    ROLE_SECURITY_EVIDENCE: "SECURITY_EVIDENCE.md",
+}
 
 
 def default_code_change_plan(request_text: str) -> PlannerOutput:
@@ -373,6 +390,159 @@ def default_investigation_plan(request_text: str) -> PlannerOutput:
                 composer_task_id="T-002",
                 role=ROLE_EVIDENCE_REPORT,
             )
+        ],
+        validation_strategy="section checks, citation presence, secret scan",
+        risk_classification="low",
+    )
+
+
+def default_quality_gate_plan(request_text: str) -> PlannerOutput:
+    """Frozen fixed planner for the `quality_gate` pack (P4.E).
+
+    Three composer tasks, one per land-map role, so each deliverable has a single
+    owning task that the coordinator can resolve back to its role. No task may
+    write to the repository: the pack reports, it does not change code.
+    """
+    read_only = {"file_write", "repository_write", "git_write"}
+    return PlannerOutput(
+        objective=request_text[:200],
+        assumptions=[],
+        tasks=[
+            TaskSpec(
+                id="T-001",
+                title="Design quality checks",
+                capability="test_design",
+                objective="Identify risk areas and the checks that would cover them",
+                expected_output_schema="test_design.v1",
+                required_tool_classes={"repository_read"},
+                prohibited_actions=read_only,
+                acceptance_criteria=[
+                    AcceptanceCriterion(
+                        id="AC-001",
+                        description="Risk areas identified with paths",
+                        verification="evidence_check",
+                    )
+                ],
+            ),
+            TaskSpec(
+                id="T-002",
+                title="Execute registered validation commands",
+                capability="test_execution",
+                objective="Run the registered validation commands and capture results",
+                dependencies=["T-001"],
+                expected_output_schema="test_execution.v1",
+                required_tool_classes={"repository_read", "validation_command"},
+                prohibited_actions=read_only,
+                acceptance_criteria=[
+                    AcceptanceCriterion(
+                        id="AC-002",
+                        description="Command outcomes captured or explicitly skipped",
+                        verification="artifact_check",
+                    )
+                ],
+            ),
+            TaskSpec(
+                id="T-003",
+                title="Security review",
+                capability="security_review",
+                objective="Review the repository for security-relevant defects",
+                dependencies=["T-001"],
+                expected_output_schema="security_review.v1",
+                required_tool_classes={"repository_read", "git_read"},
+                prohibited_actions=read_only,
+                acceptance_criteria=[
+                    AcceptanceCriterion(
+                        id="AC-003",
+                        description="Security checks recorded with evidence",
+                        verification="evidence_check",
+                    )
+                ],
+            ),
+            TaskSpec(
+                id="T-004",
+                title="Independent review",
+                capability="independent_review",
+                objective="Independently review quality with cited evidence",
+                dependencies=["T-002", "T-003"],
+                expected_output_schema="review_findings.v1",
+                required_tool_classes={"repository_read", "git_read"},
+                prohibited_actions=read_only,
+                acceptance_criteria=[
+                    AcceptanceCriterion(
+                        id="AC-004",
+                        description="Findings cite file evidence",
+                        verification="evidence_check",
+                    )
+                ],
+            ),
+            TaskSpec(
+                id="T-005",
+                title="Compose test plan",
+                capability="composition",
+                objective="Compose the test plan deliverable",
+                dependencies=["T-001"],
+                expected_output_schema="test_plan.v1",
+                required_tool_classes={"repository_read", "artifact_write"},
+                prohibited_actions=read_only,
+                acceptance_criteria=[
+                    AcceptanceCriterion(
+                        id="AC-005",
+                        description="Test plan sections complete",
+                        verification="static_rule",
+                    )
+                ],
+            ),
+            TaskSpec(
+                id="T-006",
+                title="Compose security evidence",
+                capability="composition",
+                objective="Compose the security evidence deliverable",
+                dependencies=["T-003"],
+                expected_output_schema="security_evidence.v1",
+                required_tool_classes={"repository_read", "artifact_write"},
+                prohibited_actions=read_only,
+                acceptance_criteria=[
+                    AcceptanceCriterion(
+                        id="AC-006",
+                        description="Security evidence sections complete",
+                        verification="static_rule",
+                    )
+                ],
+            ),
+            TaskSpec(
+                id="T-007",
+                title="Compose quality findings",
+                capability="composition",
+                objective="Compose the quality findings deliverable",
+                dependencies=["T-004", "T-005", "T-006"],
+                expected_output_schema="quality_findings.v1",
+                required_tool_classes={"repository_read", "artifact_write"},
+                prohibited_actions=read_only,
+                acceptance_criteria=[
+                    AcceptanceCriterion(
+                        id="AC-007",
+                        description="Findings carry evidence and recommended actions",
+                        verification="static_rule",
+                    )
+                ],
+            ),
+        ],
+        final_artifacts=[
+            FinalArtifactSpec(
+                logical_name="TEST_PLAN.md",
+                composer_task_id="T-005",
+                role=ROLE_TEST_PLAN,
+            ),
+            FinalArtifactSpec(
+                logical_name="SECURITY_EVIDENCE.md",
+                composer_task_id="T-006",
+                role=ROLE_SECURITY_EVIDENCE,
+            ),
+            FinalArtifactSpec(
+                logical_name="QUALITY_FINDINGS.md",
+                composer_task_id="T-007",
+                role=ROLE_QUALITY_FINDINGS,
+            ),
         ],
         validation_strategy="section checks, citation presence, secret scan",
         risk_classification="low",
@@ -966,6 +1136,7 @@ class RunCoordinator:
         patch_text = ""
         architecture_md = ""
         evidence_report_md = ""
+        documents_by_role: dict[str, str] = {}
         for row in self.db.list_tasks_in_creation_order(run_id):
             spec = TaskSpec.model_validate(json.loads(row["spec_json"]))
             if spec.id not in merged_tasks:
@@ -1019,6 +1190,10 @@ class RunCoordinator:
                         if art.logical_name.endswith(".patch") or art.media_type == "text/x-diff":
                             patch_text = artifacts.get_text(art.sha256)
                         role = land_map.role_for_logical_name(art.logical_name)
+                        if role is None:
+                            continue
+                        if art.media_type == "text/markdown":
+                            documents_by_role[role] = artifacts.get_text(art.sha256)
                         if role == ROLE_ARCHITECTURE_DOCUMENT:
                             architecture_md = artifacts.get_text(art.sha256)
                         if role == ROLE_EVIDENCE_REPORT:
@@ -1095,6 +1270,7 @@ class RunCoordinator:
                 initial_patch_text=patch_text,
                 initial_architecture_md=architecture_md,
                 initial_evidence_report_md=evidence_report_md,
+                initial_documents_by_role=documents_by_role,
             )
         except RunCancelledError as exc:
             self.db.upsert_run(
@@ -1166,6 +1342,8 @@ class RunCoordinator:
                 proposal = default_technical_plan(request.request_text)
             elif request.workflow_type in _INVESTIGATION_WORKFLOW_TYPES:
                 proposal = default_investigation_plan(request.request_text)
+            elif request.workflow_type in _QUALITY_GATE_WORKFLOW_TYPES:
+                proposal = default_quality_gate_plan(request.request_text)
             else:
                 proposal = default_code_change_plan(request.request_text)
         else:
@@ -1302,6 +1480,7 @@ class RunCoordinator:
         initial_patch_text: str = "",
         initial_architecture_md: str = "",
         initial_evidence_report_md: str = "",
+        initial_documents_by_role: dict[str, str] | None = None,
     ) -> RunManifest:
         # `initial_*` are only populated by `resume()` (P1.B): they seed the
         # wave loop with already-completed task state so resumed runs incur
@@ -1314,6 +1493,19 @@ class RunCoordinator:
             ROLE_EVIDENCE_REPORT, default="EVIDENCE_REPORT.md"
         )
         patch_name = land_map.logical_name_for(ROLE_PROPOSED_PATCH, default="proposed.patch")
+        # A composer task owns exactly one deliverable role, so a pack can declare
+        # several documents without the coordinator branching on workflow type to
+        # decide what each composition task should produce.
+        composer_roles = {
+            spec.composer_task_id: spec.role for spec in plan.final_artifacts if spec.role
+        }
+        documents_by_role: dict[str, str] = dict(initial_documents_by_role or {})
+        # A quality pack's findings *are* its product: a blocking finding must not
+        # spawn a repair task or fail the run the way it does for a code change.
+        findings_are_deliverable = bool(
+            workflow_pack is not None
+            and workflow_pack.validation_policy.get("findings_are_deliverable")
+        )
         task_status = initial_task_status or {tid: "pending" for tid in plan.tasks}
         results: list[TaskResult] = list(initial_results or [])
         findings: list[Finding] = [f for r in results for f in r.findings]
@@ -1441,7 +1633,14 @@ class RunCoordinator:
                     },
                 )
 
-            def _run_one(task: TaskSpec) -> TaskResult:
+            def _run_one(
+                task: TaskSpec,
+                # Bound per wave so the closure reads this wave's precomputed
+                # dependency context, never a later wave's.
+                dependency_outputs_by_task: dict[
+                    str, list[dict[str, Any]]
+                ] = dependency_outputs_by_task,
+            ) -> TaskResult:
                 return self._execute_task(
                     run_id=run_id,
                     request=request,
@@ -1455,6 +1654,7 @@ class RunCoordinator:
                     ledger=ledger,
                     dependency_outputs=dependency_outputs_by_task[task.id],
                     land_map=land_map,
+                    composer_role=composer_roles.get(task.id),
                 )
 
             wave_results: list[TaskResult] = run_wave(
@@ -1464,7 +1664,7 @@ class RunCoordinator:
             )
             self._raise_if_cancelled(run_id)
 
-            for task, result in zip(ready, wave_results):
+            for task, result in zip(ready, wave_results, strict=True):
                 usage = usage.merge(result.usage)
                 spent = usage.estimated_cost_usd
                 task_status[task.id] = "success" if result.status == "success" else result.status
@@ -1512,6 +1712,10 @@ class RunCoordinator:
                     if art.logical_name.endswith(".patch") or art.media_type == "text/x-diff":
                         patch_text = artifacts.get_text(art.sha256)
                     role = land_map.role_for_logical_name(art.logical_name)
+                    if role is None:
+                        continue
+                    if art.media_type == "text/markdown":
+                        documents_by_role[role] = artifacts.get_text(art.sha256)
                     if role == ROLE_ARCHITECTURE_DOCUMENT:
                         architecture_md = artifacts.get_text(art.sha256)
                     if role == ROLE_EVIDENCE_REPORT:
@@ -1570,6 +1774,10 @@ class RunCoordinator:
                         for finding in findings
                         if finding.status == "open" and finding.severity == "blocking"
                     ]
+                    if findings_are_deliverable:
+                        # Reporting packs surface defects for a human to act on;
+                        # they hold no write grants and cannot repair anything.
+                        blocking_findings = []
                     if (
                         live_plan.tasks[result.task_id].capability == "repair"
                         and not has_blocking_failures(validation_results)
@@ -1750,6 +1958,40 @@ class RunCoordinator:
             validation_results.append(validate_investigation_document(evidence_report_md))
             validation_results.append(validate_citations(evidence_report_md))
             validation_results.append(validate_secrets(evidence_report_md))
+        elif request.workflow_type in _QUALITY_GATE_WORKFLOW_TYPES:
+            for entry in land_map.entries:
+                document = documents_by_role.get(entry.role, "")
+                if not document.strip():
+                    # An optional deliverable the run never produced is absent, not
+                    # empty — `materialize-all` skips what isn't there.
+                    if entry.required:
+                        validation_results.append(
+                            ValidatorResult(
+                                validator_id=QUALITY_GATE_VALIDATOR_IDS.get(
+                                    entry.role, f"{entry.role}_sections"
+                                ),
+                                status="fail",
+                                message=f"Required deliverable {entry.role} was not produced",
+                                details={"logical_name": entry.logical_name},
+                            )
+                        )
+                    continue
+                (run_dir / "output" / entry.logical_name).write_text(
+                    document, encoding="utf-8"
+                )
+                validation_results.append(
+                    validate_document_sections(
+                        document,
+                        validator_id=QUALITY_GATE_VALIDATOR_IDS.get(
+                            entry.role, f"{entry.role}_sections"
+                        ),
+                        required_sections=QUALITY_GATE_REQUIRED_SECTIONS.get(entry.role, ()),
+                    )
+                )
+                validation_results.append(validate_secrets(document))
+            findings_doc = documents_by_role.get(ROLE_QUALITY_FINDINGS, "")
+            if findings_doc.strip():
+                validation_results.append(validate_citations(findings_doc))
         else:
             if not architecture_md:
                 architecture_md = self._compose_architecture(
@@ -1893,6 +2135,7 @@ class RunCoordinator:
         dependency_outputs: list[dict[str, Any]] | None = None,
         ledger: BudgetLedger | None = None,
         land_map: ArtifactLandMap | None = None,
+        composer_role: str | None = None,
     ) -> TaskResult:
         land_map = land_map or ArtifactLandMap()
         profile = resolve_task_model_profile(task, metadata=request.metadata)
@@ -2143,6 +2386,10 @@ class RunCoordinator:
         if request.workflow_type in _INVESTIGATION_WORKFLOW_TYPES:
             granted -= _REPOSITORY_WRITE_TOOL_NAMES
             granted.discard("run_validation_command")
+        elif request.workflow_type in _QUALITY_GATE_WORKFLOW_TYPES:
+            # A quality gate may execute registered validation commands, but it
+            # reports on code rather than changing it (P4.E).
+            granted -= _REPOSITORY_WRITE_TOOL_NAMES
 
         # Connector grants are resolved last so no capability-specific branch above
         # can hand out an external provider by accident. External tools are never
@@ -2214,7 +2461,13 @@ class RunCoordinator:
         tool_call_ids: list[str] = []
         model_usage = UsageMetrics()
 
-        if task.capability == "repository_analysis" and broker.worktree_root:
+        # A quality gate's design task needs the same repository scope as an
+        # analysis task: without it the test plan has no real paths to rank.
+        scopes_repository = task.capability == "repository_analysis" or (
+            task.capability == "test_design"
+            and request.workflow_type in _QUALITY_GATE_WORKFLOW_TYPES
+        )
+        if scopes_repository and broker.worktree_root:
             listing = broker.execute(
                 task_id=task.id,
                 tool_name="list_files",
@@ -2263,7 +2516,11 @@ class RunCoordinator:
                 artifacts.blobs / art.sha256, run_dir / "output" / "repository-analysis.json"
             )
             artifact_refs.append(art)
-            summary = "Repository analyzed"
+            summary = (
+                "Quality scope identified"
+                if task.capability == "test_design"
+                else "Repository analyzed"
+            )
         elif task.capability in {"implementation", "repair"} and broker.worktree_root:
             applied = False
             seeded_defect = str(request.metadata.get("seed_repair_defect") or "").strip()
@@ -2687,7 +2944,25 @@ class RunCoordinator:
             artifact_refs.append(art)
             summary = summary or "Independent review complete"
         elif task.capability == "composition":
-            if request.workflow_type in _TECHNICAL_PLAN_WORKFLOW_TYPES:
+            if composer_role in _QUALITY_GATE_ROLES:
+                document_name = land_map.logical_name_for(
+                    composer_role, default=_QUALITY_GATE_ROLES[composer_role]
+                )
+                document = self._compose_quality_document(
+                    role=composer_role,
+                    request=request,
+                    dependency_outputs=dependency_outputs or [],
+                    document_name=document_name,
+                )
+                art = artifacts.put_text(
+                    document,
+                    media_type="text/markdown",
+                    logical_name=document_name,
+                    created_by_task_id=task.id,
+                )
+                artifact_refs.append(art)
+                summary = f"{composer_role} composed"
+            elif request.workflow_type in _TECHNICAL_PLAN_WORKFLOW_TYPES:
                 document_name = land_map.logical_name_for(
                     ROLE_ARCHITECTURE_DOCUMENT, default="ARCHITECTURE.md"
                 )
@@ -3167,6 +3442,186 @@ class RunCoordinator:
             "",
             "## Assumptions",
             *assumption_lines,
+            "",
+        ]
+        return "\n".join(sections) + "\n"
+
+    @staticmethod
+    def _inherited_findings(dependency_outputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Findings produced upstream, deduplicated by id in dependency order."""
+        seen: set[str] = set()
+        collected: list[dict[str, Any]] = []
+        for prior in dependency_outputs:
+            for finding in prior.get("findings") or []:
+                if not isinstance(finding, dict):
+                    continue
+                finding_id = str(finding.get("id") or "")
+                if finding_id and finding_id in seen:
+                    continue
+                if finding_id:
+                    seen.add(finding_id)
+                collected.append(finding)
+        return collected
+
+    @staticmethod
+    def _scoped_paths(dependency_outputs: list[dict[str, Any]]) -> list[str]:
+        """Repository paths an upstream scoping task actually listed.
+
+        Read from the `repository-analysis.json` excerpt so a plan cites files a
+        reviewer can open, ordered tests-first because those carry the coverage
+        signal a quality gate reports on.
+        """
+        paths: list[str] = []
+        for prior in dependency_outputs:
+            for excerpt in prior.get("artifact_excerpts") or []:
+                if excerpt.get("logical_name") != "repository-analysis.json":
+                    continue
+                try:
+                    payload = json.loads(excerpt.get("content") or "{}")
+                except json.JSONDecodeError:
+                    continue
+                for key in ("tests", "entry_points", "configuration", "files"):
+                    for path in payload.get(key) or []:
+                        path_s = str(path).strip()
+                        if path_s and path_s not in paths:
+                            paths.append(path_s)
+                # Excerpted paths are the reliable signal: the listing is empty
+                # whenever a read-only task's glob matched nothing.
+                for item in payload.get("relevant_excerpts") or []:
+                    if isinstance(item, dict) and item.get("path"):
+                        path_s = str(item["path"]).strip()
+                        if path_s and path_s not in paths:
+                            paths.append(path_s)
+        return paths
+
+    @staticmethod
+    def _evidence_paths(findings: list[dict[str, Any]]) -> list[str]:
+        """Path-like evidence scopes cited by findings, in first-seen order."""
+        paths: list[str] = []
+        for finding in findings:
+            for ref in finding.get("evidence_refs") or []:
+                if not isinstance(ref, dict):
+                    continue
+                scope = str(ref.get("scope") or "").strip()
+                if not scope or scope in {"patch", "review_input"}:
+                    continue
+                if scope not in paths:
+                    paths.append(scope)
+        return paths
+
+    def _compose_quality_document(
+        self,
+        *,
+        role: str,
+        request: RunRequest,
+        dependency_outputs: list[dict[str, Any]],
+        document_name: str,
+    ) -> str:
+        """Deterministic quality-gate deliverable for one land-map role (P4.E).
+
+        Each document carries the sections its pack declares and cites the
+        evidence paths that upstream tasks actually recorded, so a findings report
+        never asserts a defect without a path a reviewer can open.
+        """
+        inherited = self._inherited_findings(dependency_outputs)
+        scoped_paths = self._scoped_paths(dependency_outputs)
+        evidence_paths = self._evidence_paths(inherited) or scoped_paths[:5] or ["README.md"]
+        objective = request.request_text.strip() or "Repository quality review"
+        commands = self._resolve_validation_command_ids(request)
+
+        if role == ROLE_TEST_PLAN:
+            ranked = (scoped_paths or evidence_paths)[:10]
+            risk_lines = [f"- `{path}` — exercised by the checks below" for path in ranked]
+            case_lines = [
+                f"- Verify behavior covered by `{path}` against its acceptance criteria"
+                for path in ranked
+            ]
+            if commands:
+                case_lines.extend(
+                    f"- Registered validation command `{command}`" for command in commands
+                )
+            sections = [
+                f"# {document_name}",
+                "",
+                "## Summary",
+                objective,
+                "",
+                "## Risk areas",
+                *risk_lines,
+                "",
+                "## Test cases",
+                *case_lines,
+                "",
+                "## Coverage gaps",
+                *(
+                    ["- No registered validation commands were configured for this run."]
+                    if not commands
+                    else ["- Paths outside the reviewed scope remain unverified."]
+                ),
+                "",
+            ]
+            return "\n".join(sections) + "\n"
+
+        if role == ROLE_SECURITY_EVIDENCE:
+            security = [
+                finding
+                for finding in inherited
+                if str(finding.get("category") or "").lower() == "security"
+            ]
+            finding_lines = [
+                f"- {finding.get('summary') or 'Security observation'} "
+                f"({finding.get('severity') or 'minor'})"
+                for finding in security
+            ] or ["- No security-specific defects were identified in the reviewed scope."]
+            sections = [
+                f"# {document_name}",
+                "",
+                "## Summary",
+                objective,
+                "",
+                "## Checks performed",
+                "- Secret patterns scanned across composed deliverables.",
+                "- Repository read-only inspection of the paths cited below.",
+                "",
+                "## Findings",
+                *finding_lines,
+                "",
+                "## Evidence",
+                *[f"- `{path}`" for path in evidence_paths],
+                "",
+            ]
+            return "\n".join(sections) + "\n"
+
+        blocking = [
+            finding for finding in inherited if str(finding.get("severity")) == "blocking"
+        ]
+        finding_lines = [
+            f"- [{finding.get('severity') or 'minor'}] "
+            f"{finding.get('summary') or 'Finding'} — see "
+            f"`{(self._evidence_paths([finding]) or evidence_paths)[0]}`"
+            for finding in inherited
+        ] or ["- No defects were identified in the reviewed scope."]
+        action_lines = [
+            f"- {finding.get('recommended_action') or 'Review and triage'}"
+            for finding in inherited
+            if finding.get("recommended_action")
+        ] or ["- No action required from this gate."]
+        sections = [
+            f"# {document_name}",
+            "",
+            "## Summary",
+            objective,
+            "",
+            f"Blocking findings: {len(blocking)}. Total findings: {len(inherited)}.",
+            "",
+            "## Findings",
+            *finding_lines,
+            "",
+            "## Evidence",
+            *[f"- `{path}`" for path in evidence_paths],
+            "",
+            "## Recommended actions",
+            *action_lines,
             "",
         ]
         return "\n".join(sections) + "\n"

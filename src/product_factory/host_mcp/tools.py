@@ -32,6 +32,7 @@ _WORKFLOW_VALUES = {
     "code_change",
     "repository_change",
     "repository_investigation",
+    "quality_gate",
 }
 
 
@@ -64,7 +65,8 @@ def tool_schemas() -> list[dict[str, Any]]:
                         "type": "string",
                         "description": (
                             "Workflow pack id: repository_investigation, "
-                            "technical_plan, repository_change, code_change, architecture"
+                            "technical_plan, quality_gate, repository_change, "
+                            "code_change, architecture"
                         ),
                         "default": "code_change",
                     },
@@ -289,7 +291,8 @@ def pf_submit(service: HostService, arguments: dict[str, Any]) -> dict[str, Any]
     if repo_raw:
         repository_path = Path(str(repo_raw)).expanduser().resolve()
 
-    budget_usd = float(arguments.get("budget_usd") if arguments.get("budget_usd") is not None else 3.0)
+    budget_raw = arguments.get("budget_usd")
+    budget_usd = 3.0 if budget_raw is None else float(budget_raw)
     validation_commands = arguments.get("validation_commands") or []
     if not isinstance(validation_commands, list):
         return _failure("invalid_arguments", "validation_commands must be a list of strings")

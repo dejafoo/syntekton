@@ -20,6 +20,9 @@ from typing import Any
 ROLE_ARCHITECTURE_DOCUMENT = "architecture_document"
 ROLE_EVIDENCE_REPORT = "evidence_report"
 ROLE_PROPOSED_PATCH = "proposed_patch"
+ROLE_TEST_PLAN = "test_plan"
+ROLE_QUALITY_FINDINGS = "quality_findings"
+ROLE_SECURITY_EVIDENCE = "security_evidence"
 
 
 @dataclass(frozen=True)

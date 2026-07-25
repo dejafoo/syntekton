@@ -200,6 +200,29 @@ def validate_investigation_document(markdown: str) -> ValidatorResult:
     return ValidatorResult(validator_id="investigation_sections", status="pass", message="ok")
 
 
+def validate_document_sections(
+    markdown: str,
+    *,
+    validator_id: str,
+    required_sections: list[str] | tuple[str, ...],
+) -> ValidatorResult:
+    """Require a set of headings in a composed markdown deliverable.
+
+    Section names come from the workflow pack, so a pack can add a deliverable
+    shape without a new validator here. Matching is on heading text, never on the
+    filename, so a renamed deliverable validates identically.
+    """
+    missing = [section for section in required_sections if not _heading_present(markdown, section)]
+    if missing:
+        return ValidatorResult(
+            validator_id=validator_id,
+            status="fail",
+            message=f"Document missing required sections: {missing}",
+            details={"missing_sections": missing},
+        )
+    return ValidatorResult(validator_id=validator_id, status="pass", message="ok")
+
+
 def validate_citations(markdown: str) -> ValidatorResult:
     """Require at least one path-like citation in backtick form."""
     citations = sorted({match.group(1) for match in CITATION_PATH_RE.finditer(markdown or "")})

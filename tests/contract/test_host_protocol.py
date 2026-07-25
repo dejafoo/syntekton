@@ -774,3 +774,75 @@ def test_host_cli_materialize_all(tmp_path: Path, monkeypatch) -> None:
     payload = HostResponse.model_validate(json.loads(result.output))
     assert payload.ok, payload.model_dump()
     assert (fixture / "docs" / "scoped_architecture.md").is_file()
+
+
+def test_host_quality_gate_submit_inspect_and_materialize_all(tmp_path: Path) -> None:
+    """One quality_gate run lands three deliverables through one host call (P4.E)."""
+    fixture = _fixture_repo(tmp_path)
+    service = _named_service(tmp_path)
+
+    submitted = service.submit(
+        RunRequest(
+            request_id="req-quality-contract",
+            workflow_type="quality_gate",
+            request_text="Assess release readiness for the sample API.",
+            repository_path=fixture,
+            budget=RunBudget(max_cost_usd=Decimal("3.00")),
+            approval_policy="none",
+            artifact_overrides={
+                "quality_findings": {"dest_path": "docs/qa/release_readiness.md"}
+            },
+        ),
+        mock=True,
+        detach=False,
+    )
+    assert submitted.ok, submitted.model_dump()
+    run_id = submitted.run_id
+    assert run_id is not None
+
+    inspected = service.inspect(run_id)
+    assert inspected.ok, inspected.model_dump()
+    assert inspected.data is not None
+    land_map = {entry["role"]: entry for entry in inspected.data["artifact_land_map"]}
+    assert set(land_map) == {"test_plan", "quality_findings", "security_evidence"}
+    assert land_map["quality_findings"]["logical_name"] == "release_readiness.md"
+    assert land_map["quality_findings"]["suggested_dest_path"] == "docs/qa/release_readiness.md"
+    assert land_map["test_plan"]["suggested_dest_path"] == "docs/TEST_PLAN.md"
+
+    result = service.materialize_all(run_id)
+    assert result.ok, result.model_dump()
+    assert result.data is not None
+    assert {entry["role"] for entry in result.data["landed"]} == {
+        "test_plan",
+        "quality_findings",
+        "security_evidence",
+    }
+    assert (fixture / "docs" / "qa" / "release_readiness.md").is_file()
+    assert (fixture / "docs" / "TEST_PLAN.md").is_file()
+    assert (fixture / "docs" / "SECURITY_EVIDENCE.md").is_file()
+
+
+def test_host_quality_gate_materialize_all_can_land_one_role(tmp_path: Path) -> None:
+    fixture = _fixture_repo(tmp_path)
+    service = _named_service(tmp_path)
+    submitted = service.submit(
+        RunRequest(
+            request_id="req-quality-one-role",
+            workflow_type="quality_gate",
+            request_text="Assess release readiness for the sample API.",
+            repository_path=fixture,
+            budget=RunBudget(max_cost_usd=Decimal("3.00")),
+            approval_policy="none",
+        ),
+        mock=True,
+        detach=False,
+    )
+    assert submitted.ok, submitted.model_dump()
+    assert submitted.run_id is not None
+
+    result = service.materialize_all(submitted.run_id, roles=["test_plan"])
+    assert result.ok, result.model_dump()
+    assert result.data is not None
+    assert [entry["role"] for entry in result.data["landed"]] == ["test_plan"]
+    assert (fixture / "docs" / "TEST_PLAN.md").is_file()
+    assert not (fixture / "docs" / "QUALITY_FINDINGS.md").exists()
