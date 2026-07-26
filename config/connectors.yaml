@@ -12,9 +12,16 @@
 allow_write_connectors: false
 
 connectors:
-  # Tavily web search (read-only). Needs TAVILY_API_KEY in the environment.
+  # Tavily web search (read-only).
+  #
+  # API key: set environment variable TAVILY_API_KEY (never put the key in this
+  # file). The same env must be visible to the Product Factory process — CLI,
+  # host API, or OpenCode plugin worker. `--mock` / PRODUCT_FACTORY_FORCE_MOCK
+  # uses fixture results and does not need a key.
+  #
+  # Live smoke: TAVILY_INTEGRATION=1 TAVILY_API_KEY=… ./scripts/verify.sh
   tavily_web_search:
-    enabled: false
+    enabled: true
     # Blunt egress narrowing. If you set this, include api.tavily.com or search
     # cannot reach the API at all. Prefer options.result_domains below.
     allowed_domains: []

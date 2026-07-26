@@ -280,12 +280,12 @@ completes. Land all three with a single `materialize-all`.
 ## Connectors (external tools)
 
 Workers reach external providers only through the tool broker, so a connector
-never grants a capability. Everything ships disabled: an operator must enable it
-in [`config/connectors.yaml`](../config/connectors.yaml) **and** the workflow pack
-must request the matching tool class. Every call is audited
-(`connector.invoked` / `connector.denied` / `connector.failed`) with a policy
-decision, bounded result, and provenance. Outages surface as typed connector
-errors and never silently fall back to another model.
+never grants a capability. Filesystem MCP still ships disabled; Tavily web search
+is enabled in this checkout's [`config/connectors.yaml`](../config/connectors.yaml)
+but still needs a credential and a capability that may use `web_read`. Every call
+is audited (`connector.invoked` / `connector.denied` / `connector.failed`) with a
+policy decision, bounded result, and provenance. Outages surface as typed
+connector errors and never silently fall back to another model.
 
 | Connector | Tool class | Needs |
 | --- | --- | --- |
@@ -294,8 +294,41 @@ errors and never silently fall back to another model.
 
 Read-only in both cases. `filesystem_mcp` resolves and confines every path
 against its configured roots before calling the server, and allowlists three read
-tools regardless of what the server advertises. Example config:
+tools regardless of what the server advertises. Example configs:
+[`examples/connectors/tavily.yaml`](../examples/connectors/tavily.yaml),
 [`examples/connectors/filesystem-mcp.yaml`](../examples/connectors/filesystem-mcp.yaml).
+
+### Tavily API key
+
+Put the key in the **environment**, not in YAML:
+
+```bash
+export TAVILY_API_KEY=tvly-...
+```
+
+The variable must be visible to whatever process runs Product Factory (CLI,
+`product-factory host`, or the OpenCode plugin worker). Mock runs
+(`--mock` / `PRODUCT_FACTORY_FORCE_MOCK=1`) use fixture search results and do not
+need a key.
+
+Live smoke:
+
+```bash
+TAVILY_INTEGRATION=1 TAVILY_API_KEY=tvly-... ./scripts/verify.sh
+```
+
+After a research run that asked for citations/sources, confirm search actually
+fired:
+
+```bash
+sqlite3 -readonly .product-factory/data/product_factory.sqlite \
+  "SELECT event_type, summary FROM events
+   WHERE run_id='<run-id>' AND event_type LIKE 'connector%';"
+```
+
+You want `connector.invoked` rows for `tavily_web_search`. Live technical-plan
+runs that ask for citations fail validation when the connector is enabled but
+never invoked.
 
 ## Environment
 
@@ -309,6 +342,6 @@ tools regardless of what the server advertises. Example config:
 | `OPENROUTER_API_KEY` | Live model backend when mock is not forced |
 | `PRODUCT_FACTORY_OBSERVE_TOKEN` | When set, HTTP write routes require `Authorization: Bearer …` |
 | `OPENCODE_INTEGRATION` | When `1`, `scripts/opencode_plugin_smoke.sh` fails if `opencode` is missing |
-| `TAVILY_API_KEY` | Credential for the Tavily web-search connector (never logged) |
+| `TAVILY_API_KEY` | Credential for the Tavily web-search connector (env only; never logged). Required for live `web_search`; mock mode does not need it. |
 | `TAVILY_INTEGRATION` | When `1`, `verify.sh` runs the live Tavily query |
 | `MCP_FILESYSTEM_INTEGRATION` | When `1`, `verify.sh` runs the real filesystem MCP server smoke |

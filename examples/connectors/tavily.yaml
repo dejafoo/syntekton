@@ -1,0 +1,22 @@
+# Example: enable Tavily web search for Product Factory.
+#
+# Copy the `tavily_web_search` block into config/connectors.yaml (or merge these
+# settings), then export the API key in the process environment:
+#
+#   export TAVILY_API_KEY=tvly-...
+#
+# Do not put the key in YAML. Mock runs (`--mock`) skip the network and do not
+# need a key.
+
+allow_write_connectors: false
+
+connectors:
+  tavily_web_search:
+    enabled: true
+    max_timeout_seconds: 20
+    options:
+      max_results: 5
+      max_chars_per_result: 4000
+      search_depth: basic
+      result_domains: []
+      exclude_domains: []

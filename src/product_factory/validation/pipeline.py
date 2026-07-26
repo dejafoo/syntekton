@@ -241,6 +241,62 @@ def validate_citations(markdown: str) -> ValidatorResult:
     )
 
 
+_WEB_CITATION_HINTS = (
+    "citation",
+    "citations",
+    "cite sources",
+    "cite urls",
+    "web search",
+    "search the web",
+    "with sources",
+    "official docs",
+    "official documentation",
+)
+
+
+def request_expects_web_citations(request_text: str, metadata: dict[str, Any] | None = None) -> bool:
+    """True when the host asked for web-backed sources / citations."""
+    meta = metadata or {}
+    flag = str(meta.get("require_web_search") or meta.get("require_web_citations") or "").strip()
+    if flag.lower() in {"1", "true", "yes", "on"}:
+        return True
+    text = (request_text or "").lower()
+    return any(hint in text for hint in _WEB_CITATION_HINTS)
+
+
+def validate_web_search_used(
+    *,
+    expected: bool,
+    connector_enabled: bool,
+    invocation_count: int,
+    connector_id: str = "tavily_web_search",
+) -> ValidatorResult | None:
+    """Fail when web citations were requested but the search connector never ran.
+
+    Skips when the request did not ask for web sources, or when the connector is
+    disabled (research then cannot search even if the model invents URLs).
+    """
+    if not expected or not connector_enabled:
+        return None
+    if invocation_count >= 1:
+        return ValidatorResult(
+            validator_id="web_search_used",
+            status="pass",
+            message="ok",
+            details={"connector_id": connector_id, "invocation_count": invocation_count},
+        )
+    return ValidatorResult(
+        validator_id="web_search_used",
+        status="fail",
+        message=(
+            "Request asked for web citations/sources but "
+            f"{connector_id!r} was never invoked (no connector.invoked events). "
+            "Ensure TAVILY_API_KEY is set and research tasks call web_search."
+        ),
+        details={"connector_id": connector_id, "invocation_count": 0},
+    )
+
+
 def validate_architecture_request_specificity(
     markdown: str,
     *,

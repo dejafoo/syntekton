@@ -67,6 +67,10 @@ See [Host integration](docs/host-integration.md).
 Set `OPENROUTER_API_KEY` for live model calls. Use `--mock` or
 `PRODUCT_FACTORY_FORCE_MOCK=1` for offline runs.
 
+Set `TAVILY_API_KEY` for live web search (`tavily_web_search` is enabled in
+`config/connectors.yaml`). Put the key in the environment only — never in YAML.
+Mock mode does not need it.
+
 ### Budgets, validation commands, and resume (Phase 1)
 
 ```bash
