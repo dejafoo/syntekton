@@ -121,7 +121,7 @@ def test_meta_remote_mock_capabilities(remote: RemotePfClient) -> None:
     assert meta["api_version"] == "v1"
     assert meta["remote_mode"] is True
     assert meta["supported_workspace_kinds"] == ["none", "registered_path", "git_ref"]
-    assert meta["delivery_support"] is False
+    assert meta["delivery_support"] is True
     assert "sample_api" in meta["repository_ids"]
 
 

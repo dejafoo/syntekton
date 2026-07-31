@@ -47,6 +47,9 @@ function mockClient(
         overrides.materializeAll ??
         res({ run_id: "run-1", status: "completed", data: { landed: [], skipped: [] } }),
     ),
+    delivery: vi.fn(),
+    deliveryBlob: vi.fn(),
+    recordLanding: vi.fn(),
   };
   return {
     client: { ...calls, transport } as unknown as PfClient,
@@ -468,14 +471,15 @@ describe("pf_wait", () => {
 });
 
 describe("pf_merge remote mode", () => {
-  it("refuses merge without calling approve/materialize", async () => {
+  it("decline performs no approval, download, or local write", async () => {
     const { client, calls } = mockClient({}, { mode: "remote", endpoint: "https://pf.example" });
-    const out = await pfMerge({ client }, { ask: allow }, { run_id: "run-1" });
+    const out = await pfMerge({ client }, { ask: deny }, { run_id: "run-1" });
 
-    expect(out).toContain("remote_merge_unsupported");
+    expect(out).toContain("merge_declined");
     expect(calls.approve).not.toHaveBeenCalled();
-    expect(calls.materialize).not.toHaveBeenCalled();
-    expect(calls.materializeAll).not.toHaveBeenCalled();
+    expect(calls.delivery).not.toHaveBeenCalled();
+    expect(calls.deliveryBlob).not.toHaveBeenCalled();
+    expect(calls.recordLanding).not.toHaveBeenCalled();
   });
 });
 

@@ -9,12 +9,13 @@
 
 import type {
   ArtifactOverride,
+  DeliveryManifest,
   LandMapEntry,
   MaterializeInput,
   PfClient,
   PfResponse,
 } from "./pf-client.js";
-import { landMapFrom, REMOTE_MERGE_UNSUPPORTED_CODE, REMOTE_MERGE_UNSUPPORTED_MESSAGE } from "./pf-client.js";
+import { landMapFrom, landRemoteDelivery } from "./pf-client.js";
 
 /** Workflows that end in a proposed patch → land via `approve(apply=true)`. */
 export const PATCH_WORKFLOWS = new Set(["code_change", "repository_change"]);
@@ -85,6 +86,12 @@ export interface PfRunArgs {
   repository_path?: string;
   /** Server-registered repository id (remote mode). */
   repository_id?: string;
+  workspace?: {
+    kind: "git_ref";
+    repository_id: string;
+    ref: string;
+    commit?: string;
+  };
   budget_usd?: number;
   validation_commands?: string[];
   /**
@@ -193,6 +200,7 @@ export async function pfRun(deps: PfToolDeps, ctx: PfToolContext, args: PfRunArg
     workflow: args.workflow ?? "code_change",
     repositoryPath,
     repositoryId: args.repository_id,
+    workspace: args.workspace,
     budgetUsd: args.budget_usd ?? deps.defaultBudgetUsd,
     validationCommands: args.validation_commands,
     artifactOverrides: normalizeArtifactOverrides(args.artifact_overrides),
@@ -243,24 +251,10 @@ export async function pfReview(deps: PfToolDeps, _ctx: PfToolContext, args: PfRe
  * operator confirmation via `context.ask`. If `ask` is unavailable the merge is
  * refused (fail-closed) rather than silently proceeding.
  *
- * Remote mode refuses merge/materialize until R3 (delivery landing).
  */
 export async function pfMerge(deps: PfToolDeps, ctx: PfToolContext, args: PfMergeArgs): Promise<string> {
   if (deps.client.transport?.mode === "remote") {
-    return summarize(
-      {
-        protocol: "product-factory.host/v1",
-        ok: false,
-        run_id: args.run_id,
-        artifacts: [],
-        events: [],
-        error: {
-          code: REMOTE_MERGE_UNSUPPORTED_CODE,
-          message: REMOTE_MERGE_UNSUPPORTED_MESSAGE,
-        },
-      },
-      deps.client,
-    );
+    return pfMergeRemote(deps, ctx, args);
   }
 
   const status = await deps.client.status(args.run_id);
@@ -335,6 +329,94 @@ export async function pfMerge(deps: PfToolDeps, ctx: PfToolContext, args: PfMerg
   const input: MaterializeInput = { artifact, destPath, overwrite: args.overwrite ?? false };
   const materialized = await deps.client.materialize(args.run_id, input);
   return summarize(materialized, deps.client);
+}
+
+async function pfMergeRemote(
+  deps: PfToolDeps,
+  ctx: PfToolContext,
+  args: PfMergeArgs,
+): Promise<string> {
+  const status = await deps.client.status(args.run_id);
+  if (!status.ok) return summarize(status, deps.client);
+  if (!deps.client.delivery || !deps.client.deliveryBlob || !deps.client.recordLanding) {
+    throw new Error("Remote client does not implement delivery landing");
+  }
+  if (args.artifact || args.dest_path || args.roles || args.overwrite) {
+    return summarize(
+      {
+        protocol: status.protocol,
+        ok: false,
+        run_id: args.run_id,
+        status: status.status,
+        artifacts: [],
+        events: [],
+        error: {
+          code: "remote_delivery_override_rejected",
+          message: "Remote delivery uses the server-verified manifest; per-file overrides are not accepted.",
+        },
+      },
+      deps.client,
+    );
+  }
+  const inspected = await deps.client.inspect(args.run_id);
+  if (!inspected.ok) return summarize(inspected, deps.client);
+  const destinations = landMapFrom(inspected)
+    .filter((entry) => entry.landable !== false)
+    .map((entry) => entry.suggested_dest_path);
+  const confirmed = await confirmMerge(ctx, {
+    runId: args.run_id,
+    workflow: workflowOf(status, args.workflow),
+    action: "approve remote run + fetch verified delivery + land locally",
+    destinations,
+  });
+  if (!confirmed) {
+    return summarize(
+      {
+        protocol: status.protocol,
+        ok: false,
+        run_id: args.run_id,
+        status: status.status,
+        artifacts: [],
+        events: [],
+        error: {
+          code: "merge_declined",
+          message: "Operator declined the merge; no approval, download, or local write occurred.",
+        },
+      },
+      deps.client,
+    );
+  }
+  if (status.status === AWAITING) {
+    const approved = await deps.client.approve(args.run_id, { apply: false });
+    if (!approved.ok) return summarize(approved, deps.client);
+  }
+  const root = ctx.worktree ?? ctx.directory;
+  if (!root) throw new Error("OpenCode workspace root is unavailable; refusing remote landing");
+  const manifest: DeliveryManifest = await deps.client.delivery(args.run_id);
+  const blobs = new Map<string, Uint8Array>();
+  for (const entry of manifest.entries) {
+    blobs.set(entry.blob_sha256, await deps.client.deliveryBlob(args.run_id, entry.blob_sha256));
+  }
+  const landed = landRemoteDelivery(manifest, blobs, root, false);
+  const receipt = await deps.client.recordLanding(args.run_id, {
+    manifest_sha256: landed.manifest_sha256,
+    base_revision: landed.base_revision,
+    status: "landed",
+    landed_paths: landed.landed_paths,
+    client: "opencode-plugin",
+  });
+  return summarize(
+    {
+      protocol: status.protocol,
+      ok: true,
+      run_id: args.run_id,
+      status: "completed",
+      artifacts: [],
+      events: [],
+      data: { landed_paths: landed.landed_paths, receipt },
+    },
+    deps.client,
+  );
 }
 
 function singleFile(args: PfMergeArgs): boolean {
@@ -422,6 +504,13 @@ export function createPfTools(tool: ToolHelper, deps: PfToolDeps): Record<string
           .string()
           .optional()
           .describe("Server-registered repository id (remote mode). Prefer this over repository_path remotely."),
+        workspace: s
+          .record(s.string(), s.any())
+          .optional()
+          .describe(
+            'Pinned remote workspace: {"kind":"git_ref","repository_id":"sample_api",' +
+              '"ref":"refs/heads/main","commit":"<optional SHA>"}.',
+          ),
         budget_usd: s.number().optional().describe("Cost ceiling in USD."),
         validation_commands: s.array(s.string()).optional().describe("Validation command ids to run."),
         artifact_overrides: s
@@ -469,7 +558,7 @@ export function createPfTools(tool: ToolHelper, deps: PfToolDeps): Record<string
         "Patch workflows are approved+applied; doc/report workflows are approved (if needed) and every " +
         "deliverable in the run's artifact_land_map is landed at its suggested path (see pf_review). " +
         "Pass artifact/dest_path only to override the land map for a single file. " +
-        "Unsupported in remote mode until delivery landing (R3).",
+        "Remote mode approves without server apply, downloads hash-verified blobs, lands locally, then records a receipt.",
       args: {
         run_id: s.string().describe("Run id to merge."),
         workflow: s.string().optional().describe("Override detected workflow (patch vs doc/report)."),

@@ -59,7 +59,7 @@ def meta(request: Request) -> dict:
         "wal_mode": h.wal_mode,
         "remote_mode": remote_mode_enabled(),
         "supported_workspace_kinds": ["none", "registered_path", "git_ref"],
-        "delivery_support": False,
+        "delivery_support": True,
         "repository_ids": repos.ids(),
         "canonical_observe_base": base,
     }

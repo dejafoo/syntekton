@@ -18,6 +18,7 @@ from product_factory.api.remote_mode import (
     remote_mode_enabled,
     repositories_for_root,
 )
+from product_factory.delivery.store import DeliveryError, DeliveryStore
 from product_factory.domain.artifacts import HandoffRef
 from product_factory.domain.budgets import run_budget_from_policy
 from product_factory.domain.errors import ConfigurationError, ProductFactoryError
@@ -297,7 +298,22 @@ def approve_run(run_id: str, request: Request, body: ApproveBody = ApproveBody()
             )
         )
     host = _state(request).host(observe_base_url=_observe_base(request))
-    return _host_json(host.approve(run_id, apply=body.apply))
+    response = host.approve(run_id, apply=body.apply)
+    if response.ok and remote_mode_enabled():
+        row = _state(request).db.get_run(run_id)
+        if row is not None:
+            try:
+                delivery = DeliveryStore(_state(request).data_dir).build(run_id, row)
+            except DeliveryError as exc:
+                return _host_json(
+                    HostResponse.failure(
+                        code="delivery_build_failed",
+                        message=str(exc),
+                        run_id=run_id,
+                    )
+                )
+            response.data = {**(response.data or {}), "delivery": delivery.model_dump(mode="json")}
+    return _host_json(response)
 
 
 @router.post("/runs/{run_id}/reject")

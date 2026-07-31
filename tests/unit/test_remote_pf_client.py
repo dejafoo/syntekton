@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from product_factory.api.app import create_app  # noqa: E402
 from product_factory.config.repositories import load_repositories_config  # noqa: E402
+from product_factory.delivery.models import LandingReceipt  # noqa: E402
 from product_factory.host.protocol import HOST_PROTOCOL, HostResponse  # noqa: E402
 from product_factory.remote.client import (  # noqa: E402
     PfProtocolError,
@@ -95,7 +96,7 @@ def test_meta_advertises_remote_capabilities(remote_env) -> None:
     assert body["api_version"] == "v1"
     assert body["remote_mode"] is False
     assert body["supported_workspace_kinds"] == ["none", "registered_path", "git_ref"]
-    assert body["delivery_support"] is False
+    assert body["delivery_support"] is True
     assert body["repository_ids"] == ["sample_api"]
     assert body["canonical_observe_base"] == "http://pf.test"
 
@@ -298,6 +299,37 @@ def test_remote_client_host_v1_parity(remote_env, monkeypatch) -> None:
         assert tailed.ok
         assert isinstance(tailed.events, list)
 
+
+def test_remote_delivery_manifest_blob_and_receipt(remote_env, monkeypatch) -> None:
+    client, _, _, _ = remote_env
+    monkeypatch.setenv("PRODUCT_FACTORY_REMOTE_MODE", "true")
+    with RemotePfClient(base_url="http://test", client=_sync_asgi_client(client.app)) as remote:
+        submitted = remote.submit(
+            request_text="Write a technical plan for health-check coverage.",
+            workflow_type="technical_plan",
+            repository_id="sample_api",
+            mock=True,
+            sync=True,
+        )
+        assert submitted.run_id
+        manifest = remote.delivery(submitted.run_id)
+        assert manifest.base_revision
+        assert manifest.entries
+        entry = manifest.entries[0]
+        blob = remote.delivery_blob(submitted.run_id, entry.blob_sha256)
+        assert hashlib.sha256(blob).hexdigest() == entry.blob_sha256
+        receipt = remote.record_landing(
+            submitted.run_id,
+            LandingReceipt(
+                manifest_sha256=manifest.manifest_sha256,
+                base_revision=manifest.base_revision,
+                status="landed",
+                landed_paths=[entry.suggested_dest_path or "docs/PLAN.md"],
+                client="unit-test",
+            ),
+        )
+        assert receipt["run_id"] == submitted.run_id
+        assert receipt["receipt_id"].startswith("receipt-")
 
 
 def test_remote_client_rejects_repository_path_locally() -> None:

@@ -68,7 +68,7 @@ before evidence primitives would expand authority without auditability.
 | PM0 | Foundation contracts | WF0, S0, G0 (+ R0 parallel) | [x] |
 | PM1 | Feasibility discovery slice | S1, G1–G2, WF1 | [x] |
 | PM2 | Framing and remote control | WF2, R1 | [x] |
-| PM3 | Understand → decide → deliver remotely | WF3–WF4, S2, R2–R3 | [ ] |
+| PM3 | Understand → decide → deliver remotely | WF3–WF4, S2, R2–R3 | [x] |
 | PM4 | Change intelligence + local models | WF5–WF6, S3, G3, R4 | [ ] |
 | PM5 | Release / ops / deploy / harden | WF7–WF9, S4–S5, G4, R5 | [ ] |
 | Ongoing | Evaluation and promotion | WF10, S6 | [ ] throughout |
@@ -87,9 +87,9 @@ before evidence primitives would expand authority without auditability.
 | PM1.D | `feasibility_discovery` pack (WF1) | [x] |
 | PM2.A | `change_intake` pack (WF2) | [x] |
 | PM2.B | Remote host transport + OpenCode loop (R1) | [x] |
-| PM3.A | Investigation v2 + technical plan v2 (WF3–WF4) | [ ] |
-| PM3.B | Interface analysis + technical spike (S2, WF1.A) | [ ] |
-| PM3.C | Remote workspaces + delivery landing (R2–R3) | [ ] |
+| PM3.A | Investigation v2 + technical plan v2 (WF3–WF4) | [x] |
+| PM3.B | Interface analysis + technical spike (S2, WF1.A) | [x] |
+| PM3.C | Remote workspaces + delivery landing (R2–R3) | [x] |
 | PM4.A | Change-set provenance + verification gate v2 (WF5–WF6) | [ ] |
 | PM4.B | Delivery intelligence / validation evidence (S3) | [ ] |
 | PM4.C | Repository-derived stack profiles (G3) | [ ] |
@@ -302,7 +302,23 @@ fail-closed when `PRODUCT_FACTORY_REMOTE_URL` set);
 **Goal:** strengthen the middle of the lifecycle and make remote repository work
 safe.
 
-### PM3.A — Investigation v2 and technical plan v2 (WF3–WF4)
+### PM3.0 — Docker mock sandbox harness `[x]`
+
+Runnable `Dockerfile` + compose stack in force-mock/remote mode as the local
+substitute for a private AMD server, and the backend for every PM3 HTTP
+integration test.
+
+**Done evidence:** `Dockerfile`, `examples/remote/docker-compose.yml`,
+`examples/remote/docker-entrypoint.sh`,
+`examples/remote/repositories.docker.yaml`, `scripts/docker_remote_up.sh`;
+`tests/integration/test_remote_docker.py`
+(`test_meta_remote_mock_capabilities`, `test_auth_rejects_missing_bearer`,
+`test_mock_change_intake_no_repo_lifecycle`,
+`test_mock_technical_plan_registered_repo`,
+`test_sse_tail_or_stream_available`) under `DOCKER_INTEGRATION=1`;
+soft-skip wired in `scripts/verify.sh`; `docs/remote/docker-sandbox.md`.
+
+### PM3.A — Investigation v2 and technical plan v2 (WF3–WF4) `[x]`
 
 Evolve `repository_investigation` into a reusable evidence workflow that
 consumes `ChangeBrief` and optional external sources while remaining
@@ -313,7 +329,18 @@ contract that refuses invented product defaults.
 acceptance↔verification links are machine-valid; change/release fixtures
 consume plans by hash.
 
-### PM3.B — Interface analysis and technical spike (S2, WF1.A)
+**Done evidence:** `tests/unit/test_pm3a_validators.py`
+(`test_investigation_v2_requires_labels_and_fact_provenance`,
+`test_technical_plan_links_every_acceptance_to_verification`,
+`test_technical_plan_escalates_unknowns_instead_of_inventing_defaults`),
+`tests/graph/test_workflow_packs_phase3.py`
+(`test_mock_investigation_produces_report_without_write_tools`,
+`test_architecture_and_technical_plan_alias_parity`,
+`test_brief_to_investigation_to_plan_uses_artifact_hash_pins`),
+`tests/unit/test_workflow_packs.py`, `tests/unit/test_schema_registry.py`;
+fixtures under `tests/fixtures/investigation/` and `tests/fixtures/plan/`.
+
+### PM3.B — Interface analysis and technical spike (S2, WF1.A) `[x]`
 
 Add `interface_analysis`, initial contract inventories/diffs (start with
 OpenAPI/JSON Schema), synthetic fixtures, and optional `technical_spike` that
@@ -322,7 +349,21 @@ writes only to a disposable confined worktree.
 **Exit (summary):** spike reports carry hypothesis, method, measurements,
 limits; no live authenticated partner endpoints required.
 
-### PM3.C — Remote workspaces and local landing (R2–R3)
+**Done evidence:** `tests/unit/test_interface_analysis.py`
+(`test_inventory_addresses_openapi_and_json_schema`,
+`test_diff_classifies_breaking_and_non_breaking_changes`,
+`test_synthetic_fixture_and_simulation_stay_local`,
+`test_spike_rejects_path_and_symlink_escape`,
+`test_invalid_contract_is_rejected`,
+`test_interface_capability_tools_and_skills_are_wired`,
+`test_technical_spike_pack_compiles_and_schema_is_writable`),
+`tests/graph/test_technical_spike_pack.py`
+(`test_mock_technical_spike_uses_data_dir_scratch_and_emits_result`);
+`src/product_factory/tools/interface_analysis.py`,
+`skills/integration/contract-analysis/`, `skills/integration/technical-spike/`;
+fixtures under `tests/fixtures/contracts/`.
+
+### PM3.C — Remote workspaces and local landing (R2–R3) `[x]`
 
 Typed `git_ref` (then bounded bundle) workspace sources; server registry and
 pinned revisions; delivery manifests + blob download; laptop `LandingAdapter`
@@ -331,6 +372,41 @@ remote land.
 
 **Exit (summary):** remote code-change records exact base commit; hash-verified
 landing; decline/path escape/digest mismatch fail closed without laptop writes.
+
+**Done evidence (C1 `git_ref`):** `tests/unit/test_git_ref_workspace.py`
+(`test_prepare_git_ref_resolves_exact_commit_and_detached_checkout`,
+`test_prepare_rejects_floating_ref_and_commit_mismatch`,
+`test_workspace_and_task_worktree_paths_cannot_escape`),
+`tests/unit/test_remote_pf_client.py`
+(`test_remote_mode_git_ref_records_exact_provenance`,
+`test_remote_mode_rejects_unpinned_default_git_ref`,
+`test_remote_mode_rejects_laptop_repository_path`,
+`test_meta_advertises_remote_capabilities`),
+`tests/integration/test_remote_docker.py::test_mock_git_ref_workspace_provenance`
+(`DOCKER_INTEGRATION=1`); `src/product_factory/workspace/manager.py`.
+
+**Done evidence (C2 delivery + landing):** `tests/unit/test_delivery_landing.py`
+(`test_landing_verifies_then_writes_under_workspace`,
+`test_landing_failures_write_nothing[missing|digest|base|escape]`,
+`test_landing_rejects_changed_local_head`),
+`tests/unit/test_remote_pf_client.py`
+(`test_remote_delivery_manifest_blob_and_receipt`,
+`test_remote_approve_never_maps_apply_to_server_workspace`);
+OpenCode plugin `integrations/opencode-plugin/test/pf-client.test.ts`
+(`landRemoteDelivery` → "verifies manifest and blob hashes before writing under
+the workspace"; "fetches delivery manifests and binary blobs with bearer auth")
+and `integrations/opencode-plugin/test/tools.test.ts` (`pf_merge remote mode` →
+"decline performs no approval, download, or local write";
+`pf_merge confirmation gate` → "does NOT merge when no ask/permission function
+is available (fail-closed)"); `src/product_factory/delivery/`,
+`src/product_factory/api/delivery.py`, CLI `product-factory land`.
+
+**Gate evidence:** `uv run pytest -m "not integration"` (717 passed, 3 skipped;
+single pre-existing failure `tests/unit/test_host_mcp.py::test_pf_submit_builds_request_and_returns_host_response`,
+a MagicMock/`run_budget_from_policy` artifact that also fails at the PM2 base),
+`integrations/opencode-plugin` `npm test` (52 passed),
+`DOCKER_INTEGRATION=1 uv run pytest tests/integration/test_remote_docker.py`
+(6 passed), and `OPENCODE_INTEGRATION=1 scripts/opencode_remote_smoke.sh`.
 
 ---
 
