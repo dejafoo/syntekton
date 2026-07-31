@@ -1,4 +1,4 @@
-"""`repository_investigation` workflow pack — read-only evidence reports (P3.D).
+"""`repository_investigation` workflow pack — pinned read-only evidence reports.
 
 Produces a cited evidence report with an assumptions section. No repository
 write grants by default; only registered read tools plus artifact write for
@@ -12,12 +12,15 @@ from product_factory.workflows.base import WorkflowPack
 
 REPOSITORY_INVESTIGATION_PACK = WorkflowPack(
     id="repository_investigation",
-    version="1.0.0",
+    version="2.0.0",
     input_schema={
         "type": "object",
         "properties": {
             "request_text": {"type": "string"},
             "repository_path": {"type": ["string", "null"]},
+            "repository_revision": {"type": ["string", "null"]},
+            "retrieval_started_at": {"type": ["string", "null"]},
+            "retrieval_ended_at": {"type": ["string", "null"]},
         },
         "required": ["request_text"],
         "additionalProperties": True,
@@ -41,9 +44,15 @@ REPOSITORY_INVESTIGATION_PACK = WorkflowPack(
     validation_policy={
         "baseline_validators": [
             "investigation_sections",
+            "investigation_provenance",
             "secret_scan",
             "citation_presence",
         ],
+        "accepted_handoff_schemas": [
+            "change_brief.v1",
+            "feasibility_dossier.v1",
+        ],
+        "required_handoff_schema": "change_brief.v1",
         "review": "optional",
         "behavioral_commands": "none",
         "write_grants": "none",
@@ -59,7 +68,7 @@ REPOSITORY_INVESTIGATION_PACK = WorkflowPack(
         ),
     ),
     description=(
-        "Read-only repository investigation producing an evidence report with "
-        "cited paths and an assumptions section — no repository write grants."
+        "Read-only repository investigation consuming a pinned ChangeBrief and "
+        "producing labeled facts, inferences, unknowns, and source provenance."
     ),
 )

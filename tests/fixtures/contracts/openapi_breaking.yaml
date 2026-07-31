@@ -1,0 +1,22 @@
+openapi: 3.0.3
+info:
+  title: Pet fixture
+  version: 2.0.0
+paths:
+  /animals:
+    get:
+      operationId: listAnimals
+      tags: [animals]
+      responses:
+        "200":
+          description: ok
+components:
+  schemas:
+    Pet:
+      type: object
+      required: [id, species]
+      properties:
+        id:
+          type: string
+        species:
+          type: string

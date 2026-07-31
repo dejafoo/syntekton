@@ -47,6 +47,10 @@ AGENT_PROFILES: dict[str, str] = {
         "leave unknown cells explicitly unknown, and never upgrade an assumption into a "
         "fact. You do not retrieve sources."
     ),
+    "interface_analyst": (
+        "You analyze local OpenAPI and JSON Schema contracts, generate only synthetic "
+        "fixtures inside the assigned disposable worktree, and never contact live endpoints."
+    ),
 }
 
 

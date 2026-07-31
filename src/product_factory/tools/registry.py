@@ -188,6 +188,89 @@ def default_tool_registry() -> ToolRegistry:
             risk_class="R1",
         ),
         ToolDefinition(
+            name="parse_contract",
+            description="Parse a local OpenAPI or JSON Schema contract",
+            tool_class="interface_analysis",
+            input_schema={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            risk_class="R1",
+        ),
+        ToolDefinition(
+            name="contract_inventory",
+            description="Inventory addressable operations and schemas in a local contract",
+            tool_class="interface_analysis",
+            input_schema={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            risk_class="R1",
+        ),
+        ToolDefinition(
+            name="diff_contracts",
+            description="Classify local contract changes as breaking or non-breaking",
+            tool_class="interface_analysis",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "baseline_path": {"type": "string"},
+                    "candidate_path": {"type": "string"},
+                },
+                "required": ["baseline_path", "candidate_path"],
+                "additionalProperties": False,
+            },
+            risk_class="R1",
+        ),
+        ToolDefinition(
+            name="map_capabilities",
+            description="Map local contract addresses into tagged capabilities",
+            tool_class="interface_analysis",
+            input_schema={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            risk_class="R1",
+        ),
+        ToolDefinition(
+            name="generate_synthetic_fixture",
+            description="Generate a synthetic JSON fixture inside the confined spike worktree",
+            tool_class="synthetic_write",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "contract_path": {"type": "string"},
+                    "output_path": {"type": "string"},
+                    "schema_name": {"type": "string"},
+                },
+                "required": ["contract_path", "output_path"],
+                "additionalProperties": False,
+            },
+            risk_class="R2",
+        ),
+        ToolDefinition(
+            name="run_contract_simulation",
+            description="Validate a synthetic fixture locally without network access",
+            tool_class="interface_analysis",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "contract_path": {"type": "string"},
+                    "fixture_path": {"type": "string"},
+                    "schema_name": {"type": "string"},
+                },
+                "required": ["contract_path", "fixture_path"],
+                "additionalProperties": False,
+            },
+            risk_class="R1",
+        ),
+        ToolDefinition(
             name="run_validation_command",
             description=(
                 "Run a registered validation command by policy id "

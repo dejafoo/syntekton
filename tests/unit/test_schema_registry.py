@@ -31,9 +31,21 @@ def _fresh_registry() -> None:
 def test_seed_round_trip() -> None:
     reg = default_schema_registry()
     assert reg.known("evidence_report.document.v1")
+    assert reg.known("evidence_report.document.v2")
     assert reg.known("feasibility_dossier.v1")
     spec = reg.require("technical_plan.document.v1", for_write=True)
     assert spec.kind == "task_output"
+    assert reg.require("technical_plan.document.v2", for_write=True).version == "2"
+
+
+def test_pm3a_roles_emit_v2_contracts_with_v1_read_compatibility() -> None:
+    reg = default_schema_registry()
+    assert ROLE_TO_SCHEMA["evidence_report"] == "evidence_report.document.v2"
+    assert ROLE_TO_SCHEMA["architecture_document"] == "technical_plan.document.v2"
+    assert reg.require("evidence_report.document.v1", for_write=False).version == "1"
+    assert reg.require("technical_plan.document.v1", for_write=False).version == "1"
+    assert resolve_output_schema_id("evidence_report.v2") == "evidence_report.document.v2"
+    assert resolve_output_schema_id("technical_plan.v2") == "technical_plan.document.v2"
 
 
 def test_unknown_schema_write_fails() -> None:
@@ -43,7 +55,7 @@ def test_unknown_schema_write_fails() -> None:
 
 def test_reserved_schema_write_fails() -> None:
     with pytest.raises(SchemaValidationError, match="reserved"):
-        assert_schema_writable("spike_result.v1")
+        assert_schema_writable("verification_report.v1")
 
 
 def test_feasibility_dossier_is_writable_after_pm1() -> None:
@@ -139,10 +151,18 @@ def test_pm1_legacy_aliases_resolve_to_canonical_ids() -> None:
     assert resolve_output_schema_id("clarification_request.document.v1") == "clarification_request.v1"
 
 
+def test_spike_result_is_writable_after_pm3b() -> None:
+    """PM3.B un-reserves spike_result.v1 for the technical_spike pack."""
+    reg = default_schema_registry()
+    spec = reg.require("spike_result.v1", for_write=True)
+    assert spec.kind == "task_output"
+    assert spec.reserved is False
+    assert assert_schema_writable("spike_result.v1") == "spike_result.v1"
+
+
 def test_remaining_reserved_ids_still_block_writes() -> None:
     reg = default_schema_registry()
     for schema_id in (
-        "spike_result.v1",
         "verification_report.v1",
         "release_plan.v1",
         "deployment_record.v1",

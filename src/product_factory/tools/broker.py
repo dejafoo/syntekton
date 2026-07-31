@@ -26,6 +26,7 @@ from product_factory.orchestration.budget_ledger import BudgetLedger
 from product_factory.persistence.artifacts import ArtifactStore
 from product_factory.policy.source_policy import SourcePolicyProfile
 from product_factory.schemas import validate_write_payload
+from product_factory.tools import interface_analysis
 from product_factory.tools.policies import assert_path_allowed, resolve_under_root
 from product_factory.tools.registry import ToolRegistry
 from product_factory.tools.sandbox import run_sandboxed_command
@@ -252,6 +253,47 @@ class ToolBroker:
             return self._normalize_citation(arguments, grant.task_id, tool_call_id)
         if tool_name == "compare_options":
             return self._compare_options(arguments, grant.task_id, tool_call_id)
+        if tool_name == "parse_contract":
+            assert_path_allowed(str(arguments["path"]), grant.read_patterns())
+            return interface_analysis.parse_contract(
+                self._require_worktree(), str(arguments["path"])
+            )
+        if tool_name == "contract_inventory":
+            assert_path_allowed(str(arguments["path"]), grant.read_patterns())
+            return interface_analysis.contract_inventory(
+                self._require_worktree(), str(arguments["path"])
+            )
+        if tool_name == "diff_contracts":
+            assert_path_allowed(str(arguments["baseline_path"]), grant.read_patterns())
+            assert_path_allowed(str(arguments["candidate_path"]), grant.read_patterns())
+            return interface_analysis.diff_contracts(
+                self._require_worktree(),
+                str(arguments["baseline_path"]),
+                str(arguments["candidate_path"]),
+            )
+        if tool_name == "map_capabilities":
+            assert_path_allowed(str(arguments["path"]), grant.read_patterns())
+            return interface_analysis.map_capabilities(
+                self._require_worktree(), str(arguments["path"])
+            )
+        if tool_name == "generate_synthetic_fixture":
+            assert_path_allowed(str(arguments["contract_path"]), grant.read_patterns())
+            assert_path_allowed(str(arguments["output_path"]), grant.write_patterns())
+            return interface_analysis.generate_synthetic_fixture(
+                self._require_worktree(),
+                str(arguments["contract_path"]),
+                str(arguments["output_path"]),
+                arguments.get("schema_name"),
+            )
+        if tool_name == "run_contract_simulation":
+            assert_path_allowed(str(arguments["contract_path"]), grant.read_patterns())
+            assert_path_allowed(str(arguments["fixture_path"]), grant.read_patterns())
+            return interface_analysis.run_contract_simulation(
+                self._require_worktree(),
+                str(arguments["contract_path"]),
+                str(arguments["fixture_path"]),
+                arguments.get("schema_name"),
+            )
         if tool_name == "run_validation_command":
             return self._run_command(arguments)
         if self.connectors is not None and self.connectors.handles(tool_name):

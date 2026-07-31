@@ -18,6 +18,7 @@ from product_factory.workflows.quality_gate import QUALITY_GATE_PACK
 from product_factory.workflows.repository_change import REPOSITORY_CHANGE_PACK
 from product_factory.workflows.repository_investigation import REPOSITORY_INVESTIGATION_PACK
 from product_factory.workflows.technical_plan import TECHNICAL_PLAN_PACK
+from product_factory.workflows.technical_spike import TECHNICAL_SPIKE_PACK
 
 _PACKS: dict[str, WorkflowPack] = {
     CHANGE_INTAKE_PACK.id: CHANGE_INTAKE_PACK,
@@ -26,6 +27,7 @@ _PACKS: dict[str, WorkflowPack] = {
     REPOSITORY_CHANGE_PACK.id: REPOSITORY_CHANGE_PACK,
     REPOSITORY_INVESTIGATION_PACK.id: REPOSITORY_INVESTIGATION_PACK,
     TECHNICAL_PLAN_PACK.id: TECHNICAL_PLAN_PACK,
+    TECHNICAL_SPIKE_PACK.id: TECHNICAL_SPIKE_PACK,
 }
 
 # One-release aliases: existing callers keep working while canonical pack ids

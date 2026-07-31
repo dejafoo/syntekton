@@ -62,7 +62,7 @@ def test_architecture_aliases_to_technical_plan() -> None:
     pack = resolve_workflow_pack("architecture")
     assert pack is TECHNICAL_PLAN_PACK
     assert pack.id == "technical_plan"
-    assert pack.version == "1.0.0"
+    assert pack.version == "2.0.0"
 
 
 def test_technical_plan_and_architecture_alias_parity() -> None:
@@ -79,7 +79,7 @@ def test_technical_plan_and_architecture_alias_parity() -> None:
 def test_resolve_repository_investigation() -> None:
     pack = resolve_workflow_pack("repository_investigation")
     assert pack is REPOSITORY_INVESTIGATION_PACK
-    assert pack.version == "1.0.0"
+    assert pack.version == "2.0.0"
     assert "implementation" not in pack.allowed_capabilities
     assert "repair" not in pack.allowed_capabilities
     assert pack.validation_policy.get("write_grants") == "none"
@@ -157,6 +157,15 @@ def test_investigation_section_validator() -> None:
 ## Summary
 Auth lives in the API layer.
 
+## Repository snapshot
+- Revision: `abc123`
+- Retrieval window: `2026-07-30T10:00:00Z` to `2026-07-30T10:01:00Z`
+
+## Evidence
+- Fact: Middleware checks tokens in `src/api/auth.py`.
+- Inference: The middleware is the correct extension point.
+- Unknown: Production identity-provider behavior.
+
 ## Findings
 - Middleware checks tokens — see `src/api/auth.py`
 
@@ -166,6 +175,9 @@ Auth lives in the API layer.
 
 ## Assumptions
 - Read-only inspection only.
+
+## Unknowns
+- Production identity-provider behavior.
 """
     assert validate_investigation_document(ok).status == "pass"
     missing = validate_investigation_document("# Report\n\n## Summary\nOnly summary.\n")

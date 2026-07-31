@@ -20,6 +20,7 @@ from product_factory.workflows.handlers.repository_investigation import (
     RepositoryInvestigationHandler,
 )
 from product_factory.workflows.handlers.technical_plan import TechnicalPlanHandler
+from product_factory.workflows.handlers.technical_spike import TechnicalSpikeHandler
 from product_factory.workflows.registry import canonical_workflow_id
 
 _HANDLERS: dict[str, PackHandler] = {
@@ -29,6 +30,7 @@ _HANDLERS: dict[str, PackHandler] = {
     RepositoryChangeHandler().pack_id: RepositoryChangeHandler(),
     RepositoryInvestigationHandler().pack_id: RepositoryInvestigationHandler(),
     TechnicalPlanHandler().pack_id: TechnicalPlanHandler(),
+    TechnicalSpikeHandler().pack_id: TechnicalSpikeHandler(),
 }
 
 

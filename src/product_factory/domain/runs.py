@@ -21,7 +21,30 @@ WorkflowType = Literal[
     "quality_gate",
     "feasibility_discovery",
     "change_intake",
+    "technical_spike",
 ]
+
+
+class GitRefWorkspace(BaseModel):
+    """A server-resolved repository ref; client paths are never accepted."""
+
+    model_config = {"extra": "forbid"}
+
+    kind: Literal["git_ref"] = "git_ref"
+    repository_id: str
+    ref: str
+    commit: str | None = None
+
+
+class WorkspaceProvenance(BaseModel):
+    """Exact repository revision prepared for a run."""
+
+    model_config = {"extra": "forbid"}
+
+    kind: Literal["git_ref"] = "git_ref"
+    repository_id: str
+    ref: str
+    commit: str
 
 
 class ArtifactOverride(BaseModel):
@@ -57,6 +80,8 @@ class RunRequest(BaseModel):
     # Server-registered repository id (remote mode). Resolved to repository_path
     # on the host before execution; clients never send laptop paths remotely.
     repository_id: str | None = None
+    workspace: GitRefWorkspace | None = None
+    workspace_provenance: WorkspaceProvenance | None = None
     project_profile: str = "default"
     model_profile_set: str = "local-target"
     validation_commands: list[str] = Field(default_factory=list)
@@ -79,6 +104,7 @@ class RunManifest(BaseModel):
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     ended_at: datetime | None = None
     base_commit: str | None = None
+    workspace_provenance: WorkspaceProvenance | None = None
     usage: UsageMetrics = Field(default_factory=UsageMetrics)
     artifact_paths: dict[str, str] = Field(default_factory=dict)
     findings_count: int = 0
