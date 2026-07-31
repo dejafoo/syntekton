@@ -27,6 +27,7 @@ class SubmitRunBody(BaseModel):
     model_profile_set: str = "local-target"
     validation_commands: list[str] = Field(default_factory=list)
     artifact_overrides: dict[str, ArtifactOverride] = Field(default_factory=dict)
+    pack_input: dict[str, Any] = Field(default_factory=dict)
     budget_usd: float = 3.0
     max_wall_clock_seconds: int | None = None
     request_id: str | None = None
@@ -92,6 +93,7 @@ def _run_request(body: SubmitRunBody, *, budgets: Any = None) -> RunRequest:
         model_profile_set=body.model_profile_set,
         validation_commands=list(body.validation_commands),
         artifact_overrides=dict(body.artifact_overrides),
+        pack_input=dict(body.pack_input),
         budget=run_budget_from_policy(
             max_cost_usd=Decimal(str(body.budget_usd)),
             budgets=budgets,

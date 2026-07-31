@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from product_factory.domain.artifacts import HandoffRef
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.usage import UsageMetrics
 
@@ -18,6 +19,7 @@ WorkflowType = Literal[
     "repository_change",
     "repository_investigation",
     "quality_gate",
+    "feasibility_discovery",
 ]
 
 
@@ -57,6 +59,10 @@ class RunRequest(BaseModel):
     # Deprecated one-release alias for `artifact_overrides`, as `ROLE=dest/path.md`.
     requested_artifacts: list[str] = Field(default_factory=list)
     artifact_overrides: dict[str, ArtifactOverride] = Field(default_factory=dict)
+    handoff_refs: list[HandoffRef] = Field(default_factory=list)
+    # Typed pack-specific payload, validated at submit against the resolved
+    # pack's `input_schema`. Packs without a typed contract leave it empty.
+    pack_input: dict[str, Any] = Field(default_factory=dict)
     budget: RunBudget = Field(default_factory=RunBudget)
     approval_policy: str = "manual_apply"
     metadata: dict[str, str] = Field(default_factory=dict)

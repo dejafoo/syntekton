@@ -24,6 +24,8 @@ def select_model(task: TaskSpec, *, originating_profile: str | None = None) -> s
         "test_design",
         "test_execution",
         "documentation",
+        "domain_research",
+        "decision_analysis",
     }:
         return "fast_worker"
     if task.capability == "repair":

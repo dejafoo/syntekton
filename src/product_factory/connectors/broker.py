@@ -111,6 +111,7 @@ class ConnectorBroker:
         task_id: str,
         tool_call_id: str,
         run_id: str = "",
+        invocation_options: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         decision_id = f"cd-{uuid.uuid4().hex[:12]}"
         args_hash = hashlib.sha256(
@@ -144,6 +145,7 @@ class ConnectorBroker:
                 arguments=arguments,
                 task_id=task_id,
                 tool_call_id=tool_call_id,
+                invocation_options=invocation_options,
             )
         except ConnectorError as exc:
             self._emit(EVENT_DENIED, {**base, **_error_payload(exc)})
@@ -183,6 +185,7 @@ class ConnectorBroker:
         arguments: dict[str, Any],
         task_id: str,
         tool_call_id: str,
+        invocation_options: Mapping[str, Any] | None = None,
     ) -> ConnectorInvocation:
         connector_id = manifest.connector_id
         if not self.config.is_enabled(connector_id):
@@ -227,6 +230,10 @@ class ConnectorBroker:
         secret = self._resolve_secret(manifest, tool_name)
         declared_timeout = manifest.timeout_for(tool)
 
+        options = dict(settings.options)
+        # Run-scoped objects (for example SourceLedger) are supplied only by the
+        # trusted ToolBroker and override static YAML options.
+        options.update(invocation_options or {})
         return ConnectorInvocation(
             connector_id=connector_id,
             tool_name=tool_name,
@@ -240,7 +247,7 @@ class ConnectorBroker:
             egress=egress,
             mock=self.mock,
             secret=secret,
-            options=dict(settings.options),
+            options=options,
             max_result_bytes=self.config.effective_max_result_bytes(manifest),
         )
 
@@ -328,7 +335,7 @@ class ConnectorBroker:
         invocation: ConnectorInvocation,
     ) -> dict[str, Any]:
         payload, truncated = bound_payload(result.payload, invocation.max_result_bytes)
-        return {
+        envelope = {
             "connector_id": manifest.connector_id,
             "connector_version": manifest.version,
             "tool": tool_name,
@@ -340,6 +347,12 @@ class ConnectorBroker:
             "truncated": truncated,
             "provenance": [item.as_payload() for item in result.provenance],
         }
+        if result.metadata:
+            # Handler-controlled data for ToolBroker post-processing. It is not
+            # retained in connector audit events and must be removed before a
+            # result is exposed to the caller.
+            envelope["_handler_metadata"] = result.metadata
+        return envelope
 
     def _retained_excerpt(self, manifest: ConnectorManifest, payload: Payload) -> Any:
         """Apply the manifest's retention policy to what the audit trail keeps."""

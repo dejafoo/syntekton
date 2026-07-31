@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from product_factory.domain.artifacts import ArtifactRef, ResourceRef
+from product_factory.domain.artifacts import ArtifactRef, HandoffRef, ResourceRef
 from product_factory.domain.budgets import RunBudget, TaskBudget
 from product_factory.domain.errors import (
     ApprovalBlockedError,
@@ -44,6 +44,7 @@ SCHEMA_MODELS: dict[str, type] = {
     "AcceptanceCriterion": AcceptanceCriterion,
     "ResourceRef": ResourceRef,
     "ArtifactRef": ArtifactRef,
+    "HandoffRef": HandoffRef,
     "Finding": Finding,
     "TaskResult": TaskResult,
     "UsageMetrics": UsageMetrics,
@@ -83,6 +84,7 @@ __all__ = [
     "FinalArtifactSpec",
     "FinalStatus",
     "Finding",
+    "HandoffRef",
     "PlanRejectedError",
     "PlannerOutput",
     "ProductFactoryError",

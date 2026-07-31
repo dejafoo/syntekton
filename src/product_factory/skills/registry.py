@@ -6,28 +6,18 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
+from product_factory.skills.manifest import SkillManifest, compute_package_digest
 
-class SkillManifest(BaseModel):
-    id: str
-    version: str
-    title: str
-    capabilities: list[str] = Field(default_factory=list)
-    languages: list[str] = Field(default_factory=lambda: ["*"])
-    frameworks: list[str] = Field(default_factory=lambda: ["*"])
-    trigger: dict[str, Any] = Field(default_factory=dict)
-    negative_triggers: list[str] = Field(default_factory=list)
-    required_tools: list[str] = Field(default_factory=list)
-    prohibited_tools: list[str] = Field(default_factory=list)
-    content_ref: str = "SKILL.md"
-    status: str = "active"
+__all__ = ["Skill", "SkillManifest", "SkillRegistry", "compute_package_digest"]
 
 
 class Skill(BaseModel):
     manifest: SkillManifest
     content: str
     path: Path
+    package_digest: str = ""
 
 
 class SkillRegistry:
@@ -40,14 +30,31 @@ class SkillRegistry:
         if not root.exists():
             return cls(skills)
         for manifest_path in root.rglob("manifest.yaml"):
-            data = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+            raw = manifest_path.read_text(encoding="utf-8")
+            data = yaml.safe_load(raw) or {}
             manifest = SkillManifest.model_validate(data)
             if manifest.status != "active":
                 continue
             content_path = manifest_path.parent / manifest.content_ref
             content = content_path.read_text(encoding="utf-8") if content_path.exists() else ""
-            skills.append(Skill(manifest=manifest, content=content, path=manifest_path.parent))
+            digest = manifest.package_digest or compute_package_digest(
+                manifest_yaml=raw, skill_md=content
+            )
+            skills.append(
+                Skill(
+                    manifest=manifest,
+                    content=content,
+                    path=manifest_path.parent,
+                    package_digest=digest,
+                )
+            )
         return cls(skills)
+
+    def get(self, skill_id: str) -> Skill | None:
+        for skill in self.skills:
+            if skill.manifest.id == skill_id or skill.manifest.title == skill_id:
+                return skill
+        return None
 
     def match(
         self,
@@ -55,11 +62,19 @@ class SkillRegistry:
         capability: str,
         required_skills: list[str] | None = None,
         language: str | None = None,
+        skill_policy: dict[str, Any] | None = None,
     ) -> list[Skill]:
         required = set(required_skills or [])
+        policy = skill_policy or {}
+        allow = set(policy.get("allow") or policy.get("allowlist") or [])
+        deny = set(policy.get("deny") or policy.get("denylist") or [])
         selected: list[Skill] = []
         for skill in self.skills:
             mid = skill.manifest.id
+            if mid in deny or skill.manifest.title in deny:
+                continue
+            if allow and mid not in allow and skill.manifest.title not in allow:
+                continue
             if required and mid not in required and skill.manifest.title not in required:
                 # If explicit requirements exist, prefer those; also allow capability match.
                 if capability not in skill.manifest.capabilities:
@@ -77,5 +92,7 @@ class SkillRegistry:
         if required:
             for skill in self.skills:
                 if skill.manifest.id in required and skill not in selected:
+                    if skill.manifest.id in deny:
+                        continue
                     selected.append(skill)
         return selected

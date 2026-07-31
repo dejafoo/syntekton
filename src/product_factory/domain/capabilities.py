@@ -16,6 +16,8 @@ Capability = Literal[
     "composition",
     "independent_review",
     "repair",
+    "domain_research",
+    "decision_analysis",
 ]
 
 CAPABILITIES: frozenset[str] = frozenset(
@@ -31,6 +33,8 @@ CAPABILITIES: frozenset[str] = frozenset(
         "composition",
         "independent_review",
         "repair",
+        "domain_research",
+        "decision_analysis",
     }
 )
 
@@ -39,6 +43,10 @@ CAPABILITIES: frozenset[str] = frozenset(
 # enable the connector in `connectors.yaml`. Capabilities that write code are
 # deliberately absent: an implementation task has no reason to read the web, and
 # excluding it keeps untrusted external text out of patch-producing prompts.
+# `source_read` (URL retrieval) and `evidence_build` (local extraction, citation,
+# comparison) are deliberately absent: they reach a task only through an explicit
+# `required_tool_classes` declaration, so existing architecture/repository_analysis/
+# security_review tasks do not silently gain retrieval when a discovery pack ships.
 EXTERNAL_READ_TOOL_CLASSES: frozenset[str] = frozenset({"web_read", "mcp_filesystem_read"})
 
 # Tools permitted per capability (MVP defaults).
@@ -59,4 +67,8 @@ CAPABILITY_TOOL_CLASSES: dict[str, frozenset[str]] = {
     "repair": frozenset(
         {"repository_read", "repository_write", "git_read", "git_write", "validation_command"}
     ),
+    "domain_research": frozenset(
+        {"repository_read", "artifact_write", "web_read", "source_read", "evidence_build"}
+    ),
+    "decision_analysis": frozenset({"artifact_write", "evidence_build"}),
 }
