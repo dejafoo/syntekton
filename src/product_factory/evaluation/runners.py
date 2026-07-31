@@ -20,6 +20,29 @@ from product_factory.gateway.mock import MockGateway
 from product_factory.orchestration.coordinator import RunCoordinator, extract_unified_diff
 
 
+def _pack_input_for_case(case: EvalCase) -> dict:
+    """Build typed pack_input for packs that require it (PM1 discovery)."""
+    if case.workflow_type != "feasibility_discovery":
+        return {}
+    meta = case.metadata or {}
+    decision = str(meta.get("decision_statement") or case.request).strip()
+    domain = str(meta.get("domain") or "discovery").strip()
+    payload: dict = {
+        "decision_statement": decision[:2000],
+        "domain": domain[:200],
+        "allow_technical_spike": False,
+    }
+    if meta.get("jurisdiction") is not None:
+        payload["jurisdiction"] = meta.get("jurisdiction")
+    if meta.get("source_policy_profile"):
+        payload["source_policy_profile"] = str(meta["source_policy_profile"])
+    elif any(tag in (case.tags or []) for tag in ("jurisdiction", "regulated", "clinical")):
+        payload["source_policy_profile"] = "regulated-domain"
+    if case.expected_source_classes:
+        payload["allowed_source_classes"] = list(case.expected_source_classes)
+    return payload
+
+
 def _clone_repo(src: Path, dest: Path) -> Path:
     if dest.exists():
         shutil.rmtree(dest)
@@ -113,6 +136,7 @@ class FullOrchestrationRunner:
             request_text=_augment_request_text(case),
             repository_path=repo,
             budget=RunBudget(max_cost_usd=case.budgets.max_cost_usd),
+            pack_input=_pack_input_for_case(case),
             # `validation_commands` is the source of truth in the coordinator
             # (P1.C); keep the legacy metadata field in sync for callers still
             # reading it directly.
@@ -125,6 +149,7 @@ class FullOrchestrationRunner:
                 "disable_review": str(bool(case.metadata.get("disable_review", False))).lower(),
                 "force_review": str(bool(case.metadata.get("force_review", False))).lower(),
                 "disable_analysis": str(bool(case.metadata.get("disable_analysis", False))).lower(),
+                "disable_skills": str(bool(case.metadata.get("disable_skills", False))).lower(),
                 "context_mode": str(case.metadata.get("context_mode", "targeted")),
                 # Live planner schemas remain unreliable across providers; default to
                 # the deterministic plan unless an ablation explicitly requests live.
@@ -169,6 +194,14 @@ class FullOrchestrationRunner:
             if path.exists():
                 artifact_text = path.read_text(encoding="utf-8")
                 artifact_kind = "architecture"
+        elif case.workflow_type == "feasibility_discovery":
+            for name in ("FEASIBILITY_DISCOVERY.md", "FEASIBILITY.md"):
+                path = out / name
+                if path.exists() and path.stat().st_size > 0:
+                    artifact_text = path.read_text(encoding="utf-8")
+                    artifact_kind = "other"
+                    selected_path = path
+                    break
         else:
             for name in ("proposed.patch", "implementation.patch"):
                 path = out / name
@@ -193,7 +226,11 @@ class FullOrchestrationRunner:
             run_id=manifest.run_id,
             model_profile=config.model_profile,
             usage=manifest.usage,
-            artifact_path=selected_path if case.workflow_type == "code_change" else None,
+            artifact_path=(
+                selected_path
+                if case.workflow_type in {"code_change", "feasibility_discovery"}
+                else None
+            ),
             metadata={
                 "approval": manifest.final_status,
                 "selected_artifact": str(selected_path) if selected_path else None,
@@ -203,6 +240,7 @@ class FullOrchestrationRunner:
                 "seed": int(case.metadata.get("benchmark_seed", 0)),
                 "deterministic_fallback_used": isinstance(gateway, MockGateway),
                 "live_fallback_used": False,
+                "disable_skills": str(bool(case.metadata.get("disable_skills", False))).lower(),
             },
             error=(
                 (
@@ -283,10 +321,20 @@ class SingleAgentBaselineRunner:
             not text or text == "mock response" or resp.structured_data is not None
         ):
             text = _mock_artifact_for_case(case, repo)
-        kind = "architecture" if case.workflow_type == "architecture" else "patch"
+        if case.workflow_type == "architecture":
+            kind = "architecture"
+        elif case.workflow_type == "feasibility_discovery":
+            kind = "other"
+        else:
+            kind = "patch"
         if kind == "patch":
             text = extract_unified_diff(text)
-        out = work_dir / ("ARCHITECTURE.md" if kind == "architecture" else "proposed.patch")
+        out_name = {
+            "architecture": "ARCHITECTURE.md",
+            "other": "FEASIBILITY_DISCOVERY.md",
+            "patch": "proposed.patch",
+        }[kind]
+        out = work_dir / out_name
         out.write_text(text, encoding="utf-8")
         changed = []
         if kind == "patch":
@@ -459,7 +507,12 @@ class AgentIsolationRunner:
             not text or text == "mock response" or resp.structured_data is not None
         ):
             text = _mock_artifact_for_case(case, repo)
-        kind = "architecture" if case.workflow_type == "architecture" else "patch"
+        if case.workflow_type == "architecture":
+            kind = "architecture"
+        elif case.workflow_type == "feasibility_discovery":
+            kind = "other"
+        else:
+            kind = "patch"
         if kind == "patch":
             text = extract_unified_diff(text)
         return SubjectArtifact(
@@ -699,6 +752,67 @@ def _list_repo_files(repo: Path | None, limit: int = 40) -> list[str]:
 
 
 def _mock_artifact_for_case(case: EvalCase, repo: Path | None) -> str:
+    if case.workflow_type == "feasibility_discovery":
+        topics = case.must_cover or ["decision scope"]
+        cover = "\n".join(f"- Addresses: {topic}." for topic in topics)
+        sources = case.expected_source_classes or ["regulator", "vendor_api"]
+        evidence_lines = []
+        for idx, source_class in enumerate(sources, start=1):
+            evidence_lines.append(
+                f"- fact: Public {source_class} material confirms a documented interface "
+                f"(source_id: src-mock-{idx}, https://example.com/src-{idx})."
+            )
+        evidence_lines.append(
+            "- inference: Option ranking assumes operator can obtain non-production access."
+        )
+        evidence_lines.append("- unknown: Production SLA and contractual liability terms.")
+        recommendation = str(
+            case.metadata.get("expected_recommendation") or "insufficient_evidence"
+        )
+        return "\n".join(
+            [
+                "# FEASIBILITY_DISCOVERY.md",
+                "",
+                "## Decision",
+                case.request.strip(),
+                "",
+                "## Scope",
+                "Bounded public-evidence discovery only; no live system access.",
+                cover,
+                "",
+                "## Domain model",
+                "Actors, integration boundaries, and terminology for the stated domain.",
+                "",
+                "## Options",
+                "- Option A: reuse an existing certified pathway.",
+                "- Option B: build a custom adapter behind a policy gate.",
+                "",
+                "## Comparison rubric",
+                "- Capability, interoperability, security/privacy, operational burden, reversibility.",
+                "",
+                "## Evidence",
+                *evidence_lines,
+                "",
+                "## Assumptions",
+                "- Operators supply jurisdiction and deployment context when required.",
+                "",
+                "## Unknowns",
+                "- Missing primary-source confirmation for contested claims.",
+                "",
+                "## Risks",
+                "- Treating secondary commentary as authoritative policy.",
+                "",
+                "## Constraints",
+                "- Read-only research; no credentials or PHI.",
+                "",
+                "## Recommendation",
+                recommendation,
+                "",
+                "## Next step",
+                "Clarify blockers or escalate for expert review before technical planning.",
+                "",
+            ]
+        )
     if case.workflow_type == "architecture":
         must = case.must_cover or ["request-specific design"]
         cover_lines = "\n".join(f"- Explicitly covers: {topic}." for topic in must)
@@ -839,6 +953,16 @@ def default_subject_configs() -> dict[str, SubjectConfig]:
             subject_id="orchestration_strong_worker",
             model_profile="local_target_reviewer",
             description="Fixed planner with stronger implementation worker",
+        ),
+        "orchestration_with_skills": SubjectConfig(
+            subject_id="orchestration_with_skills",
+            model_profile="supervisor",
+            description="Full orchestration with skills enabled (skill scorecard arm)",
+        ),
+        "orchestration_no_skills": SubjectConfig(
+            subject_id="orchestration_no_skills",
+            model_profile="supervisor",
+            description="Full orchestration with skills disabled (ablation arm)",
         ),
         "frontier_reference": SubjectConfig(
             subject_id="frontier_reference",

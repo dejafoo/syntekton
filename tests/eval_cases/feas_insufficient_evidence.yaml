@@ -1,0 +1,30 @@
+id: feas_insufficient_evidence
+workflow_type: feasibility_discovery
+request: |
+  Decide whether to green-light a live EHR write-back integration based only on
+  marketing pages and an anonymous forum thread. No primary API or regulator
+  material is available in the research budget.
+tags: ['feasibility', 'discovery', 'no-go']
+expected_status:
+  - completed
+  - awaiting_approval
+acceptance_criteria:
+  - Outcome is insufficient_evidence or not_recommended
+  - Unsupported marketing claims are labeled or rejected
+  - Next step is clarification or evidence gathering, not implementation
+must_cover:
+  - EHR
+  - write-back
+  - insufficient evidence
+expected_source_classes:
+  - secondary_commentary
+reference_hints: |
+  Correct outcome is a no-go / insufficient-evidence recommendation, not a
+  polished plan that invents API capabilities.
+isolation_targets:
+  - domain_research
+  - decision_analysis
+  - composition
+metadata:
+  min_cited_sources: 1
+  expected_recommendation: insufficient_evidence

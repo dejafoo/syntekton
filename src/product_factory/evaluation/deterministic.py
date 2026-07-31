@@ -21,6 +21,10 @@ from product_factory.validation.pipeline import (
     has_blocking_failures,
     validate_architecture_document,
     validate_architecture_request_specificity,
+    validate_feasibility_cited_sources,
+    validate_feasibility_document,
+    validate_feasibility_recommendation,
+    validate_feasibility_unsupported_claims,
     validate_path_scope,
     validate_secrets,
 )
@@ -98,6 +102,34 @@ def run_deterministic_checks(
                 reject_boilerplate=True,
             )
         )
+        results.append(validate_secrets(artifact.artifact_text))
+    if case.workflow_type == "feasibility_discovery":
+        results.append(validate_feasibility_document(artifact.artifact_text))
+        min_sources = int(case.metadata.get("min_cited_sources") or 1)
+        if case.expected_source_classes:
+            min_sources = max(min_sources, len(case.expected_source_classes))
+        results.append(
+            validate_feasibility_cited_sources(
+                artifact.artifact_text,
+                minimum=min_sources,
+            )
+        )
+        results.append(validate_feasibility_unsupported_claims(artifact.artifact_text))
+        results.append(validate_feasibility_recommendation(artifact.artifact_text))
+        if case.must_cover:
+            missing_topics = [
+                topic
+                for topic in case.must_cover
+                if topic.lower() not in artifact.artifact_text.lower()
+            ]
+            results.append(
+                ValidatorResult(
+                    validator_id="feasibility_must_cover",
+                    status="pass" if not missing_topics else "fail",
+                    message="ok" if not missing_topics else f"Missing topics: {missing_topics}",
+                    details={"missing": missing_topics},
+                )
+            )
         results.append(validate_secrets(artifact.artifact_text))
     if case.workflow_type == "code_change":
         is_diff = artifact.artifact_kind == "patch" and (

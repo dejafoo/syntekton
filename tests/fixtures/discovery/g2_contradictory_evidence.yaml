@@ -1,0 +1,20 @@
+id: g2-contradictory-evidence
+skill: discovery.evidence-assessment
+scenario: contradictory
+decision_statement: Does Vendor X retain audit logs for 90 days?
+domain: identity
+evidence:
+  - id: src-vendor-docs-2025
+    source_class: vendor_api
+    published_at: "2025-01-15"
+    excerpt: Audit logs are retained for 90 days on all enterprise tenants.
+  - id: src-status-page-note
+    source_class: secondary_commentary
+    published_at: "2025-03-01"
+    excerpt: Enterprise audit retention is 30 days unless a custom contract applies.
+expected_outcome: unknown
+expected_labels:
+  - fact
+  - unknown
+rationale: >-
+  Record both sides and escalate; do not average 90 and 30 into a fake consensus.

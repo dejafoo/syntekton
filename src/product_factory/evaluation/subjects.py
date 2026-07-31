@@ -25,6 +25,8 @@ SubjectId = Literal[
     "orchestration_live_planner",
     "orchestration_complexity_planner",
     "orchestration_strong_worker",
+    "orchestration_with_skills",
+    "orchestration_no_skills",
     "frontier_reference",
     "seeded_repair",
     "seeded_review",

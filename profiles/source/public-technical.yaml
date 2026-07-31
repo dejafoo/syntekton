@@ -1,0 +1,20 @@
+id: public-technical
+version: 1.0.0
+description: >-
+  Default discovery policy for public technical questions. Primary and vendor
+  documentation are preferred; commentary is admissible but must be labeled.
+  No topic is escalated to expert review by policy alone.
+allowed_source_classes:
+  - standard
+  - regulator
+  - vendor_api
+  - operator_artifact
+  - secondary_commentary
+preferred_source_classes:
+  - standard
+  - regulator
+  - vendor_api
+allowed_domains: []
+denied_domains: []
+max_source_age_days: 1095
+require_expert_review_for: []

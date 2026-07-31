@@ -24,7 +24,7 @@ class EvalCase(BaseModel):
     """Benchmark case — backward compatible with simple YAML cases."""
 
     id: str
-    workflow_type: Literal["architecture", "code_change"]
+    workflow_type: Literal["architecture", "code_change", "feasibility_discovery"]
     request: str
     repository: str | None = None
     tags: list[str] = Field(default_factory=list)
@@ -47,7 +47,11 @@ class EvalCase(BaseModel):
     reference_hints: str | None = None
     must_cover: list[str] = Field(
         default_factory=list,
-        description="Request-specific topics that architecture artifacts must address",
+        description="Request-specific topics that architecture/discovery artifacts must address",
+    )
+    expected_source_classes: list[str] = Field(
+        default_factory=list,
+        description="Source classes a feasibility dossier is expected to engage",
     )
     expected_files: list[str] = Field(default_factory=list)
     smoke_commands: list[str] = Field(default_factory=list)
@@ -76,4 +80,18 @@ def validate_behavioral_contract(case: EvalCase) -> None:
     ):
         raise ValueError(
             f"Code evaluation case {case.id!r} has no smoke_commands or behavioral_checks"
+        )
+
+
+def validate_discovery_contract(case: EvalCase) -> None:
+    """Reject discovery cases that lack scoring anchors (topics or source classes)."""
+    if case.workflow_type != "feasibility_discovery":
+        return
+    meta_classes = case.metadata.get("expected_source_classes") or []
+    source_classes = case.expected_source_classes or [
+        str(item).strip() for item in meta_classes if str(item).strip()
+    ]
+    if not case.must_cover and not source_classes:
+        raise ValueError(
+            f"Discovery evaluation case {case.id!r} needs must_cover or expected_source_classes"
         )
