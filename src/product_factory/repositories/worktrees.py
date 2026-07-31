@@ -24,10 +24,20 @@ class WorktreeManager:
         self.worktrees_root.mkdir(parents=True, exist_ok=True)
         self._active: dict[str, Worktree] = {}
 
+    def _path_for(self, task_id: str) -> Path:
+        path = self.worktrees_root / task_id
+        try:
+            path.resolve().relative_to(self.worktrees_root.resolve())
+        except ValueError as exc:
+            raise UnsafeOperationError(f"Worktree task id escapes root: {task_id!r}") from exc
+        if path.parent.resolve() != self.worktrees_root.resolve():
+            raise UnsafeOperationError(f"Worktree task id must be one path component: {task_id!r}")
+        return path
+
     def create(self, task_id: str, *, base_commit: str, writable: bool = True) -> Worktree:
         if task_id in self._active:
             raise UnsafeOperationError(f"Worktree already exists for task {task_id}")
-        path = self.worktrees_root / task_id
+        path = self._path_for(task_id)
         if path.exists():
             raise UnsafeOperationError(f"Worktree path already exists: {path}")
 
@@ -60,14 +70,14 @@ class WorktreeManager:
         return self._active[task_id]
 
     def exists_on_disk(self, task_id: str) -> bool:
-        return (self.worktrees_root / task_id).exists()
+        return self._path_for(task_id).exists()
 
     def reattach(self, task_id: str, *, base_commit: str, writable: bool = True) -> Worktree:
         """Re-register a worktree directory left on disk by a prior process (resume, P1.B).
 
         Does not re-run `git worktree add` — the directory already exists.
         """
-        path = self.worktrees_root / task_id
+        path = self._path_for(task_id)
         if not path.exists():
             raise KeyError(task_id)
         wt = Worktree(task_id=task_id, path=path, base_commit=base_commit, writable=writable)

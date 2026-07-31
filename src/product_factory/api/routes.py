@@ -13,9 +13,9 @@ from product_factory.api.remote_mode import (
     canonical_observe_base,
     remote_mode_enabled,
     repositories_for_root,
+    resolve_project_root,
 )
 from product_factory.api.streaming import encode_sse, iter_events
-from product_factory.config.loader import find_project_root
 from product_factory.host.protocol import HOST_PROTOCOL
 from product_factory.observability.contracts import (
     ArtifactView,
@@ -47,7 +47,7 @@ def health(request: Request) -> HealthView:
 def meta(request: Request) -> dict:
     h = _state(request).query.health()
     state = _state(request)
-    root = state.project_root or find_project_root(state.data_dir.parent)
+    root = resolve_project_root(data_dir=state.data_dir, project_root=state.project_root)
     repos = repositories_for_root(root)
     base = canonical_observe_base(request_base=str(request.base_url))
     return {
@@ -58,7 +58,7 @@ def meta(request: Request) -> dict:
         "capture_level": h.capture_level,
         "wal_mode": h.wal_mode,
         "remote_mode": remote_mode_enabled(),
-        "supported_workspace_kinds": ["none", "registered_path"],
+        "supported_workspace_kinds": ["none", "registered_path", "git_ref"],
         "delivery_support": False,
         "repository_ids": repos.ids(),
         "canonical_observe_base": base,

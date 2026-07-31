@@ -2,9 +2,6 @@
 
 Soft-skips unless ``DOCKER_INTEGRATION=1``. When that flag is set, missing
 Docker/compose or an unhealthy stack fails the suite (no silent skip).
-
-Later slices extend this module with ``git_ref`` provenance and delivery
-assertions (PM3.C1 / PM3.C2).
 """
 
 from __future__ import annotations
@@ -123,8 +120,7 @@ def test_meta_remote_mock_capabilities(remote: RemotePfClient) -> None:
     assert meta["protocol"] == HOST_PROTOCOL
     assert meta["api_version"] == "v1"
     assert meta["remote_mode"] is True
-    assert "none" in meta["supported_workspace_kinds"]
-    assert "registered_path" in meta["supported_workspace_kinds"]
+    assert meta["supported_workspace_kinds"] == ["none", "registered_path", "git_ref"]
     assert meta["delivery_support"] is False
     assert "sample_api" in meta["repository_ids"]
 
@@ -139,6 +135,7 @@ def test_auth_rejects_missing_bearer(docker_remote_env: dict[str, str]) -> None:
         timeout=30.0,
     )
     assert denied.status_code == 401
+    # Client path: construct without inheriting the harness env token.
     with (
         RemotePfClient(base_url=url, token="wrong-token", timeout=30.0) as client,
         pytest.raises(PfRemoteError, match="Unauthorized"),
@@ -161,6 +158,7 @@ def test_mock_change_intake_no_repo_lifecycle(remote: RemotePfClient) -> None:
     assert submitted.run_id
     assert submitted.status in {"completed", "awaiting_approval", "failed", "running", "queued"}
 
+    # sync mock should finish quickly; poll status/inspect for envelope parity.
     deadline = time.time() + 120
     status = submitted
     while time.time() < deadline:
@@ -198,6 +196,64 @@ def test_mock_technical_plan_registered_repo(remote: RemotePfClient) -> None:
     assert inspected.data is not None
 
 
+def test_mock_git_ref_workspace_provenance(
+    remote: RemotePfClient, docker_remote_env: dict[str, str]
+) -> None:
+    env = {
+        **os.environ,
+        "PRODUCT_FACTORY_OBSERVE_TOKEN": docker_remote_env["token"],
+    }
+    resolved = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(COMPOSE_FILE),
+            "exec",
+            "-T",
+            "product-factory",
+            "git",
+            "-C",
+            "/data/repos/sample_api",
+            "rev-parse",
+            "refs/heads/main",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    ).stdout.strip()
+    submitted = remote.submit(
+        request_text="Investigate health-check coverage from the pinned fixture revision.",
+        workflow_type="technical_plan",
+        workspace={
+            "kind": "git_ref",
+            "repository_id": "sample_api",
+            "ref": "refs/heads/main",
+            "commit": resolved,
+        },
+        mock=True,
+        sync=True,
+    )
+    assert submitted.ok, submitted.model_dump()
+    assert submitted.run_id
+
+    inspected = remote.inspect(submitted.run_id)
+    assert inspected.ok
+    assert inspected.data is not None
+    provenance = inspected.data["workspace_provenance"]
+    assert provenance == {
+        "kind": "git_ref",
+        "repository_id": "sample_api",
+        "ref": "refs/heads/main",
+        "commit": resolved,
+    }
+    assert inspected.data["manifest"]["base_commit"] == resolved
+    assert inspected.data["manifest"]["workspace_provenance"] == provenance
+
+
 def test_sse_tail_or_stream_available(remote: RemotePfClient) -> None:
     submitted = remote.submit(
         request_text="Frame a small clarification-light intake for a health endpoint.",
@@ -212,5 +268,6 @@ def test_sse_tail_or_stream_available(remote: RemotePfClient) -> None:
     assert tailed.ok
     assert isinstance(tailed.events, list)
 
+    # Best-effort SSE: at least one event or a clean empty iterator is fine.
     events = list(remote.iter_sse(submitted.run_id, after_seq=0, live=False))
     assert isinstance(events, list)

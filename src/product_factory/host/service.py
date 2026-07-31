@@ -346,6 +346,10 @@ class HostService:
 
         foundation = collect_foundation_projections(run_dir)
         eligible = eligible_next_actions_for_workflow(row.get("workflow_type") or "")
+        request_payload = self._request_dict(run_id) or {}
+        workspace_provenance = (manifest or {}).get("workspace_provenance") or request_payload.get(
+            "workspace_provenance"
+        )
         return HostResponse.success(
             run_id=run_id,
             status=row["status"],
@@ -353,6 +357,7 @@ class HostService:
             artifacts=artifacts,
             data={
                 "manifest": manifest,
+                "workspace_provenance": workspace_provenance,
                 "plan": plan.model_dump(mode="json") if plan else None,
                 "validations": validations,
                 "approval": self._approval_record(run_id),
@@ -870,9 +875,8 @@ class HostService:
     ) -> list[dict[str, Any]] | None:
         url = f"{self.observe_base_url}/api/v1/runs/{run_id}/events"
         headers: dict[str, str] = {}
-        token = (
-            os.environ.get("PRODUCT_FACTORY_OBSERVE_TOKEN")
-            or os.environ.get("PRODUCT_FACTORY_HOST_TOKEN")
+        token = os.environ.get("PRODUCT_FACTORY_OBSERVE_TOKEN") or os.environ.get(
+            "PRODUCT_FACTORY_HOST_TOKEN"
         )
         if token:
             headers["Authorization"] = f"Bearer {token}"

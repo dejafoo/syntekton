@@ -156,6 +156,7 @@ class RemotePfClient:
         request_text: str,
         workflow_type: str = "code_change",
         repository_id: str | None = None,
+        workspace: dict[str, Any] | None = None,
         repository_path: str | Path | None = None,
         model_profile_set: str = "local-target",
         validation_commands: list[str] | None = None,
@@ -173,6 +174,8 @@ class RemotePfClient:
             raise PfRemoteError(
                 "Remote mode rejects repository_path; use repository_id or omit for no-repo runs"
             )
+        if workspace is not None and repository_id is not None:
+            raise PfRemoteError("workspace cannot be combined with repository_id")
         body: dict[str, Any] = {
             "request_text": request_text,
             "workflow_type": workflow_type,
@@ -188,6 +191,8 @@ class RemotePfClient:
         }
         if repository_id is not None:
             body["repository_id"] = repository_id
+        if workspace is not None:
+            body["workspace"] = dict(workspace)
         if max_wall_clock_seconds is not None:
             body["max_wall_clock_seconds"] = max_wall_clock_seconds
         if request_id is not None:
@@ -218,6 +223,9 @@ class RemotePfClient:
             headers=self._headers(),
         )
         return self._parse(response)
+
+
+
 
     def reject(self, run_id: str) -> HostResponse:
         response = self._client.post(f"/api/v1/runs/{run_id}/reject", headers=self._headers())

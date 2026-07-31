@@ -1,4 +1,4 @@
-"""Thin server-side repository registry (remote workspace kinds: registered_path)."""
+"""Server-side repository registry for registered paths and git-ref workspaces."""
 
 from __future__ import annotations
 
@@ -12,7 +12,10 @@ from product_factory.domain.errors import ConfigurationError
 
 
 class RepositoryEntry(BaseModel):
-    path: Path
+    path: Path | None = None
+    fetch_url: str | None = None
+    credential_ref: str | None = None
+    refs: list[str] = Field(default_factory=list)
     description: str = ""
 
 
@@ -23,12 +26,11 @@ class RepositoriesConfig(BaseModel):
         return sorted(self.repositories)
 
     def resolve(self, repository_id: str) -> Path:
-        entry = self.repositories.get(repository_id)
-        if entry is None:
-            known = ", ".join(self.ids()) or "(none)"
+        entry = self.entry(repository_id)
+        if entry.path is None:
             raise ConfigurationError(
-                f"Unknown repository_id {repository_id!r}; known: {known}",
-                details={"repository_id": repository_id, "known": self.ids()},
+                f"repository_id {repository_id!r} has no registered path",
+                details={"repository_id": repository_id},
             )
         path = entry.path.expanduser()
         if not path.is_absolute():
@@ -37,6 +39,27 @@ class RepositoriesConfig(BaseModel):
                 details={"repository_id": repository_id, "path": str(path)},
             )
         return path.resolve()
+
+    def entry(self, repository_id: str) -> RepositoryEntry:
+        entry = self.repositories.get(repository_id)
+        if entry is None:
+            known = ", ".join(self.ids()) or "(none)"
+            raise ConfigurationError(
+                f"Unknown repository_id {repository_id!r}; known: {known}",
+                details={"repository_id": repository_id, "known": self.ids()},
+            )
+        return entry
+
+    def fetch_url(self, repository_id: str) -> str:
+        entry = self.entry(repository_id)
+        if entry.fetch_url:
+            return entry.fetch_url
+        if entry.path is not None:
+            return str(entry.path.expanduser().resolve())
+        raise ConfigurationError(
+            f"repository_id {repository_id!r} has no fetch_url",
+            details={"repository_id": repository_id},
+        )
 
 
 def load_repositories_config(config_dir: Path) -> RepositoriesConfig:
@@ -60,9 +83,7 @@ def load_repositories_config(config_dir: Path) -> RepositoriesConfig:
         elif isinstance(entry, dict):
             normalized["repositories"][str(repo_id)] = entry
         else:
-            raise ConfigurationError(
-                f"Invalid repository entry for {repo_id!r} in {path}"
-            )
+            raise ConfigurationError(f"Invalid repository entry for {repo_id!r} in {path}")
     try:
         return RepositoriesConfig.model_validate(normalized)
     except Exception as exc:
