@@ -25,6 +25,9 @@ class ArtifactStore:
         created_by_task_id: str,
         trust_level: str = "generated",
         created_by_tool_call_id: str | None = None,
+        schema_id: str | None = None,
+        schema_version: str | None = None,
+        handoff_state: str | None = None,
     ) -> ArtifactRef:
         sha = hashlib.sha256(content).hexdigest()
         path = self.blobs / sha
@@ -40,6 +43,9 @@ class ArtifactStore:
             created_by_task_id=created_by_task_id,
             created_by_tool_call_id=created_by_tool_call_id,
             trust_level=trust_level,  # type: ignore[arg-type]
+            schema_id=schema_id,
+            schema_version=schema_version,
+            handoff_state=handoff_state,  # type: ignore[arg-type]
         )
 
     def put_text(
@@ -50,6 +56,10 @@ class ArtifactStore:
         logical_name: str,
         created_by_task_id: str,
         trust_level: str = "generated",
+        created_by_tool_call_id: str | None = None,
+        schema_id: str | None = None,
+        schema_version: str | None = None,
+        handoff_state: str | None = None,
     ) -> ArtifactRef:
         return self.put_bytes(
             text.encode("utf-8"),
@@ -57,6 +67,10 @@ class ArtifactStore:
             logical_name=logical_name,
             created_by_task_id=created_by_task_id,
             trust_level=trust_level,
+            created_by_tool_call_id=created_by_tool_call_id,
+            schema_id=schema_id,
+            schema_version=schema_version,
+            handoff_state=handoff_state,
         )
 
     def put_json(
@@ -65,6 +79,11 @@ class ArtifactStore:
         *,
         logical_name: str,
         created_by_task_id: str,
+        created_by_tool_call_id: str | None = None,
+        schema_id: str | None = None,
+        schema_version: str | None = None,
+        trust_level: str = "generated",
+        handoff_state: str | None = None,
     ) -> ArtifactRef:
         body = json.dumps(data, indent=2, default=str, sort_keys=True) + "\n"
         return self.put_text(
@@ -72,7 +91,11 @@ class ArtifactStore:
             media_type="application/json",
             logical_name=logical_name,
             created_by_task_id=created_by_task_id,
-            trust_level="generated",
+            trust_level=trust_level,
+            created_by_tool_call_id=created_by_tool_call_id,
+            schema_id=schema_id,
+            schema_version=schema_version,
+            handoff_state=handoff_state,
         )
 
     def get_bytes(self, sha256: str) -> bytes:

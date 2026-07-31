@@ -43,6 +43,8 @@ def build_planner_messages(
             "composition",
             "independent_review",
             "repair",
+            "domain_research",
+            "decision_analysis",
         ],
     }
     return [

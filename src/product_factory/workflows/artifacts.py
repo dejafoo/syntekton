@@ -23,6 +23,7 @@ ROLE_PROPOSED_PATCH = "proposed_patch"
 ROLE_TEST_PLAN = "test_plan"
 ROLE_QUALITY_FINDINGS = "quality_findings"
 ROLE_SECURITY_EVIDENCE = "security_evidence"
+ROLE_FEASIBILITY_DOSSIER = "feasibility_dossier"
 
 
 @dataclass(frozen=True)

@@ -140,6 +140,54 @@ def default_tool_registry() -> ToolRegistry:
             risk_class="R1",
         ),
         ToolDefinition(
+            name="extract_document",
+            description="Extract bounded text from a persisted source capture",
+            tool_class="evidence_build",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "source_sha256": {"type": "string"},
+                    "max_chars": {"type": "integer", "minimum": 1},
+                    "section": {"type": "string"},
+                },
+                "required": ["source_sha256", "max_chars"],
+                "additionalProperties": False,
+            },
+            risk_class="R1",
+        ),
+        ToolDefinition(
+            name="normalize_citation",
+            description="Create a deterministic policy-checked source record",
+            tool_class="evidence_build",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "source_sha256": {"type": "string"},
+                    "source_class": {"type": "string"},
+                    "published_at": {"type": "string"},
+                },
+                "required": ["source_sha256", "source_class"],
+                "additionalProperties": False,
+            },
+            risk_class="R1",
+        ),
+        ToolDefinition(
+            name="compare_options",
+            description="Write an explicit-unknown option matrix artifact",
+            tool_class="evidence_build",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "options": {"type": "array"},
+                    "criteria": {"type": "array"},
+                    "evidence_refs": {"type": "array"},
+                },
+                "required": ["options", "criteria", "evidence_refs"],
+                "additionalProperties": False,
+            },
+            risk_class="R1",
+        ),
+        ToolDefinition(
             name="run_validation_command",
             description=(
                 "Run a registered validation command by policy id "

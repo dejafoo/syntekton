@@ -1,0 +1,19 @@
+id: repository-inspection
+version: 1.0.0
+title: Repository Inspection
+owner: product-factory
+capabilities:
+  - repository_analysis
+languages:
+  - "*"
+frameworks:
+  - "*"
+trigger:
+  description: Use when inspecting repository structure and gathering path evidence.
+required_tools:
+  - repository_read
+prohibited_tools:
+  - repository_write
+content_ref: SKILL.md
+status: active
+max_prompt_chars: 12000

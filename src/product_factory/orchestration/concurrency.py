@@ -28,6 +28,8 @@ ALWAYS_CONCURRENT_CAPABILITIES: frozenset[str] = frozenset(
         "security_review",
         "requirements",
         "test_execution",
+        "domain_research",
+        "decision_analysis",
     }
 )
 

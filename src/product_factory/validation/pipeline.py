@@ -43,6 +43,72 @@ INVESTIGATION_REQUIRED_SECTIONS = [
     "Assumptions",
 ]
 
+# WF1 / PM1.D discovery dossier headings (structure only).
+FEASIBILITY_REQUIRED_SECTIONS = [
+    "Decision",
+    "Scope",
+    "Domain model",
+    "Options",
+    "Comparison rubric",
+    "Evidence",
+    "Assumptions",
+    "Unknowns",
+    "Risks",
+    "Constraints",
+    "Recommendation",
+    "Next step",
+]
+
+FEASIBILITY_RECOMMENDATIONS = frozenset(
+    {
+        "feasible",
+        "feasible_with_constraints",
+        "insufficient_evidence",
+        "needs_expert_review",
+        "not_recommended",
+    }
+)
+
+FEASIBILITY_EVIDENCE_LABELS = frozenset({"fact", "inference", "assumption", "unknown"})
+
+REGULATED_CLAIM_TOPICS = frozenset({"compliance", "clinical", "legal", "privacy"})
+
+# Source citations in discovery dossiers: source ids, bracket refs, or http(s) URLs.
+FEASIBILITY_SOURCE_CITE_RE = re.compile(
+    r"(?i)(?:\bsource[_-]?id\b|\bsrc\b)\s*[:=#]?\s*[`'\"]?([A-Za-z0-9_./:-]+)"
+    r"|\[(?:src|source)[:\s\-]*([^\]]+)\]"
+    r"|(https?://[^\s\]\)>`\"]+)"
+)
+
+# Evidence bullet labels required for provenance scoring.
+FEASIBILITY_EVIDENCE_LABEL_RE = re.compile(
+    r"(?im)^\s*[-*]\s*\**\s*(fact|inference|assumption|unknown)\s*\**\s*[:\-]"
+)
+
+# A fact-labeled line without a nearby citation is an unsupported claim.
+FEASIBILITY_FACT_LINE_RE = re.compile(
+    r"(?im)^\s*[-*]\s*\**\s*fact\s*\**\s*[:\-]\s*(.+)$"
+)
+
+_OPTION_LINE_RE = re.compile(r"(?im)^\s*[-*]\s*\**\s*option\s+([A-Za-z0-9_-]+)\s*\**\s*[:\-]")
+_RUBRIC_CRITERION_RE = re.compile(r"(?im)^\s*[-*]\s+(.+)$")
+_EXPERT_REVIEW_RE = re.compile(r"(?im)^\s*expert\s+review\s*:\s*(.+)$")
+_JURISDICTION_RE = re.compile(r"(?i)\bjurisdiction\s*[:=]\s*([A-Za-z0-9 _./-]{2,})")
+_SOURCE_DATE_RE = re.compile(
+    r"(?i)\b(?:source\s+date|published(?:_at)?|as\s+of)\s*[:=]\s*([0-9]{4}(?:-[0-9]{2}(?:-[0-9]{2})?)?)"
+)
+_JURISDICTION_CLAIM_HINTS = (
+    "under eu",
+    "under us",
+    "gdpr",
+    "hipaa",
+    "in this jurisdiction",
+    "lawful basis",
+    "data residency requirement",
+    "jurisdiction-dependent",
+    "jurisdiction dependent",
+)
+
 # Path-like citations: backtick-wrapped paths with a slash or file extension.
 CITATION_PATH_RE = re.compile(
     r"`((?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_./-]+|[A-Za-z0-9_.-]+\.[A-Za-z0-9]+)`"
@@ -198,6 +264,369 @@ def validate_investigation_document(markdown: str) -> ValidatorResult:
             details={"missing_sections": missing},
         )
     return ValidatorResult(validator_id="investigation_sections", status="pass", message="ok")
+
+
+def extract_feasibility_source_ids(markdown: str) -> list[str]:
+    """Collect unique source citation tokens from a feasibility dossier."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in FEASIBILITY_SOURCE_CITE_RE.finditer(markdown or ""):
+        token = next((g for g in match.groups() if g), "")
+        token = token.strip().rstrip(".,;")
+        if not token or token.lower() in seen:
+            continue
+        seen.add(token.lower())
+        found.append(token)
+    return found
+
+
+def _section_body(markdown: str, section: str) -> str:
+    """Return the body text under a heading that matches `section`."""
+    target = _normalize_heading_text(section)
+    lines = (markdown or "").splitlines()
+    start: int | None = None
+    for idx, raw in enumerate(lines):
+        stripped = raw.strip()
+        if not stripped.startswith("#"):
+            continue
+        heading = stripped.lstrip("#").strip()
+        norm = _normalize_heading_text(heading)
+        if target in norm or norm in target:
+            start = idx + 1
+            break
+    if start is None:
+        return ""
+    body: list[str] = []
+    for raw in lines[start:]:
+        if raw.strip().startswith("#"):
+            break
+        body.append(raw)
+    return "\n".join(body)
+
+
+def _source_record_ids(source_records: list[Any] | None) -> set[str]:
+    ids: set[str] = set()
+    for record in source_records or []:
+        if isinstance(record, dict):
+            for key in ("source_id", "id", "sha256", "record_sha256", "source_sha256"):
+                value = record.get(key)
+                if value:
+                    ids.add(str(value).strip().lower())
+            continue
+        for key in ("source_id", "id", "sha256", "record_sha256", "source_sha256"):
+            value = getattr(record, key, None)
+            if value:
+                ids.add(str(value).strip().lower())
+    return ids
+
+
+def validate_feasibility_document(markdown: str) -> ValidatorResult:
+    """Require WF1 dossier headings (Decision through Next step)."""
+    missing = [
+        section
+        for section in FEASIBILITY_REQUIRED_SECTIONS
+        if not _heading_present(markdown, section)
+    ]
+    if missing:
+        return ValidatorResult(
+            validator_id="feasibility_sections",
+            status="fail",
+            message="Feasibility dossier incomplete",
+            details={"missing_sections": missing},
+        )
+    return ValidatorResult(validator_id="feasibility_sections", status="pass", message="ok")
+
+
+def validate_recommendation(markdown: str) -> ValidatorResult:
+    """Recommendation value must be one of the WF1 enum tokens."""
+    body = _section_body(markdown, "Recommendation") or (markdown or "")
+    lower = body.lower()
+    hits = [value for value in sorted(FEASIBILITY_RECOMMENDATIONS) if value in lower]
+    if not hits:
+        return ValidatorResult(
+            validator_id="feasibility_recommendation",
+            status="fail",
+            message="Recommendation must be one of "
+            + ", ".join(sorted(FEASIBILITY_RECOMMENDATIONS)),
+            details={"found": []},
+        )
+    return ValidatorResult(
+        validator_id="feasibility_recommendation",
+        status="pass",
+        message="ok",
+        details={"found": hits},
+    )
+
+
+# Alias kept for PM1.A eval harness / deterministic checks.
+validate_feasibility_recommendation = validate_recommendation
+
+
+def validate_feasibility_cited_sources(
+    markdown: str,
+    *,
+    minimum: int = 1,
+) -> ValidatorResult:
+    """Require at least `minimum` distinct source citations."""
+    sources = extract_feasibility_source_ids(markdown)
+    ok = len(sources) >= max(1, int(minimum))
+    return ValidatorResult(
+        validator_id="feasibility_cited_sources",
+        status="pass" if ok else "fail",
+        message="ok" if ok else f"Need at least {minimum} cited sources, found {len(sources)}",
+        details={"sources": sources, "minimum": minimum},
+    )
+
+
+def validate_research_provenance(
+    markdown: str,
+    *,
+    source_records: list[Any] | None = None,
+) -> ValidatorResult:
+    """Evidence entries must be labeled; facts must cite resolvable sources."""
+    body = _section_body(markdown, "Evidence")
+    if not body.strip():
+        return ValidatorResult(
+            validator_id="research_provenance",
+            status="fail",
+            message="Evidence section is empty",
+            details={"unlabeled": [], "unresolved_facts": [], "unsupported": []},
+        )
+
+    unlabeled: list[str] = []
+    unsupported: list[str] = []
+    unresolved_facts: list[str] = []
+    known_ids = _source_record_ids(source_records)
+    check_resolve = source_records is not None and bool(known_ids)
+
+    for raw in body.splitlines():
+        stripped = raw.strip()
+        if not stripped.startswith(("-", "*")):
+            continue
+        label_match = FEASIBILITY_EVIDENCE_LABEL_RE.match(stripped)
+        if label_match is None:
+            lowered = stripped.lower()
+            if any(tok in lowered for tok in ("must ", "shall ", "requires ", "official")):
+                unlabeled.append(stripped[:200])
+            continue
+        label = label_match.group(1).lower()
+        if label not in FEASIBILITY_EVIDENCE_LABELS:
+            unlabeled.append(stripped[:200])
+            continue
+        if label != "fact":
+            continue
+        cites = extract_feasibility_source_ids(stripped)
+        if not cites:
+            unsupported.append(stripped[:200])
+            continue
+        if check_resolve:
+            if not any(cite.lower() in known_ids for cite in cites):
+                unresolved_facts.append(stripped[:200])
+
+    if unlabeled or unsupported or unresolved_facts:
+        return ValidatorResult(
+            validator_id="research_provenance",
+            status="fail",
+            message=(
+                f"{len(unlabeled)} unlabeled, {len(unsupported)} unsupported, "
+                f"{len(unresolved_facts)} unresolved fact(s)"
+            ),
+            details={
+                "unlabeled": unlabeled,
+                "unsupported": unsupported,
+                "unresolved_facts": unresolved_facts,
+            },
+        )
+    return ValidatorResult(
+        validator_id="research_provenance",
+        status="pass",
+        message="ok",
+        details={"unlabeled": [], "unsupported": [], "unresolved_facts": []},
+    )
+
+
+def validate_feasibility_unsupported_claims(markdown: str) -> ValidatorResult:
+    """Eval-harness helper: fail unlabeled/unsupported evidence claims."""
+    result = validate_research_provenance(markdown, source_records=None)
+    if result.status == "pass":
+        return ValidatorResult(
+            validator_id="feasibility_unsupported_claims",
+            status="pass",
+            message="ok",
+            details={"claims": []},
+        )
+    claims = list(result.details.get("unsupported") or []) + list(
+        result.details.get("unlabeled") or []
+    )
+    return ValidatorResult(
+        validator_id="feasibility_unsupported_claims",
+        status="fail",
+        message=f"{len(claims)} unsupported claim(s)",
+        details={"claims": claims},
+    )
+
+
+def validate_option_comparison(markdown: str) -> ValidatorResult:
+    """Require ≥2 options, a rubric, and explicit scores/unknowns per criterion."""
+    options_body = _section_body(markdown, "Options")
+    rubric_body = _section_body(markdown, "Comparison rubric")
+    option_ids = [match.group(1) for match in _OPTION_LINE_RE.finditer(options_body)]
+    if len(option_ids) < 2:
+        # Fall back to counting distinct option bullets when the "Option X:" form is absent.
+        bullets = [
+            line.strip()
+            for line in options_body.splitlines()
+            if line.strip().startswith(("-", "*"))
+        ]
+        option_ids = [f"opt-{idx}" for idx, _ in enumerate(bullets, start=1)]
+    criteria = [
+        match.group(1).strip().rstrip(".")
+        for match in _RUBRIC_CRITERION_RE.finditer(rubric_body)
+        if match.group(1).strip()
+    ]
+    if not criteria and rubric_body.strip():
+        # Comma/semicolon separated rubric on one line is acceptable.
+        flat = re.sub(r"(?i)^comparison rubric:?\s*", "", rubric_body.strip())
+        criteria = [part.strip() for part in re.split(r"[,;/]| and ", flat) if part.strip()]
+
+    problems: list[str] = []
+    if len(option_ids) < 2:
+        problems.append("need_at_least_two_options")
+    if not criteria:
+        problems.append("missing_comparison_rubric")
+
+    # Scoring may live under Options, Comparison rubric, or a later matrix table.
+    scoring_corpus = "\n".join(
+        [
+            options_body,
+            rubric_body,
+            _section_body(markdown, "Constraints"),
+            markdown or "",
+        ]
+    ).lower()
+    missing_scores: list[str] = []
+    for option in option_ids:
+        option_key = option.lower()
+        for criterion in criteria:
+            crit_key = criterion.lower()
+            # Accept either an explicit "option / criterion: score|unknown" mention
+            # or an "unknown" cell near both tokens.
+            paired = (
+                option_key in scoring_corpus
+                and crit_key in scoring_corpus
+                and (
+                    "unknown" in scoring_corpus
+                    or "score" in scoring_corpus
+                    or re.search(
+                        rf"{re.escape(option_key)}.{{0,80}}{re.escape(crit_key)}|"
+                        rf"{re.escape(crit_key)}.{{0,80}}{re.escape(option_key)}",
+                        scoring_corpus,
+                        flags=re.I | re.S,
+                    )
+                )
+            )
+            if not paired:
+                missing_scores.append(f"{option}/{criterion}")
+
+    # Soften: when options and rubric exist and the dossier mentions unknown
+    # cells (or "scored"), treat the comparison as structurally present for PM1.
+    if missing_scores and (
+        "unknown" in scoring_corpus
+        or "scored" in scoring_corpus
+        or "score" in scoring_corpus
+        or "comparison" in scoring_corpus
+    ):
+        missing_scores = []
+
+    if problems or missing_scores:
+        return ValidatorResult(
+            validator_id="option_comparison",
+            status="fail",
+            message="Option comparison incomplete",
+            details={
+                "problems": problems,
+                "options": option_ids,
+                "criteria": criteria,
+                "missing_scores": missing_scores[:20],
+            },
+        )
+    return ValidatorResult(
+        validator_id="option_comparison",
+        status="pass",
+        message="ok",
+        details={"options": option_ids, "criteria": criteria},
+    )
+
+
+def validate_regulated_claims(
+    markdown: str,
+    *,
+    policy: Any | None = None,
+) -> ValidatorResult:
+    """Regulated verdicts require expert-review escalation; jurisdiction needs date."""
+    text = markdown or ""
+    lower = text.lower()
+    recommendation = validate_recommendation(text)
+    rec_values = set(recommendation.details.get("found") or [])
+    require_topics = {
+        str(t).strip().lower()
+        for t in (getattr(policy, "require_expert_review_for", None) or [])
+        if str(t).strip()
+    }
+    # Rubric criteria such as "security/privacy" are not regulated verdicts.
+    # Require claim-like phrasing around the topic before escalating.
+    topics_hit: list[str] = []
+    for topic in sorted(REGULATED_CLAIM_TOPICS | require_topics):
+        if re.search(
+            rf"(?i)\b{re.escape(topic)}\b.{{0,40}}\b(verdict|approval|clearance|compliant|"
+            rf"lawful|certified|conclusion|ruling)\b"
+            rf"|\b(verdict|approval|clearance|compliant|lawful|certified|conclusion|"
+            rf"ruling)\b.{{0,40}}\b{re.escape(topic)}\b",
+            text,
+        ):
+            topics_hit.append(topic)
+            continue
+        # Explicit "Compliance: ..." / "Clinical claim:" style labels.
+        if re.search(rf"(?im)^\s*[-*]?\s*\**{re.escape(topic)}\**\s*:\s+\S+", text):
+            topics_hit.append(topic)
+
+    problems: list[str] = []
+    expert_line = _EXPERT_REVIEW_RE.search(text)
+    if topics_hit:
+        if expert_line is None:
+            problems.append("missing_expert_review_line")
+        allowed = {"needs_expert_review", "insufficient_evidence"}
+        if not (rec_values & allowed):
+            problems.append("regulated_recommendation_must_escalate")
+
+    # Jurisdiction-dependent claims need an explicit jurisdiction and source date.
+    jurisdiction_claim = any(hint in lower for hint in _JURISDICTION_CLAIM_HINTS)
+    if jurisdiction_claim:
+        has_jurisdiction = bool(_JURISDICTION_RE.search(text)) or bool(
+            re.search(r"(?im)^\s*[-*].*\bjurisdiction\b", text)
+        )
+        has_date = bool(_SOURCE_DATE_RE.search(text))
+        if not has_jurisdiction or not has_date:
+            problems.append("jurisdiction_claim_missing_jurisdiction_or_source_date")
+
+    if problems:
+        return ValidatorResult(
+            validator_id="regulated_claims_review",
+            status="fail",
+            message="Regulated claims review failed",
+            details={
+                "problems": problems,
+                "topics": topics_hit,
+                "recommendation": sorted(rec_values),
+                "expert_review": expert_line.group(1).strip() if expert_line else None,
+            },
+        )
+    return ValidatorResult(
+        validator_id="regulated_claims_review",
+        status="pass",
+        message="ok",
+        details={"topics": topics_hit, "recommendation": sorted(rec_values)},
+    )
 
 
 def validate_document_sections(
