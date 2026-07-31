@@ -3,24 +3,105 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import subprocess
 import time
 import uuid
 from collections.abc import Callable
+from datetime import datetime
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
 from product_factory.connectors.broker import ConnectorBroker
+from product_factory.connectors.source_ledger import (
+    SEARCH_TOOL_NAMES,
+    SourceLedger,
+    urls_from_provenance,
+)
 from product_factory.domain.errors import ToolAuthorizationError
 from product_factory.domain.tools import CapabilityGrant, ToolCallRecord
 from product_factory.orchestration.budget_ledger import BudgetLedger
 from product_factory.persistence.artifacts import ArtifactStore
+from product_factory.policy.source_policy import SourcePolicyProfile
+from product_factory.schemas import validate_write_payload
 from product_factory.tools.policies import assert_path_allowed, resolve_under_root
 from product_factory.tools.registry import ToolRegistry
 from product_factory.tools.sandbox import run_sandboxed_command
 
 ToolObserver = Callable[[str, dict[str, Any]], None]
+
+
+class _DocumentTextParser(HTMLParser):
+    def __init__(self, *, section: str = "") -> None:
+        super().__init__(convert_charrefs=True)
+        self.section = section.casefold()
+        self.parts: list[str] = []
+        self._heading: list[str] | None = None
+        self._include = not self.section
+        self._suppressed_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"script", "style"}:
+            self._suppressed_depth += 1
+        if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+            self._heading = []
+        elif self._include and tag in {"p", "div", "li", "br", "tr"}:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style"}:
+            self._suppressed_depth = max(0, self._suppressed_depth - 1)
+        if self._heading is not None and tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+            heading = " ".join(self._heading).strip()
+            if self.section:
+                if heading.casefold() == self.section:
+                    self._include = True
+                elif self._include:
+                    self._include = False
+            if self._include:
+                self.parts.extend(["\n", heading, "\n"])
+            self._heading = None
+
+    def handle_data(self, data: str) -> None:
+        if self._heading is not None:
+            self._heading.append(data)
+        elif self._include and not self._suppressed_depth:
+            self.parts.append(data)
+
+    def text(self) -> str:
+        return "\n".join(line.strip() for line in "".join(self.parts).splitlines() if line.strip())
+
+
+def _text_section(text: str, section: str) -> str:
+    wanted = section.casefold()
+    selected: list[str] = []
+    active = False
+    for line in text.splitlines():
+        heading = line.lstrip("#").strip()
+        is_heading = line.startswith("#")
+        if is_heading and heading.casefold() == wanted:
+            active = True
+            selected.append(line)
+            continue
+        if active and is_heading:
+            break
+        if active:
+            selected.append(line)
+    return "\n".join(selected)
+
+
+def _named_item(item: Any, kind: str) -> str:
+    if isinstance(item, str):
+        value = item.strip()
+    elif isinstance(item, dict):
+        value = str(item.get("name") or item.get("id") or "").strip()
+    else:
+        value = ""
+    if not value:
+        raise ToolAuthorizationError(f"Each {kind} must have a non-empty name")
+    return value
 
 
 class ToolBroker:
@@ -36,6 +117,8 @@ class ToolBroker:
         observer: ToolObserver | None = None,
         ledger: BudgetLedger | None = None,
         connectors: ConnectorBroker | None = None,
+        source_ledger: SourceLedger | None = None,
+        source_policy: SourcePolicyProfile | None = None,
         run_id: str = "",
     ) -> None:
         self.registry = registry
@@ -50,6 +133,10 @@ class ToolBroker:
         self.observer = observer
         self.ledger = ledger
         self.connectors = connectors
+        # Search results are what make a URL retrievable later (PM1.B1); with no
+        # ledger bound, nothing is recorded and every gated fetch stays denied.
+        self.source_ledger = source_ledger
+        self.source_policy = source_policy
         self.run_id = run_id
 
     def set_grant(self, grant: CapabilityGrant) -> None:
@@ -159,12 +246,18 @@ class ToolBroker:
             return self._create_file(arguments, grant)
         if tool_name == "write_artifact":
             return self._write_artifact(arguments, grant.task_id, tool_call_id)
+        if tool_name == "extract_document":
+            return self._extract_document(arguments)
+        if tool_name == "normalize_citation":
+            return self._normalize_citation(arguments, grant.task_id, tool_call_id)
+        if tool_name == "compare_options":
+            return self._compare_options(arguments, grant.task_id, tool_call_id)
         if tool_name == "run_validation_command":
             return self._run_command(arguments)
         if self.connectors is not None and self.connectors.handles(tool_name):
             # The grant, max_calls, and budget checks in `execute` have already
             # passed; connector policy is the additional gate for third parties.
-            return self.connectors.invoke(
+            return self._invoke_connector(
                 tool_name=tool_name,
                 arguments=arguments,
                 task_id=grant.task_id,
@@ -339,6 +432,146 @@ class ToolBroker:
         )
         return {"artifact_sha256": art.sha256, "logical_name": art.logical_name}
 
+    def _capture_metadata(self, source_sha256: str) -> dict[str, Any]:
+        path = self.artifact_store.root / "source-captures" / f"{source_sha256}.json"
+        if not path.is_file() or not self.artifact_store.exists(source_sha256):
+            raise ToolAuthorizationError(f"Unknown source capture: {source_sha256}")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("sha256") != source_sha256:
+            raise ToolAuthorizationError("Source capture index does not match requested digest")
+        return payload
+
+    def _extract_document(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        source_sha256 = str(arguments["source_sha256"])
+        capture = self._capture_metadata(source_sha256)
+        media_type = str(capture.get("media_type") or "")
+        body = self.artifact_store.get_bytes(source_sha256)
+        max_chars = max(1, min(int(arguments.get("max_chars", 20_000)), 200_000))
+        section = str(arguments.get("section") or "").strip()
+
+        if media_type == "application/pdf":
+            try:
+                from pypdf import PdfReader  # type: ignore[import-not-found]
+            except ImportError:
+                return {
+                    "status": "unsupported_media_type",
+                    "media_type": media_type,
+                    "source_sha256": source_sha256,
+                }
+            text = "\n\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(body)).pages)
+        elif media_type == "text/html":
+            parser = _DocumentTextParser(section=section)
+            parser.feed(body.decode("utf-8", errors="replace"))
+            text = parser.text()
+        elif media_type in {
+            "text/plain",
+            "text/markdown",
+            "application/json",
+            "application/yaml",
+        }:
+            text = body.decode("utf-8", errors="replace")
+            if section:
+                text = _text_section(text, section)
+        else:
+            return {
+                "status": "unsupported_media_type",
+                "media_type": media_type,
+                "source_sha256": source_sha256,
+            }
+
+        bounded = text[:max_chars]
+        return {
+            "status": "ok",
+            "source_sha256": source_sha256,
+            "media_type": media_type,
+            "section": section or None,
+            "text": bounded,
+            "location": {"start_char": 0, "end_char": len(bounded)},
+            "truncated": len(text) > len(bounded),
+        }
+
+    def _normalize_citation(
+        self,
+        arguments: dict[str, Any],
+        task_id: str,
+        tool_call_id: str,
+    ) -> dict[str, Any]:
+        from product_factory.connectors.receipts import build_source_record, persist_source_records
+
+        source_sha256 = str(arguments["source_sha256"])
+        source_class = str(arguments["source_class"])
+        if self.source_policy is None:
+            raise ToolAuthorizationError("No active source policy for normalize_citation")
+        if not self.source_policy.allows_source_class(source_class):
+            raise ToolAuthorizationError(
+                f"Source class {source_class!r} is not allowed by policy {self.source_policy.id!r}"
+            )
+        capture = self._capture_metadata(source_sha256)
+        published_at = str(arguments.get("published_at") or "").strip() or None
+        if published_at is not None:
+            try:
+                datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ToolAuthorizationError("published_at must be an ISO-8601 timestamp") from exc
+        record = build_source_record(
+            source=str(capture["url"]),
+            source_type=source_class,
+            source_class=source_class,
+            sha256=source_sha256,
+            connector_id="source_fetch",
+            tool_call_id=str(capture.get("tool_call_id") or ""),
+            retrieved_at=str(capture["retrieved_at"]),
+            published_at=published_at,
+            freshness="published" if published_at else "retrieved",
+        )
+        ref = persist_source_records(
+            self.artifact_store,
+            [record],
+            created_by_task_id=task_id,
+            created_by_tool_call_id=tool_call_id,
+        )[0]
+        return {"source_sha256": source_sha256, "record_sha256": ref.sha256}
+
+    def _compare_options(
+        self,
+        arguments: dict[str, Any],
+        task_id: str,
+        tool_call_id: str,
+    ) -> dict[str, Any]:
+        options = [_named_item(item, "option") for item in arguments.get("options") or []]
+        criteria = [_named_item(item, "criterion") for item in arguments.get("criteria") or []]
+        if not options or not criteria:
+            raise ToolAuthorizationError("compare_options requires non-empty options and criteria")
+        evidence_refs = [str(ref) for ref in arguments.get("evidence_refs") or []]
+        cells = [
+            {
+                "option": option,
+                "criterion": criterion,
+                "value": "unknown",
+                "evidence_refs": [],
+            }
+            for option in options
+            for criterion in criteria
+        ]
+        matrix = {
+            "schema_id": "option_matrix.v1",
+            "options": options,
+            "criteria": criteria,
+            "cells": cells,
+            "evidence_refs": evidence_refs,
+        }
+        validate_write_payload("option_matrix.v1", matrix)
+        ref = self.artifact_store.put_json(
+            matrix,
+            logical_name="option-matrix.json",
+            created_by_task_id=task_id,
+            created_by_tool_call_id=tool_call_id,
+            schema_id="option_matrix.v1",
+            schema_version="1",
+            trust_level="generated",
+        )
+        return {"artifact_sha256": ref.sha256, "schema_id": "option_matrix.v1"}
+
     @staticmethod
     def normalize_validation_command_id(command_id: str) -> str:
         """Map common model mistakes onto registered policy ids.
@@ -359,6 +592,158 @@ class ToolBroker:
             "pyright": "python_typecheck",
         }
         return aliases.get(raw, raw)
+
+    def _invoke_connector(
+        self,
+        *,
+        tool_name: str,
+        arguments: dict[str, Any],
+        task_id: str,
+        tool_call_id: str,
+        run_id: str,
+    ) -> dict[str, Any]:
+        assert self.connectors is not None
+        from product_factory.connectors.receipts import (
+            build_connector_receipt,
+            build_source_record,
+            persist_connector_receipt,
+            persist_source_capture,
+            persist_source_records,
+        )
+        from product_factory.policy.classification import (
+            assert_ingress_allowed,
+            classify_payload,
+        )
+
+        result = self.connectors.invoke(
+            tool_name=tool_name,
+            arguments=arguments,
+            task_id=task_id,
+            tool_call_id=tool_call_id,
+            run_id=run_id,
+            invocation_options={"source_ledger": self.source_ledger},
+        )
+        handler_metadata = result.pop("_handler_metadata", {})
+        if tool_name == "fetch_source":
+            capture_data = handler_metadata.get("source_capture")
+            if not isinstance(capture_data, dict) or not isinstance(capture_data.get("body"), bytes):
+                raise ToolAuthorizationError("fetch_source returned no persistable source capture")
+            body = capture_data["body"]
+            # URL-policy media/size checks happened inside the connector. The
+            # PM0 ingress guard is the final gate before these bytes are stored.
+            assert_ingress_allowed(
+                body.decode("utf-8", errors="replace"),
+                source="connector:source_fetch",
+            )
+            decision = classify_payload(body.decode("utf-8", errors="replace"), fail_closed=True)
+            source_ref, _capture_ref, capture = persist_source_capture(
+                self.artifact_store,
+                body,
+                url=str(capture_data.get("url") or ""),
+                media_type=str(capture_data.get("media_type") or ""),
+                redirect_chain=list(capture_data.get("redirect_chain") or []),
+                created_by_task_id=task_id,
+                created_by_tool_call_id=tool_call_id,
+            )
+            record = build_source_record(
+                source=str(capture["url"]),
+                source_type="url",
+                sha256=source_ref.sha256,
+                trust_label="untrusted",
+                connector_id="source_fetch",
+                tool_call_id=tool_call_id,
+                retrieved_at=str(capture["retrieved_at"]),
+            )
+            record_ref = persist_source_records(
+                self.artifact_store,
+                [record],
+                created_by_task_id=task_id,
+                created_by_tool_call_id=tool_call_id,
+            )[0]
+            result["result"] = {
+                "source_sha256": source_ref.sha256,
+                "record_sha256": record_ref.sha256,
+                "media_type": capture["media_type"],
+                "bytes": capture["bytes"],
+                "redirect_chain": capture["redirect_chain"],
+            }
+            result["result_sha256"] = hashlib.sha256(
+                json.dumps(result["result"], sort_keys=True).encode()
+            ).hexdigest()
+        else:
+            # Fail closed on known secret material before the model sees / stores it.
+            assert_ingress_allowed(
+                json.dumps(result.get("result"), default=str),
+                source=f"connector:{result.get('connector_id', tool_name)}",
+            )
+            decision = classify_payload(result.get("result"), fail_closed=True)
+        receipt = build_connector_receipt(
+            connector_id=str(result.get("connector_id") or ""),
+            tool_name=tool_name,
+            result_sha256=str(result.get("result_sha256") or ""),
+            tool_call_id=tool_call_id,
+            task_id=task_id,
+            run_id=run_id,
+            provenance=list(result.get("provenance") or []),
+            trust_label=str(result.get("trust_label") or "untrusted"),
+            truncated=bool(result.get("truncated")),
+        )
+        receipt_ref = persist_connector_receipt(
+            self.artifact_store,
+            receipt,
+            created_by_task_id=task_id,
+            created_by_tool_call_id=tool_call_id,
+        )
+        source_refs = []
+        source_records = []
+        for item in (() if tool_name == "fetch_source" else result.get("provenance") or []):
+            if not isinstance(item, dict):
+                continue
+            source = str(item.get("source") or "")
+            if not source:
+                continue
+            record = build_source_record(
+                source=source,
+                source_type=str(item.get("kind") or "url"),
+                sha256=str(item.get("sha256") or result.get("result_sha256") or ""),
+                trust_label=str(result.get("trust_label") or "untrusted"),
+                connector_id=str(result.get("connector_id") or ""),
+                tool_call_id=tool_call_id,
+            )
+            source_records.append(record)
+        if source_records:
+            source_refs = persist_source_records(
+                self.artifact_store,
+                source_records,
+                created_by_task_id=task_id,
+                created_by_tool_call_id=tool_call_id,
+            )
+        result = {
+            **result,
+            "receipt_sha256": receipt_ref.sha256,
+            "source_record_sha256s": [ref.sha256 for ref in source_refs],
+            "classification": decision.as_payload(),
+        }
+        if self.source_ledger is not None and tool_name in SEARCH_TOOL_NAMES:
+            admitted = self.source_ledger.record_search_results(
+                urls_from_provenance(result.get("provenance") or []),
+                task_id=task_id,
+                tool_call_id=tool_call_id,
+            )
+            if admitted:
+                result["source_ledger_urls"] = list(admitted)
+        if self.observer is not None:
+            self.observer(
+                "connector_receipt",
+                {
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "task_id": task_id,
+                    "receipt_sha256": receipt_ref.sha256,
+                    "classification": decision.as_payload(),
+                },
+            )
+        return result
 
     def _run_command(self, arguments: dict[str, Any]) -> dict[str, Any]:
         root = self._require_worktree()

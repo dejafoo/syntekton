@@ -33,6 +33,7 @@ _WORKFLOW_VALUES = {
     "repository_change",
     "repository_investigation",
     "quality_gate",
+    "feasibility_discovery",
 }
 
 
@@ -64,9 +65,9 @@ def tool_schemas() -> list[dict[str, Any]]:
                     "workflow": {
                         "type": "string",
                         "description": (
-                            "Workflow pack id: repository_investigation, "
-                            "technical_plan, quality_gate, repository_change, "
-                            "code_change, architecture"
+                            "Workflow pack id: feasibility_discovery, "
+                            "repository_investigation, technical_plan, "
+                            "quality_gate, repository_change, code_change, architecture"
                         ),
                         "default": "code_change",
                     },
@@ -100,6 +101,15 @@ def tool_schemas() -> list[dict[str, Any]]:
                             },
                             "additionalProperties": False,
                         },
+                    },
+                    "pack_input": {
+                        "type": "object",
+                        "description": (
+                            "Typed payload for the pack's input_schema, e.g. "
+                            '{"decision_statement": "...", "domain": "..."}. '
+                            "Validated at submit; unknown or missing required "
+                            "fields are rejected before the run starts."
+                        ),
                     },
                     "mock": {
                         "type": "boolean",
@@ -297,6 +307,10 @@ def pf_submit(service: HostService, arguments: dict[str, Any]) -> dict[str, Any]
     mock = bool(arguments.get("mock", False))
     profile = str(arguments.get("profile") or "local-target")
 
+    pack_input = arguments.get("pack_input") or {}
+    if not isinstance(pack_input, dict):
+        return _failure("invalid_pack_input", "pack_input must be an object")
+
     raw_overrides = arguments.get("artifact_overrides") or {}
     try:
         artifact_overrides = {
@@ -314,6 +328,7 @@ def pf_submit(service: HostService, arguments: dict[str, Any]) -> dict[str, Any]
         model_profile_set=profile,
         validation_commands=[str(c) for c in validation_commands],
         artifact_overrides=artifact_overrides,
+        pack_input=pack_input,
         budget=run_budget_from_policy(
             max_cost_usd=Decimal(str(budget_usd)),
             budgets=service.config.policies.budgets,

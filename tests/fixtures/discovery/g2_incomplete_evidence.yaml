@@ -1,0 +1,18 @@
+# G2 discovery skill fixtures (PM1.C).
+# Lightweight evidence scenarios for method-skill guidance; not a full pack run.
+
+id: g2-incomplete-evidence
+skill: discovery.evidence-assessment
+scenario: incomplete
+decision_statement: Can we integrate with Vendor X SSO in production this quarter?
+domain: identity
+evidence:
+  - id: src-vendor-overview
+    source_class: vendor_api
+    published_at: "2025-06-01"
+    excerpt: Vendor X supports SAML and OIDC for enterprise plans.
+    notes: No production SLA, region list, or data-processing terms provided.
+expected_outcome: insufficient_evidence
+expected_labels:
+  - unknown
+rationale: Material production constraints are absent; do not invent them.

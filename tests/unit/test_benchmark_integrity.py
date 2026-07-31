@@ -50,6 +50,9 @@ def test_local_code_cases_receive_behavioral_contract() -> None:
     code_cases = [c for c in cases if c.workflow_type == "code_change"]
     assert code_cases
     assert all(c.smoke_commands for c in code_cases)
+    discovery = [c for c in cases if c.workflow_type == "feasibility_discovery"]
+    assert discovery
+    assert all(c.must_cover or c.expected_source_classes for c in discovery)
 
 
 def test_loader_rejects_code_case_without_behavioral_contract(tmp_path: Path) -> None:

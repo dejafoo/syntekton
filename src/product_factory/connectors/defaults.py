@@ -8,7 +8,7 @@ and a workflow pack still has to request the tool class.
 
 from __future__ import annotations
 
-from product_factory.connectors import filesystem_mcp, tavily
+from product_factory.connectors import filesystem_mcp, source_fetch, tavily
 from product_factory.connectors.policy import ConnectorsConfig
 from product_factory.connectors.registry import ConnectorRegistry
 
@@ -25,6 +25,12 @@ def _result_domains(config: ConnectorsConfig) -> tuple[str, ...]:
     return domains or ("*",)
 
 
+def _source_domains(config: ConnectorsConfig) -> tuple[str, ...]:
+    raw = config.settings_for(source_fetch.CONNECTOR_ID).options.get("source_domains") or ()
+    domains = tuple(str(domain).strip() for domain in raw if str(domain).strip())
+    return domains or ("*",)
+
+
 def default_connector_registry(config: ConnectorsConfig | None = None) -> ConnectorRegistry:
     """Every connector Product Factory ships with."""
     settings = config or ConnectorsConfig()
@@ -32,6 +38,10 @@ def default_connector_registry(config: ConnectorsConfig | None = None) -> Connec
     registry.register(
         tavily.tavily_manifest(allowed_result_domains=_result_domains(settings)),
         tavily.web_search,
+    )
+    registry.register(
+        source_fetch.source_fetch_manifest(allowed_domains=_source_domains(settings)),
+        source_fetch.fetch_source,
     )
     registry.register(
         filesystem_mcp.filesystem_mcp_manifest(),

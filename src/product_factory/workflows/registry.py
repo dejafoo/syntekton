@@ -12,12 +12,14 @@ from product_factory.workflows.artifacts import (
     resolve_artifact_land_map,
 )
 from product_factory.workflows.base import WorkflowPack
+from product_factory.workflows.feasibility_discovery import FEASIBILITY_DISCOVERY_PACK
 from product_factory.workflows.quality_gate import QUALITY_GATE_PACK
 from product_factory.workflows.repository_change import REPOSITORY_CHANGE_PACK
 from product_factory.workflows.repository_investigation import REPOSITORY_INVESTIGATION_PACK
 from product_factory.workflows.technical_plan import TECHNICAL_PLAN_PACK
 
 _PACKS: dict[str, WorkflowPack] = {
+    FEASIBILITY_DISCOVERY_PACK.id: FEASIBILITY_DISCOVERY_PACK,
     QUALITY_GATE_PACK.id: QUALITY_GATE_PACK,
     REPOSITORY_CHANGE_PACK.id: REPOSITORY_CHANGE_PACK,
     REPOSITORY_INVESTIGATION_PACK.id: REPOSITORY_INVESTIGATION_PACK,

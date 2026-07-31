@@ -37,6 +37,12 @@ ablations:
     runner: full_orchestration
     disable_review: true
     planner_mode: complexity_sensitive
+  orchestration_with_skills:
+    runner: full_orchestration
+    disable_skills: false
+  orchestration_no_skills:
+    runner: full_orchestration
+    disable_skills: true
   frontier_reference:
     runner: frontier_reference
 
@@ -64,6 +70,15 @@ subjects:
     model_profile: coding_worker
     isolation_capability: implementation
     description: Isolated capability runner
+  orchestration_strong_worker:
+    model_profile: local_target_reviewer
+    description: Fixed planner with stronger implementation worker
+  orchestration_with_skills:
+    model_profile: supervisor
+    description: Orchestration with skills enabled (skill scorecard arm)
+  orchestration_no_skills:
+    model_profile: supervisor
+    description: Orchestration with skills disabled (ablation arm)
   frontier_reference:
     model_profile: frontier_oracle
     description: Frontier reference (oracle budget)

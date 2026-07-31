@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from product_factory.workflows.default_plans import (
+from product_factory.orchestration.coordinator import (
     default_code_change_plan,
     default_quality_gate_plan,
     default_technical_plan,
@@ -10,7 +10,7 @@ from product_factory.workflows.default_plans import (
 from product_factory.workflows.handlers import eligible_next_actions_for_workflow, handler_for
 
 
-def test_handler_plan_matches_default_plans() -> None:
+def test_handler_plan_matches_coordinator_wrappers() -> None:
     text = "add health endpoint"
     assert (
         handler_for("repository_change").plan_template(text).model_dump()
@@ -23,6 +23,12 @@ def test_handler_plan_matches_default_plans() -> None:
     assert (
         handler_for("quality_gate").plan_template(text).model_dump()
         == default_quality_gate_plan(text).model_dump()
+    )
+    from product_factory.orchestration.coordinator import default_feasibility_discovery_plan
+
+    assert (
+        handler_for("feasibility_discovery").plan_template(text).model_dump()
+        == default_feasibility_discovery_plan(text).model_dump()
     )
 
 

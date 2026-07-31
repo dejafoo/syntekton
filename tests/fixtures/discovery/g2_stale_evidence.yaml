@@ -1,0 +1,18 @@
+id: g2-stale-evidence
+skill: discovery.evidence-assessment
+scenario: stale
+decision_statement: Is the Vendor X FHIR R4 endpoint still supported?
+domain: health_interoperability
+source_policy_profile: regulated-domain
+max_source_age_days: 365
+evidence:
+  - id: src-vendor-fhir-2019
+    source_class: vendor_api
+    published_at: "2019-04-01"
+    excerpt: Vendor X exposes a FHIR R4 Patient endpoint at /fhir/R4.
+expected_outcome: insufficient_evidence
+expected_labels:
+  - unknown
+rationale: >-
+  Source age exceeds regulated-domain max_source_age_days; mark stale and do
+  not treat the claim as current fact.

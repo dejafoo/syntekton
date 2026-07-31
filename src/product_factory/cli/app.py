@@ -26,6 +26,7 @@ from product_factory.host.cli import host_app
 from product_factory.observability.logging import setup_logging
 from product_factory.orchestration.coordinator import RunCoordinator
 from product_factory.orchestration.graph import build_graph
+from product_factory.workflows.inputs import parse_pack_input_option
 
 app = typer.Typer(
     name="product-factory",
@@ -143,26 +144,14 @@ def plan_cmd(
     mock: bool = typer.Option(False, "--mock"),
 ) -> None:
     """Generate and compile a plan without full execution."""
-    from product_factory.orchestration.coordinator import (
-        default_code_change_plan,
-        default_investigation_plan,
-        default_quality_gate_plan,
-        default_technical_plan,
-    )
     from product_factory.planning.compiler import compile_plan
+    from product_factory.workflows.handlers import handler_for
 
     text = request.read_text(encoding="utf-8")
     config = load_config()
     gateway = _gateway_from_config(config, force_mock=mock)
     RunCoordinator(config=config, gateway=gateway, use_deterministic_planner=mock)
-    if workflow in {"architecture", "technical_plan"}:
-        proposal = default_technical_plan(text)
-    elif workflow == "repository_investigation":
-        proposal = default_investigation_plan(text)
-    elif workflow == "quality_gate":
-        proposal = default_quality_gate_plan(text)
-    else:
-        proposal = default_code_change_plan(text)
+    proposal = handler_for(workflow).plan_template(text)
     result = compile_plan(proposal)
     console.print_json(data=result.model_dump(mode="json"))
     if not result.ok:
@@ -214,6 +203,11 @@ def run_cmd(
         "--validation-commands",
         help="Comma-separated registered command ids for behavioral validation",
     ),
+    pack_input: str | None = typer.Option(
+        None,
+        "--pack-input",
+        help="Typed pack payload as inline JSON or @file.json; validated against the pack",
+    ),
     policy: Path | None = typer.Option(
         None, "--policy", help="Override policies.yaml path (registered_commands, etc.)"
     ),
@@ -221,6 +215,11 @@ def run_cmd(
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
     """Execute a product-factory run."""
+    try:
+        pack_input_payload = parse_pack_input_option(pack_input)
+    except ProductFactoryError as exc:
+        console.print(f"[red]{exc.__class__.__name__}:[/red] {exc.message}")
+        raise typer.Exit(exc.exit_code) from exc
     config = _load_config_with_policy_override(policy)
     gateway = _gateway_from_config(config, force_mock=mock)
     coord = RunCoordinator(
@@ -238,6 +237,7 @@ def run_cmd(
         repository_path=repo.resolve() if repo else None,
         model_profile_set=profile,
         validation_commands=_parse_validation_commands(validation_command, validation_commands),
+        pack_input=pack_input_payload,
         budget=run_budget_from_policy(
             max_cost_usd=Decimal(str(budget_usd)),
             budgets=config.policies.budgets,

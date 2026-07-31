@@ -10,6 +10,9 @@ from product_factory.workflows.handlers.base import (
     EligibleNextAction,
     PackHandler,
 )
+from product_factory.workflows.handlers.feasibility_discovery import (
+    FeasibilityDiscoveryHandler,
+)
 from product_factory.workflows.handlers.quality_gate import QualityGateHandler
 from product_factory.workflows.handlers.repository_change import RepositoryChangeHandler
 from product_factory.workflows.handlers.repository_investigation import (
@@ -19,6 +22,7 @@ from product_factory.workflows.handlers.technical_plan import TechnicalPlanHandl
 from product_factory.workflows.registry import canonical_workflow_id
 
 _HANDLERS: dict[str, PackHandler] = {
+    FeasibilityDiscoveryHandler().pack_id: FeasibilityDiscoveryHandler(),
     QualityGateHandler().pack_id: QualityGateHandler(),
     RepositoryChangeHandler().pack_id: RepositoryChangeHandler(),
     RepositoryInvestigationHandler().pack_id: RepositoryInvestigationHandler(),
