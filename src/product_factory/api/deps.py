@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from product_factory.config.loader import AppConfig, find_project_root, load_config
+from product_factory.api.remote_mode import resolve_project_root
+from product_factory.config.loader import AppConfig, load_config
 from product_factory.gateway.base import ModelGateway
 from product_factory.gateway.mock import MockGateway
 from product_factory.gateway.openrouter import OpenRouterGateway
@@ -46,7 +47,7 @@ class ApiState:
         self._hosts: dict[bool, HostService] = {}
 
     def config(self) -> AppConfig:
-        root = self.project_root or find_project_root(self.data_dir.parent)
+        root = resolve_project_root(data_dir=self.data_dir, project_root=self.project_root)
         return load_config(root)
 
     def host(

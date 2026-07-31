@@ -1,17 +1,32 @@
-# Minimal private-server sketch for R0. Not a production multi-tenant deployment.
+# Product Factory remote mock sandbox (PM3.0).
+# Force-mock + remote mode; no OpenRouter / GPU. Bind localhost only.
+#
+# Usage:
+#   export PRODUCT_FACTORY_OBSERVE_TOKEN=test-token
+#   ./scripts/docker_remote_up.sh
+#
+# Or:
+#   PRODUCT_FACTORY_OBSERVE_TOKEN=test-token docker compose -f examples/remote/docker-compose.yml up --build
 services:
   product-factory:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
     image: product-factory:local
     restart: unless-stopped
     environment:
       PRODUCT_FACTORY_DATA_DIR: /data
-      PRODUCT_FACTORY_OBSERVE_TOKEN: ${PRODUCT_FACTORY_OBSERVE_TOKEN:?set token}
+      PRODUCT_FACTORY_ROOT: /app
+      PRODUCT_FACTORY_FORCE_MOCK: "1"
+      PRODUCT_FACTORY_REMOTE_MODE: "true"
+      # Required; never bake a real secret into the image or this file.
+      PRODUCT_FACTORY_OBSERVE_TOKEN: ${PRODUCT_FACTORY_OBSERVE_TOKEN:?set PRODUCT_FACTORY_OBSERVE_TOKEN}
       # Alias also accepted by the server/client:
       # PRODUCT_FACTORY_HOST_TOKEN: ${PRODUCT_FACTORY_HOST_TOKEN}
-      PRODUCT_FACTORY_REMOTE_MODE: "true"
       PRODUCT_FACTORY_OBSERVE_URL: ${PRODUCT_FACTORY_OBSERVE_URL:-http://127.0.0.1:8765}
     volumes:
       - pf-data:/data
+      - ./repositories.docker.yaml:/app/config/repositories.yaml:ro
     ports:
       - "127.0.0.1:8765:8765"
     # Bind only to localhost; expose via VPN/tunnel, not the public internet.

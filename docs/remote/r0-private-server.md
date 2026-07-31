@@ -57,10 +57,21 @@ product-factory remote submit --request ./request.md --workflow technical_plan -
    declared workspace / run relative paths.
 6. Restart the service and confirm queued/completed runs remain in the data dir.
 
+## Docker mock sandbox (no AMD required)
+
+For day-to-day remote HTTP work without a dedicated server, use the PM3.0 Docker
+harness: [`docker-sandbox.md`](docker-sandbox.md). It runs force-mock + remote
+mode on `127.0.0.1:8765` with a seeded `sample_api` registry entry.
+
+```bash
+export PRODUCT_FACTORY_OBSERVE_TOKEN=test-token
+./scripts/docker_remote_up.sh
+```
+
 ## Explicitly out of R0
 
-- Full OpenCode remote merge / delivery landing (R3)
-- Workspace `git_ref` remote checkout (R2)
-- Local-model gateway (R4)
+- Full OpenCode remote merge / delivery landing (R3) — shipped in PM3.C2
+- Workspace `git_ref` remote checkout (R2) — shipped in PM3.C1
+- Local-model gateway (R4) — still deferred
 
 See also remote orchestration handover §R0 when present on the docs branch.
