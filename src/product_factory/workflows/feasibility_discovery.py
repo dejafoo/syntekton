@@ -53,6 +53,7 @@ FEASIBILITY_DISCOVERY_PACK = WorkflowPack(
             "independent_review",
             "documentation",
             "composition",
+            "interface_analysis",
         }
     ),
     default_planner_mode="fixed",
@@ -74,6 +75,8 @@ FEASIBILITY_DISCOVERY_PACK = WorkflowPack(
             "discovery.evidence-assessment",
             "discovery.option-framing",
             "repository-inspection",
+            "integration.contract-analysis",
+            "integration.technical-spike",
         ],
     },
     routing_defaults={"coding_worker_tier": "mid"},

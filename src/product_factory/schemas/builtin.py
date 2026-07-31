@@ -16,6 +16,8 @@ LEGACY_OUTPUT_SCHEMA_MAP: dict[str, str] = {
     "architecture.v1": "technical_plan.document.v1",
     "requirements.v1": "technical_plan.document.v1",
     "evidence_report.v1": "evidence_report.document.v1",
+    "evidence_report.v2": "evidence_report.document.v2",
+    "technical_plan.v2": "technical_plan.document.v2",
     "test_plan.v1": "test_plan.document.v1",
     "quality_findings.v1": "quality_findings.document.v1",
     "security_evidence.v1": "security_evidence.document.v1",
@@ -34,11 +36,13 @@ LEGACY_OUTPUT_SCHEMA_MAP: dict[str, str] = {
     "change_brief.document.v1": "change_brief.v1",
     "clarification_request.document.v1": "clarification_request.v1",
     "change_intake.v1": "change_brief.v1",
+    "spike_result.document.v1": "spike_result.v1",
+    "technical_spike.v1": "spike_result.v1",
 }
 
 ROLE_TO_SCHEMA: dict[str, str] = {
-    "evidence_report": "evidence_report.document.v1",
-    "architecture_document": "technical_plan.document.v1",
+    "evidence_report": "evidence_report.document.v2",
+    "architecture_document": "technical_plan.document.v2",
     "proposed_patch": "change_set.patch.v1",
     "test_plan": "test_plan.document.v1",
     "quality_findings": "quality_findings.document.v1",
@@ -46,6 +50,7 @@ ROLE_TO_SCHEMA: dict[str, str] = {
     "feasibility_dossier": "feasibility_dossier.v1",
     "change_brief": "change_brief.v1",
     "clarification_request": "clarification_request.v1",
+    "spike_result": "spike_result.v1",
 }
 
 
@@ -80,6 +85,63 @@ def seed_builtin_schemas(registry: SchemaRegistry) -> None:
                 description=description,
             )
         )
+
+    registry.register(
+        SchemaSpec(
+            id="evidence_report.document.v2",
+            version="2",
+            kind="task_output",
+            json_schema={
+                "type": "object",
+                "required": [
+                    "repository_revision",
+                    "retrieval_window",
+                    "evidence",
+                    "handoff_refs",
+                ],
+                "properties": {
+                    "repository_revision": {"type": "string"},
+                    "retrieval_window": {"type": "object"},
+                    "evidence": {"type": "array"},
+                    "handoff_refs": {"type": "array"},
+                    "text": {"type": "string"},
+                },
+            },
+            description=(
+                "Pinned repository evidence report with fact/inference/unknown "
+                "labels and source provenance"
+            ),
+        )
+    )
+    registry.register(
+        SchemaSpec(
+            id="technical_plan.document.v2",
+            version="2",
+            kind="task_output",
+            json_schema={
+                "type": "object",
+                "required": [
+                    "handoff_refs",
+                    "acceptance_criteria",
+                    "implementation_slices",
+                    "verification_evidence",
+                    "approval_items",
+                ],
+                "properties": {
+                    "handoff_refs": {"type": "array"},
+                    "acceptance_criteria": {"type": "array"},
+                    "implementation_slices": {"type": "array"},
+                    "verification_evidence": {"type": "array"},
+                    "approval_items": {"type": "array"},
+                    "text": {"type": "string"},
+                },
+            },
+            description=(
+                "Pinned technical plan linking acceptance criteria, implementation "
+                "slices, verification evidence, and approval items"
+            ),
+        )
+    )
 
     registry.register(
         SchemaSpec(
@@ -229,9 +291,41 @@ def seed_builtin_schemas(registry: SchemaRegistry) -> None:
             description="Typed clarification request from change_intake framing",
         )
     )
+    registry.register(
+        SchemaSpec(
+            id="spike_result.v1",
+            version="1",
+            kind="task_output",
+            json_schema={
+                "type": "object",
+                "required": ["hypothesis", "method", "measurements", "limits"],
+                "properties": {
+                    "schema_id": {"const": "spike_result.v1"},
+                    "hypothesis": {"type": "string", "minLength": 1},
+                    "method": {
+                        "oneOf": [
+                            {"type": "string", "minLength": 1},
+                            {"type": "object", "minProperties": 1},
+                        ]
+                    },
+                    "measurements": {"type": "object"},
+                    "limits": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                    },
+                    "findings": {"type": "array"},
+                },
+                "additionalProperties": True,
+            },
+            description=(
+                "Confined technical-spike result with hypothesis, method, "
+                "measurements, and explicit limits"
+            ),
+        )
+    )
 
     for schema_id in (
-        "spike_result.v1",
         "verification_report.v1",
         "release_plan.v1",
         "deployment_record.v1",

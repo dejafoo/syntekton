@@ -1,0 +1,20 @@
+id: integration.technical-spike
+version: 1.0.0
+title: Technical Spike
+owner: product-factory
+capabilities:
+  - interface_analysis
+languages:
+  - "*"
+frameworks:
+  - "*"
+trigger:
+  description: >-
+    Use for a bounded technical hypothesis tested with synthetic fixtures in
+    the disposable confined spike worktree.
+negative_triggers:
+  - Do not write outside the assigned synthetic fixture directory.
+  - Do not present synthetic measurements as live partner evidence.
+content_ref: SKILL.md
+status: active
+max_prompt_chars: 12000

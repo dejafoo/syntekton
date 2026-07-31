@@ -6,15 +6,17 @@ from product_factory.domain.plans import FinalArtifactSpec, PlannerOutput
 from product_factory.domain.tasks import AcceptanceCriterion, TaskSpec
 from product_factory.workflows.artifacts import (
     ROLE_ARCHITECTURE_DOCUMENT,
-    ROLE_EVIDENCE_REPORT,
     ROLE_CHANGE_BRIEF,
     ROLE_CLARIFICATION_REQUEST,
+    ROLE_EVIDENCE_REPORT,
     ROLE_FEASIBILITY_DOSSIER,
     ROLE_PROPOSED_PATCH,
     ROLE_QUALITY_FINDINGS,
     ROLE_SECURITY_EVIDENCE,
+    ROLE_SPIKE_RESULT,
     ROLE_TEST_PLAN,
 )
+
 
 def default_code_change_plan(request_text: str) -> PlannerOutput:
     """Risk-aware deterministic plan used by offline tests."""
@@ -141,8 +143,11 @@ def default_architecture_plan(request_text: str) -> PlannerOutput:
                 id="T-001",
                 title="Gather requirements",
                 capability="requirements",
-                objective="Clarify requirements and assumptions",
-                expected_output_schema="requirements.v1",
+                objective=(
+                    "Read pinned handoffs and preserve unknown product decisions "
+                    "as explicit approval items"
+                ),
+                expected_output_schema="technical_plan.document.v2",
                 required_tool_classes={"repository_read"},
                 acceptance_criteria=[
                     AcceptanceCriterion(
@@ -156,9 +161,12 @@ def default_architecture_plan(request_text: str) -> PlannerOutput:
                 id="T-002",
                 title="Draft architecture",
                 capability="architecture",
-                objective="Produce architecture sections",
+                objective=(
+                    "Map each acceptance criterion to an implementation slice "
+                    "and expected verification evidence"
+                ),
                 dependencies=["T-001"],
-                expected_output_schema="architecture_partial.v1",
+                expected_output_schema="technical_plan.document.v2",
                 required_tool_classes={"artifact_write", "web_read"},
                 acceptance_criteria=[
                     AcceptanceCriterion(
@@ -172,9 +180,12 @@ def default_architecture_plan(request_text: str) -> PlannerOutput:
                 id="T-003",
                 title="Compose ARCHITECTURE.md",
                 capability="composition",
-                objective="Compose final architecture document",
+                objective=(
+                    "Compose the plan with acceptance links, verification evidence, "
+                    "handoff pins, and approval items"
+                ),
                 dependencies=["T-002"],
-                expected_output_schema="architecture_doc.v1",
+                expected_output_schema="technical_plan.document.v2",
                 required_tool_classes={"artifact_write"},
                 acceptance_criteria=[
                     AcceptanceCriterion(
@@ -208,18 +219,20 @@ def default_architecture_plan(request_text: str) -> PlannerOutput:
                 role=ROLE_ARCHITECTURE_DOCUMENT,
             )
         ],
-        validation_strategy="section checks then review",
+        validation_strategy=(
+            "section checks, acceptance-verification links, no invented defaults, review"
+        ),
         risk_classification="low",
     )
 
 
 def default_technical_plan(request_text: str) -> PlannerOutput:
-    """Frozen fixed planner for `technical_plan` — same shape as architecture."""
+    """Fixed v2 planner with acceptance-to-evidence traceability."""
     return default_architecture_plan(request_text)
 
 
 def default_investigation_plan(request_text: str) -> PlannerOutput:
-    """Frozen fixed planner for read-only repository investigation (P3.D)."""
+    """Fixed v2 planner for pinned, read-only repository investigation."""
     return PlannerOutput(
         objective=request_text[:200],
         assumptions=[],
@@ -228,7 +241,10 @@ def default_investigation_plan(request_text: str) -> PlannerOutput:
                 id="T-001",
                 title="Inspect repository structure",
                 capability="repository_analysis",
-                objective="Identify relevant modules, evidence paths, and conventions",
+                objective=(
+                    "Read the pinned ChangeBrief and identify repository facts, "
+                    "inferences, unknowns, revision, and retrieval window"
+                ),
                 expected_output_schema="repository_analysis.v1",
                 required_skills=["repository-inspection"],
                 required_tool_classes={"repository_read", "git_read"},
@@ -245,15 +261,18 @@ def default_investigation_plan(request_text: str) -> PlannerOutput:
                 id="T-002",
                 title="Compose evidence report",
                 capability="composition",
-                objective="Produce EVIDENCE_REPORT.md with cited paths and assumptions",
+                objective=(
+                    "Produce EVIDENCE_REPORT.md with labeled evidence, provenance, "
+                    "repository revision, retrieval window, and handoff pins"
+                ),
                 dependencies=["T-001"],
-                expected_output_schema="evidence_report.v1",
+                expected_output_schema="evidence_report.document.v2",
                 required_tool_classes={"repository_read", "artifact_write"},
                 prohibited_actions={"file_write", "repository_write", "git_write"},
                 acceptance_criteria=[
                     AcceptanceCriterion(
                         id="AC-002",
-                        description="Evidence report with citations and assumptions",
+                        description="Evidence report with fact/inference/unknown provenance",
                         verification="static_rule",
                     )
                 ],
@@ -266,7 +285,9 @@ def default_investigation_plan(request_text: str) -> PlannerOutput:
                 role=ROLE_EVIDENCE_REPORT,
             )
         ],
-        validation_strategy="section checks, citation presence, secret scan",
+        validation_strategy=(
+            "section checks, investigation provenance, citation presence, secret scan"
+        ),
         risk_classification="low",
     )
 
@@ -540,6 +561,57 @@ def default_feasibility_discovery_plan(request_text: str) -> PlannerOutput:
         risk_classification="low",
     )
 
+
+def default_technical_spike_plan(request_text: str) -> PlannerOutput:
+    """Confined, local-only contract spike (WF1.A)."""
+    return PlannerOutput(
+        objective=request_text[:200],
+        assumptions=[],
+        tasks=[
+            TaskSpec(
+                id="T-001",
+                title="Analyze and simulate the interface contract",
+                capability="interface_analysis",
+                objective=(
+                    "Inventory and diff local contracts, generate only synthetic fixtures, "
+                    "run a local simulation, and report hypothesis, method, measurements, and limits"
+                ),
+                expected_output_schema="spike_result.v1",
+                required_skills=[
+                    "integration.contract-analysis",
+                    "integration.technical-spike",
+                ],
+                required_tool_classes={
+                    "repository_read",
+                    "interface_analysis",
+                    "synthetic_write",
+                    "artifact_write",
+                },
+                prohibited_actions={"network_access", "live_partner_auth", "git_write"},
+                readable_path_patterns=["**/*"],
+                writable_path_patterns=["synthetic/**"],
+                acceptance_criteria=[
+                    AcceptanceCriterion(
+                        id="AC-001",
+                        description=(
+                            "Spike result records hypothesis, method, measurements, limits, "
+                            "contract inventory, and compatibility classification"
+                        ),
+                        verification="static_rule",
+                    )
+                ],
+            ),
+        ],
+        final_artifacts=[
+            FinalArtifactSpec(
+                logical_name="SPIKE_RESULT.json",
+                composer_task_id="T-001",
+                role=ROLE_SPIKE_RESULT,
+            )
+        ],
+        validation_strategy="schema validation and confined-write checks",
+        risk_classification="low",
+    )
 
 
 def request_needs_clarification(request_text: str) -> bool:

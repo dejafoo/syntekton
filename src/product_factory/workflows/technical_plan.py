@@ -1,4 +1,4 @@
-"""`technical_plan` workflow pack — wraps the historical `architecture` behavior.
+"""`technical_plan` workflow pack — acceptance-linked implementation planning.
 
 Requirements, architecture decision, acceptance criteria, and handoff tasks
 match the prior architecture coordinator path. `architecture` remains a
@@ -15,7 +15,7 @@ from product_factory.workflows.base import WorkflowPack
 
 TECHNICAL_PLAN_PACK = WorkflowPack(
     id="technical_plan",
-    version="1.0.0",
+    version="2.0.0",
     input_schema={
         "type": "object",
         "properties": {
@@ -40,6 +40,7 @@ TECHNICAL_PLAN_PACK = WorkflowPack(
             "composition",
             "independent_review",
             "documentation",
+            "interface_analysis",
         }
     ),
     default_planner_mode="fixed",
@@ -47,12 +48,28 @@ TECHNICAL_PLAN_PACK = WorkflowPack(
         "baseline_validators": [
             "architecture_sections",
             "architecture_substance",
+            "acceptance_verification_links",
+            "no_invented_defaults",
             "secret_scan",
         ],
+        "accepted_handoff_schemas": [
+            "change_brief.v1",
+            "evidence_report.document.v1",
+            "evidence_report.document.v2",
+            "feasibility_dossier.v1",
+        ],
+        "required_handoff_schema": "change_brief.v1",
         "review": "optional",
         "behavioral_commands": "none",
     },
-    skill_policy={"grant_enforcement": "fail_closed"},
+    skill_policy={
+        "grant_enforcement": "fail_closed",
+        "allow": [
+            "architecture.system-design",
+            "integration.contract-analysis",
+            "integration.technical-spike",
+        ],
+    },
     routing_defaults={"coding_worker_tier": "mid"},
     artifacts=(
         ArtifactLandSpec(
@@ -66,8 +83,7 @@ TECHNICAL_PLAN_PACK = WorkflowPack(
         ),
     ),
     description=(
-        "Technical plan with requirements, architecture decision, acceptance "
-        "criteria, and implementation handoff — behavior-frozen wrapper around "
-        "the historical architecture workflow."
+        "Technical plan from pinned ChangeBrief/evidence inputs, mapping every "
+        "acceptance criterion to an implementation slice and verification evidence."
     ),
 )

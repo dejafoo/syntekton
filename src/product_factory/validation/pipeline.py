@@ -38,10 +38,31 @@ ARCHITECTURE_REQUIRED_SECTIONS = [
 
 INVESTIGATION_REQUIRED_SECTIONS = [
     "Summary",
+    "Repository snapshot",
+    "Evidence",
     "Findings",
     "Cited paths",
     "Assumptions",
+    "Unknowns",
 ]
+
+TECHNICAL_PLAN_REQUIRED_SECTIONS = [
+    *ARCHITECTURE_REQUIRED_SECTIONS,
+    "Implementation slices",
+    "Verification evidence",
+    "Approval items",
+]
+
+INVESTIGATION_EVIDENCE_LABELS = frozenset({"fact", "inference", "unknown"})
+INVESTIGATION_EVIDENCE_LABEL_RE = re.compile(
+    r"(?im)^\s*[-*]\s*\**\s*(fact|inference|unknown)\s*\**\s*[:\-]\s*(.+)$"
+)
+_AC_ID_RE = re.compile(r"(?i)\bAC[-_ ]?([0-9]+)\b")
+_DECISION_ID_RE = re.compile(r"(?i)\bDEC[-_ ]?([0-9]+)\b")
+_INVENTED_DEFAULT_RE = re.compile(
+    r"(?i)\b(?:we\s+will\s+default|defaults?\s+to|chosen\s+by\s+default|"
+    r"assum(?:e|ed|ing)\b.{0,40}\bas\s+(?:the\s+)?default)\b"
+)
 
 # WF1 / PM1.D discovery dossier headings (structure only).
 FEASIBILITY_REQUIRED_SECTIONS = [
@@ -86,9 +107,7 @@ FEASIBILITY_EVIDENCE_LABEL_RE = re.compile(
 )
 
 # A fact-labeled line without a nearby citation is an unsupported claim.
-FEASIBILITY_FACT_LINE_RE = re.compile(
-    r"(?im)^\s*[-*]\s*\**\s*fact\s*\**\s*[:\-]\s*(.+)$"
-)
+FEASIBILITY_FACT_LINE_RE = re.compile(r"(?im)^\s*[-*]\s*\**\s*fact\s*\**\s*[:\-]\s*(.+)$")
 
 _OPTION_LINE_RE = re.compile(r"(?im)^\s*[-*]\s*\**\s*option\s+([A-Za-z0-9_-]+)\s*\**\s*[:\-]")
 _RUBRIC_CRITERION_RE = re.compile(r"(?im)^\s*[-*]\s+(.+)$")
@@ -250,7 +269,7 @@ def validate_architecture_document(markdown: str) -> ValidatorResult:
 
 
 def validate_investigation_document(markdown: str) -> ValidatorResult:
-    """Require evidence-report sections (summary, findings, cited paths, assumptions)."""
+    """Require the v2 evidence-report sections and snapshot provenance."""
     missing = [
         section
         for section in INVESTIGATION_REQUIRED_SECTIONS
@@ -264,6 +283,128 @@ def validate_investigation_document(markdown: str) -> ValidatorResult:
             details={"missing_sections": missing},
         )
     return ValidatorResult(validator_id="investigation_sections", status="pass", message="ok")
+
+
+def validate_investigation_provenance(markdown: str) -> ValidatorResult:
+    """Require fact/inference/unknown labels and provenance for every fact."""
+    body = _section_body_exact(markdown, "Evidence")
+    unlabeled: list[str] = []
+    unsupported_facts: list[str] = []
+    labels: list[str] = []
+    for raw in body.splitlines():
+        stripped = raw.strip()
+        if not stripped.startswith(("-", "*")):
+            continue
+        match = INVESTIGATION_EVIDENCE_LABEL_RE.match(stripped)
+        if match is None:
+            unlabeled.append(stripped[:200])
+            continue
+        label = match.group(1).lower()
+        labels.append(label)
+        if label == "fact":
+            claim = match.group(2)
+            has_path = bool(CITATION_PATH_RE.search(claim))
+            has_pin = bool(
+                re.search(r"(?i)\b(?:sha256|digest|source)\s*[:=]\s*[a-f0-9]{12,64}\b", claim)
+            )
+            if not (has_path or has_pin):
+                unsupported_facts.append(stripped[:200])
+    missing_labels = sorted(INVESTIGATION_EVIDENCE_LABELS - set(labels))
+    if not body.strip() or unlabeled or unsupported_facts or missing_labels:
+        return ValidatorResult(
+            validator_id="investigation_provenance",
+            status="fail",
+            message="Investigation evidence labeling or provenance incomplete",
+            details={
+                "unlabeled": unlabeled,
+                "unsupported_facts": unsupported_facts,
+                "missing_labels": missing_labels,
+            },
+        )
+    return ValidatorResult(
+        validator_id="investigation_provenance",
+        status="pass",
+        message="ok",
+        details={"labels": labels},
+    )
+
+
+def _referenced_ids(markdown: str, section: str, pattern: re.Pattern[str]) -> set[str]:
+    return {match.group(1) for match in pattern.finditer(_section_body(markdown, section))}
+
+
+def validate_acceptance_verification_links(markdown: str) -> ValidatorResult:
+    """Every acceptance criterion must link to a slice and expected evidence."""
+    acceptance = _referenced_ids(markdown, "Acceptance criteria", _AC_ID_RE)
+    slices = _referenced_ids(markdown, "Implementation slices", _AC_ID_RE)
+    verification = _referenced_ids(markdown, "Verification evidence", _AC_ID_RE)
+    problems: list[str] = []
+    if not acceptance:
+        problems.append("missing_acceptance_ids")
+    missing_slices = sorted(acceptance - slices)
+    missing_verification = sorted(acceptance - verification)
+    unknown_slice_links = sorted(slices - acceptance)
+    unknown_verification_links = sorted(verification - acceptance)
+    if missing_slices:
+        problems.append("acceptance_without_implementation_slice")
+    if missing_verification:
+        problems.append("acceptance_without_verification_evidence")
+    if unknown_slice_links or unknown_verification_links:
+        problems.append("links_to_unknown_acceptance")
+    status = "fail" if problems else "pass"
+    return ValidatorResult(
+        validator_id="acceptance_verification_links",
+        status=status,
+        message="ok" if status == "pass" else "Acceptance-to-verification links incomplete",
+        details={
+            "problems": problems,
+            "acceptance_ids": sorted(acceptance),
+            "missing_slices": missing_slices,
+            "missing_verification": missing_verification,
+            "unknown_slice_links": unknown_slice_links,
+            "unknown_verification_links": unknown_verification_links,
+        },
+    )
+
+
+def validate_no_invented_defaults(markdown: str) -> ValidatorResult:
+    """Unresolved product decisions must be explicit approval items."""
+    open_questions = _section_body(markdown, "Open questions")
+    approval_items = _section_body(markdown, "Approval items")
+    question_ids = _referenced_ids(markdown, "Open questions", _DECISION_ID_RE)
+    approval_ids = _referenced_ids(markdown, "Approval items", _DECISION_ID_RE)
+    question_bullets = [
+        line.strip() for line in open_questions.splitlines() if line.strip().startswith(("-", "*"))
+    ]
+    unlabeled_questions = [line for line in question_bullets if not _DECISION_ID_RE.search(line)]
+    invented = [
+        line.strip()[:200]
+        for line in (markdown or "").splitlines()
+        if _INVENTED_DEFAULT_RE.search(line)
+        and not re.search(r"(?i)\b(?:approval|approve|confirm|decision)\b", line)
+    ]
+    missing_approvals = sorted(question_ids - approval_ids)
+    problems: list[str] = []
+    if unlabeled_questions:
+        problems.append("unlabeled_open_questions")
+    if missing_approvals:
+        problems.append("open_questions_without_approval_items")
+    if invented:
+        problems.append("invented_defaults")
+    if question_bullets and not approval_items.strip():
+        problems.append("missing_approval_items")
+    status = "fail" if problems else "pass"
+    return ValidatorResult(
+        validator_id="no_invented_defaults",
+        status=status,
+        message="ok" if status == "pass" else "Plan invents or fails to escalate product defaults",
+        details={
+            "problems": problems,
+            "unlabeled_questions": unlabeled_questions,
+            "missing_approvals": missing_approvals,
+            "invented_defaults": invented,
+        },
+    )
 
 
 def extract_feasibility_source_ids(markdown: str) -> list[str]:
@@ -300,6 +441,34 @@ def _section_body(markdown: str, section: str) -> str:
     for raw in lines[start:]:
         if raw.strip().startswith("#"):
             break
+        body.append(raw)
+    return "\n".join(body)
+
+
+def _section_body_exact(markdown: str, section: str) -> str:
+    """Return a section body without matching a document title prefix."""
+    target = _normalize_heading_text(section)
+    lines = (markdown or "").splitlines()
+    start: int | None = None
+    level = 0
+    for idx, raw in enumerate(lines):
+        stripped = raw.strip()
+        if not stripped.startswith("#"):
+            continue
+        heading = stripped.lstrip("#").strip()
+        if _normalize_heading_text(heading) == target:
+            start = idx + 1
+            level = len(stripped) - len(stripped.lstrip("#"))
+            break
+    if start is None:
+        return ""
+    body: list[str] = []
+    for raw in lines[start:]:
+        stripped = raw.strip()
+        if stripped.startswith("#"):
+            next_level = len(stripped) - len(stripped.lstrip("#"))
+            if next_level <= level:
+                break
         body.append(raw)
     return "\n".join(body)
 
@@ -629,7 +798,6 @@ def validate_regulated_claims(
     )
 
 
-
 # WF2 / PM2.A change_intake headings (structure only).
 INTAKE_BRIEF_REQUIRED_SECTIONS = [
     "Outcome",
@@ -749,20 +917,36 @@ def validate_intake_no_invention(
     if role == ROLE_CLARIFICATION_REQUEST:
         # A clarification that invents a complete acceptance set is overconfident.
         acceptance = _section_body(body, "Acceptance criteria")
-        if acceptance.strip() and len(
-            [line for line in acceptance.splitlines() if line.strip().startswith(("-", "*", "1."))]
-        ) >= 3:
+        if (
+            acceptance.strip()
+            and len(
+                [
+                    line
+                    for line in acceptance.splitlines()
+                    if line.strip().startswith(("-", "*", "1."))
+                ]
+            )
+            >= 3
+        ):
             problems.append("clarification_invented_acceptance_set")
-        if _heading_present(body, "Acceptance criteria") and not _heading_present(body, "Questions"):
+        if _heading_present(body, "Acceptance criteria") and not _heading_present(
+            body, "Questions"
+        ):
             problems.append("clarification_missing_questions")
         questions = _section_body(body, "Questions")
-        if not any(line.strip().startswith(("-", "*", "1.", "?")) or "?" in line for line in questions.splitlines() if line.strip()):
+        if not any(
+            line.strip().startswith(("-", "*", "1.", "?")) or "?" in line
+            for line in questions.splitlines()
+            if line.strip()
+        ):
             if not questions.strip():
                 problems.append("clarification_empty_questions")
     elif role == ROLE_CHANGE_BRIEF:
         unknowns = _section_body(body, "Unknowns")
         unknown_lines = [
-            line for line in unknowns.splitlines() if line.strip() and not line.strip().startswith("#")
+            line
+            for line in unknowns.splitlines()
+            if line.strip() and not line.strip().startswith("#")
         ]
         empty_unknowns = not unknown_lines or all(
             line.strip().lower() in {"- none", "- none.", "none", "n/a", "- n/a"}
@@ -842,7 +1026,9 @@ _WEB_CITATION_HINTS = (
 )
 
 
-def request_expects_web_citations(request_text: str, metadata: dict[str, Any] | None = None) -> bool:
+def request_expects_web_citations(
+    request_text: str, metadata: dict[str, Any] | None = None
+) -> bool:
     """True when the host asked for web-backed sources / citations."""
     meta = metadata or {}
     flag = str(meta.get("require_web_search") or meta.get("require_web_citations") or "").strip()

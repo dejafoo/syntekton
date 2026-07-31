@@ -18,6 +18,7 @@ Capability = Literal[
     "repair",
     "domain_research",
     "decision_analysis",
+    "interface_analysis",
 ]
 
 CAPABILITIES: frozenset[str] = frozenset(
@@ -35,6 +36,7 @@ CAPABILITIES: frozenset[str] = frozenset(
         "repair",
         "domain_research",
         "decision_analysis",
+        "interface_analysis",
     }
 )
 
@@ -71,4 +73,7 @@ CAPABILITY_TOOL_CLASSES: dict[str, frozenset[str]] = {
         {"repository_read", "artifact_write", "web_read", "source_read", "evidence_build"}
     ),
     "decision_analysis": frozenset({"artifact_write", "evidence_build"}),
+    "interface_analysis": frozenset(
+        {"repository_read", "artifact_write", "interface_analysis", "synthetic_write"}
+    ),
 }

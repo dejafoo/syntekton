@@ -145,6 +145,7 @@ _INVESTIGATION_WORKFLOW_TYPES = frozenset({"repository_investigation"})
 _QUALITY_GATE_WORKFLOW_TYPES = frozenset({"quality_gate"})
 _DISCOVERY_WORKFLOW_TYPES = frozenset({"feasibility_discovery"})
 _INTAKE_WORKFLOW_TYPES = frozenset({"change_intake"})
+_SPIKE_WORKFLOW_TYPES = frozenset({"technical_spike"})
 _PACK_BACKED_WORKFLOW_TYPES = (
     _CODE_CHANGE_WORKFLOW_TYPES
     | _TECHNICAL_PLAN_WORKFLOW_TYPES
@@ -152,6 +153,7 @@ _PACK_BACKED_WORKFLOW_TYPES = (
     | _QUALITY_GATE_WORKFLOW_TYPES
     | _DISCOVERY_WORKFLOW_TYPES
     | _INTAKE_WORKFLOW_TYPES
+    | _SPIKE_WORKFLOW_TYPES
 )
 # Packs that never receive repository mutation or arbitrary validation commands.
 _READ_ONLY_STRIP_WORKFLOW_TYPES = (
@@ -171,7 +173,10 @@ _RESEARCH_AGENT_MAX_ROUNDS = 24
 
 _DISCOVERY_CAPABILITIES = frozenset({"domain_research", "decision_analysis"})
 # Capabilities that draft a document from a research loop or a single completion.
-_RESEARCH_LOOP_CAPABILITIES = frozenset({"architecture", "requirements"}) | _DISCOVERY_CAPABILITIES
+_RESEARCH_LOOP_CAPABILITIES = (
+    frozenset({"architecture", "requirements", "interface_analysis"})
+    | _DISCOVERY_CAPABILITIES
+)
 # Evidence tools the discovery plane adds (PM1.B2). Named here rather than
 # imported so the grant path is stable whether or not the connector and local
 # tools are registered in a given deployment.
@@ -583,6 +588,17 @@ class RunCoordinator:
                     output_dir=run_dir / "input",
                 )
                 base_commit = snap.base_commit
+                if (
+                    request.workspace_provenance is not None
+                    and base_commit != request.workspace_provenance.commit
+                ):
+                    raise ConfigurationError(
+                        "Prepared workspace revision changed before execution",
+                        details={
+                            "expected_commit": request.workspace_provenance.commit,
+                            "actual_commit": base_commit,
+                        },
+                    )
                 repo_summary = snap.manifest
                 original_repo = snap.repository_path
                 worktrees = WorktreeManager(snap.repository_path, run_dir / "worktrees")
@@ -1750,6 +1766,7 @@ class RunCoordinator:
                             _INVESTIGATION_WORKFLOW_TYPES
                             | _DISCOVERY_WORKFLOW_TYPES
                             | _INTAKE_WORKFLOW_TYPES
+                            | _SPIKE_WORKFLOW_TYPES
                         ):
                             try:
                                 document = pack_handler.compose(
@@ -1956,6 +1973,7 @@ class RunCoordinator:
             final_status=final_status,  # type: ignore[arg-type]
             ended_at=datetime.now(UTC),
             base_commit=base_commit or None,
+            workspace_provenance=request.workspace_provenance,
             usage=usage,
             artifact_paths={
                 p.name: str(p.relative_to(run_dir))
@@ -2038,6 +2056,7 @@ class RunCoordinator:
             "documentation": "composer",
             "domain_research": "researcher",
             "decision_analysis": "decision_analyst",
+            "interface_analysis": "interface_analyst",
         }.get(task.capability, "implementation_worker")
 
         skill_policy: dict[str, Any] = {}
@@ -2150,7 +2169,13 @@ class RunCoordinator:
 
         wt_path = run_dir / "scratch" / task.id
         wt_path.mkdir(parents=True, exist_ok=True)
-        writable = task.capability in {"implementation", "repair", "test_design", "composition"}
+        writable = task.capability in {
+            "implementation",
+            "repair",
+            "test_design",
+            "composition",
+            "interface_analysis",
+        }
         inherited_artifacts: list[str] = []
         lineage_conflicts: list[dict[str, str]] = []
         pre_patch_fingerprint: str | None = None
@@ -2163,6 +2188,7 @@ class RunCoordinator:
                 "composition",
                 "test_execution",
                 "domain_research",
+                "interface_analysis",
             }:
                 try:
                     wt = worktrees.get(task.id)
@@ -2270,7 +2296,11 @@ class RunCoordinator:
         broker = ToolBroker(
             registry=self.tool_registry,
             artifact_store=artifacts,
-            worktree_root=wt_path if original_repo else None,
+            worktree_root=(
+                wt_path
+                if original_repo or request.workflow_type in _SPIKE_WORKFLOW_TYPES
+                else None
+            ),
             original_repo=original_repo,
             registered_commands=self.config.policies.registered_commands,
             base_commit=base_commit or None,
@@ -2296,6 +2326,7 @@ class RunCoordinator:
             "documentation",
             "domain_research",
             "decision_analysis",
+            "interface_analysis",
         }:
             granted.add("write_artifact")
         if task.capability == "decision_analysis":
