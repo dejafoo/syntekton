@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import hmac
-import os
 from typing import Annotated
 
 from fastapi import Header, HTTPException, Request
+
+from product_factory.api.remote_mode import configured_control_token
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
 
@@ -24,19 +25,21 @@ def require_auth(
     authorization: Annotated[str | None, Header()] = None,
 ) -> None:
     """
-    Loopback is open by default.
-    Non-loopback requires PRODUCT_FACTORY_OBSERVE_TOKEN bearer auth.
+    When a control/observe token is configured, require Bearer auth for all
+    observe reads (including loopback). When unset, loopback stays open and
+    non-loopback is refused.
     """
+    token = configured_control_token()
+    if token:
+        _check_bearer(authorization, token)
+        return
     client = request.client.host if request.client else ""
     if client in _LOOPBACK_HOSTS:
         return
-    token = os.environ.get("PRODUCT_FACTORY_OBSERVE_TOKEN")
-    if not token:
-        raise HTTPException(
-            status_code=403,
-            detail="Non-loopback binding requires PRODUCT_FACTORY_OBSERVE_TOKEN",
-        )
-    _check_bearer(authorization, token)
+    raise HTTPException(
+        status_code=403,
+        detail="Non-loopback binding requires PRODUCT_FACTORY_OBSERVE_TOKEN",
+    )
 
 
 def require_write_auth(
@@ -44,10 +47,10 @@ def require_write_auth(
     authorization: Annotated[str | None, Header()] = None,
 ) -> None:
     """
-    Control (write) routes: when PRODUCT_FACTORY_OBSERVE_TOKEN is set, require
-    bearer auth even on loopback. When unset, same rules as require_auth.
+    Control (write) routes: when a token is configured, require bearer auth even
+    on loopback. When unset, same rules as require_auth.
     """
-    token = os.environ.get("PRODUCT_FACTORY_OBSERVE_TOKEN")
+    token = configured_control_token()
     if token:
         _check_bearer(authorization, token)
         return

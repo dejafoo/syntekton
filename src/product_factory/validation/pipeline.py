@@ -629,6 +629,165 @@ def validate_regulated_claims(
     )
 
 
+
+# WF2 / PM2.A change_intake headings (structure only).
+INTAKE_BRIEF_REQUIRED_SECTIONS = [
+    "Outcome",
+    "Scope",
+    "Non-goals",
+    "Acceptance criteria",
+    "Constraints",
+    "Risks",
+    "Assumptions",
+    "Unknowns",
+    "Recommended next pack",
+]
+
+INTAKE_CLARIFICATION_REQUIRED_SECTIONS = [
+    "Questions",
+    "Blocking unknowns",
+    "Partial outcome",
+]
+
+_AMBIGUOUS_REQUEST_MARKERS = (
+    "something",
+    "somehow",
+    "maybe",
+    "not sure",
+    "improve things",
+    "make it better",
+    "figure out",
+    "whatever",
+    "unclear",
+    "vague",
+    "tbd",
+    "??? ",
+    "???",
+)
+
+_WELL_SCOPED_REQUEST_MARKERS = (
+    "acceptance criteria",
+    "acceptance:",
+    "must ",
+    "should ",
+    "add endpoint",
+    "fix bug",
+    "defect:",
+    "implement ",
+    "when users",
+    "given that",
+    "non-goals",
+    "out of scope",
+)
+
+
+def request_looks_underspecified(request_text: str, *, pack_input: dict | None = None) -> bool:
+    """Heuristic used by intake validators and deterministic compose (fixture-driven)."""
+    text = (request_text or "").strip().lower()
+    payload = pack_input or {}
+    desired = str(payload.get("desired_outcome") or "").strip()
+    constraints = payload.get("known_constraints") or []
+    has_typed_scope = bool(desired) and bool(constraints)
+    if any(marker in text for marker in _AMBIGUOUS_REQUEST_MARKERS):
+        return True
+    if len(text) < 40 and not has_typed_scope:
+        return True
+    if any(marker in text for marker in _WELL_SCOPED_REQUEST_MARKERS):
+        return False
+    if has_typed_scope:
+        return False
+    # Default: treat short/underspecified prose without scoping cues as needing clarification.
+    return len(text.split()) < 25
+
+
+def validate_intake_sections(
+    markdown: str,
+    *,
+    role: str,
+) -> ValidatorResult:
+    """Require brief or clarification headings for the primary intake landable."""
+    from product_factory.workflows.artifacts import ROLE_CHANGE_BRIEF, ROLE_CLARIFICATION_REQUEST
+
+    if role == ROLE_CLARIFICATION_REQUEST:
+        required = INTAKE_CLARIFICATION_REQUIRED_SECTIONS
+    else:
+        required = INTAKE_BRIEF_REQUIRED_SECTIONS
+        role = ROLE_CHANGE_BRIEF
+    missing = [section for section in required if not _heading_present(markdown, section)]
+    if missing:
+        return ValidatorResult(
+            validator_id="intake_sections",
+            status="fail",
+            message=f"Intake {role} incomplete",
+            details={"missing_sections": missing, "role": role},
+        )
+    return ValidatorResult(
+        validator_id="intake_sections",
+        status="pass",
+        message="ok",
+        details={"role": role},
+    )
+
+
+def validate_intake_no_invention(
+    markdown: str,
+    *,
+    role: str,
+    request_text: str = "",
+    pack_input: dict | None = None,
+) -> ValidatorResult:
+    """Reject invented confidence: clarification must not look like a full brief;
+    a brief for an under-specified request must keep unknowns explicit.
+    """
+    from product_factory.workflows.artifacts import ROLE_CHANGE_BRIEF, ROLE_CLARIFICATION_REQUEST
+
+    problems: list[str] = []
+    body = markdown or ""
+    lower = body.lower()
+    underspecified = request_looks_underspecified(request_text, pack_input=pack_input)
+
+    if role == ROLE_CLARIFICATION_REQUEST:
+        # A clarification that invents a complete acceptance set is overconfident.
+        acceptance = _section_body(body, "Acceptance criteria")
+        if acceptance.strip() and len(
+            [line for line in acceptance.splitlines() if line.strip().startswith(("-", "*", "1."))]
+        ) >= 3:
+            problems.append("clarification_invented_acceptance_set")
+        if _heading_present(body, "Acceptance criteria") and not _heading_present(body, "Questions"):
+            problems.append("clarification_missing_questions")
+        questions = _section_body(body, "Questions")
+        if not any(line.strip().startswith(("-", "*", "1.", "?")) or "?" in line for line in questions.splitlines() if line.strip()):
+            if not questions.strip():
+                problems.append("clarification_empty_questions")
+    elif role == ROLE_CHANGE_BRIEF:
+        unknowns = _section_body(body, "Unknowns")
+        unknown_lines = [
+            line for line in unknowns.splitlines() if line.strip() and not line.strip().startswith("#")
+        ]
+        empty_unknowns = not unknown_lines or all(
+            line.strip().lower() in {"- none", "- none.", "none", "n/a", "- n/a"}
+            for line in unknown_lines
+        )
+        if underspecified and empty_unknowns:
+            problems.append("brief_empty_unknowns_for_underspecified_request")
+        if "recommended next pack" in lower and "repository_change" in lower and underspecified:
+            problems.append("brief_recommends_change_for_underspecified_request")
+
+    if problems:
+        return ValidatorResult(
+            validator_id="intake_no_invention",
+            status="fail",
+            message="Intake over-confident or invented framing",
+            details={"problems": problems, "role": role, "underspecified": underspecified},
+        )
+    return ValidatorResult(
+        validator_id="intake_no_invention",
+        status="pass",
+        message="ok",
+        details={"role": role, "underspecified": underspecified},
+    )
+
+
 def validate_document_sections(
     markdown: str,
     *,

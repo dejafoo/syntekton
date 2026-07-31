@@ -176,15 +176,27 @@ def serve(
     port: int = 8765,
     cors_origins: list[str] | None = None,
 ) -> None:
+    import os
+
     import uvicorn
 
-    if host not in {"127.0.0.1", "::1", "localhost"}:
-        import os
+    from product_factory.api.remote_mode import configured_control_token, resolve_project_root
 
-        if not os.environ.get("PRODUCT_FACTORY_OBSERVE_TOKEN"):
+    if host not in {"127.0.0.1", "::1", "localhost"}:
+        if not configured_control_token():
             raise SystemExit(
-                "Non-loopback host requires PRODUCT_FACTORY_OBSERVE_TOKEN in the environment"
+                "Non-loopback host requires PRODUCT_FACTORY_OBSERVE_TOKEN "
+                "(or PRODUCT_FACTORY_HOST_TOKEN) in the environment"
             )
 
-    app = create_app(data_dir, cors_origins=cors_origins)
+    project_root = None
+    if (os.environ.get("PRODUCT_FACTORY_ROOT") or "").strip():
+        project_root = resolve_project_root(data_dir=data_dir)
+    observe_base = (os.environ.get("PRODUCT_FACTORY_OBSERVE_URL") or "").strip() or None
+    app = create_app(
+        data_dir,
+        cors_origins=cors_origins,
+        project_root=project_root,
+        observe_base_url=observe_base,
+    )
     uvicorn.run(app, host=host, port=port, log_level="info")

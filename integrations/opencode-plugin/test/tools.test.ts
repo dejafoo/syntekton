@@ -22,9 +22,12 @@ function res(partial: Partial<PfResponse>): PfResponse {
 }
 
 /** Mock PfClient whose methods are vi.fn() and return queued/preset responses. */
-function mockClient(overrides: Partial<Record<keyof PfClient, PfResponse>> = {}): {
+function mockClient(
+  overrides: Partial<Record<keyof PfClient, PfResponse>> = {},
+  transport: PfClient["transport"] = { mode: "cli" },
+): {
   client: PfClient;
-  calls: Record<keyof PfClient, ReturnType<typeof vi.fn>>;
+  calls: Record<string, ReturnType<typeof vi.fn>>;
 } {
   const calls = {
     submit: vi.fn(async () => overrides.submit ?? res({ run_id: "run-1", status: "queued" })),
@@ -45,7 +48,10 @@ function mockClient(overrides: Partial<Record<keyof PfClient, PfResponse>> = {})
         res({ run_id: "run-1", status: "completed", data: { landed: [], skipped: [] } }),
     ),
   };
-  return { client: calls as unknown as PfClient, calls: calls as never };
+  return {
+    client: { ...calls, transport } as unknown as PfClient,
+    calls: calls as never,
+  };
 }
 
 const allow: PfToolContext["ask"] = vi.fn(async () => undefined);
@@ -347,7 +353,7 @@ describe("pf_run", () => {
     const deps: PfToolDeps = { client };
     const ctx: PfToolContext = { directory: "/proj", worktree: "/proj/wt" };
 
-    await pfRun(deps, ctx, { request: "do a thing", workflow: "technical_plan" });
+    const out = await pfRun(deps, ctx, { request: "do a thing", workflow: "technical_plan" });
 
     expect(calls.submit).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -356,6 +362,7 @@ describe("pf_run", () => {
         repositoryPath: "/proj/wt",
       }),
     );
+    expect(out).toContain('"mode": "cli"');
   });
 
   it("forwards artifact overrides so the deliverable is named up front", async () => {
@@ -376,6 +383,32 @@ describe("pf_run", () => {
         },
       }),
     );
+  });
+
+  it("remote mode omits repository_path and forwards repository_id", async () => {
+    const { client, calls } = mockClient({}, { mode: "remote", endpoint: "https://pf.example" });
+    const out = await pfRun(
+      { client },
+      { worktree: "/laptop/repo" },
+      {
+        request: "frame this",
+        workflow: "change_intake",
+        repository_id: "main-app",
+        pack_input: { decision_statement: "ship?" },
+        handoff_refs: [{ schema_id: "feasibility_dossier.v1", digest: "abc" }],
+      },
+    );
+
+    expect(calls.submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repositoryPath: undefined,
+        repositoryId: "main-app",
+        packInput: { decision_statement: "ship?" },
+        handoffRefs: [{ schema_id: "feasibility_dossier.v1", digest: "abc" }],
+      }),
+    );
+    expect(out).toContain('"mode": "remote"');
+    expect(out).toContain("https://pf.example");
   });
 });
 
@@ -403,7 +436,7 @@ describe("pf_wait", () => {
       res({ status: "awaiting_approval" }),
     ];
     const status = vi.fn(async () => responses.shift() ?? res({ status: "completed" }));
-    const client = { status } as unknown as PfClient;
+    const client = { status, transport: { mode: "cli" } } as unknown as PfClient;
     const sleep = vi.fn(async () => undefined);
     const deps: PfToolDeps = { client, wait: { intervalMs: 0, sleep } };
 
@@ -411,6 +444,38 @@ describe("pf_wait", () => {
 
     expect(status).toHaveBeenCalledTimes(3);
     expect(out).toContain("awaiting_approval");
+  });
+
+  it("delegates to client.wait when present (SSE-capable remote)", async () => {
+    const wait = vi.fn(async () => res({ status: "awaiting_approval", run_id: "run-1" }));
+    const client = {
+      transport: { mode: "remote", endpoint: "https://pf.example" },
+      wait,
+      status: vi.fn(),
+    } as unknown as PfClient;
+
+    const out = await pfWait({ client, wait: { intervalMs: 0, sleep: async () => undefined } }, {}, {
+      run_id: "run-1",
+    });
+
+    expect(wait).toHaveBeenCalledWith(
+      "run-1",
+      expect.objectContaining({ maxPolls: 60, intervalMs: 0 }),
+    );
+    expect(out).toContain("awaiting_approval");
+    expect(out).toContain('"mode": "remote"');
+  });
+});
+
+describe("pf_merge remote mode", () => {
+  it("refuses merge without calling approve/materialize", async () => {
+    const { client, calls } = mockClient({}, { mode: "remote", endpoint: "https://pf.example" });
+    const out = await pfMerge({ client }, { ask: allow }, { run_id: "run-1" });
+
+    expect(out).toContain("remote_merge_unsupported");
+    expect(calls.approve).not.toHaveBeenCalled();
+    expect(calls.materialize).not.toHaveBeenCalled();
+    expect(calls.materializeAll).not.toHaveBeenCalled();
   });
 });
 

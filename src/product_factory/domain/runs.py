@@ -20,6 +20,7 @@ WorkflowType = Literal[
     "repository_investigation",
     "quality_gate",
     "feasibility_discovery",
+    "change_intake",
 ]
 
 
@@ -53,6 +54,9 @@ class RunRequest(BaseModel):
     workflow_type: WorkflowType
     request_text: str
     repository_path: Path | None = None
+    # Server-registered repository id (remote mode). Resolved to repository_path
+    # on the host before execution; clients never send laptop paths remotely.
+    repository_id: str | None = None
     project_profile: str = "default"
     model_profile_set: str = "local-target"
     validation_commands: list[str] = Field(default_factory=list)

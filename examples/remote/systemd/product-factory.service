@@ -1,0 +1,23 @@
+[Unit]
+Description=Product Factory observe/host API (private R0)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=product-factory
+Group=product-factory
+WorkingDirectory=/opt/product-factory
+Environment=PRODUCT_FACTORY_DATA_DIR=/var/lib/product-factory
+Environment=PRODUCT_FACTORY_OBSERVE_TOKEN=replace-me
+Environment=PRODUCT_FACTORY_REMOTE_MODE=true
+Environment=PRODUCT_FACTORY_OBSERVE_URL=https://pf.example.internal
+# Prefer the packaged CLI entrypoint when installed.
+ExecStart=/opt/product-factory/.venv/bin/product-factory observe serve --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

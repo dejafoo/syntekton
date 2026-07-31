@@ -42,6 +42,7 @@ def test_registry_lists_all_packs() -> None:
     assert "technical_plan" in ids
     assert "quality_gate" in ids
     assert "feasibility_discovery" in ids
+    assert "change_intake" in ids
 
 
 def test_resolve_repository_change_directly() -> None:

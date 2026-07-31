@@ -1,4 +1,4 @@
-"""Seed schemas for current packs plus reserved PM1+ ids."""
+"""Seed schemas for current packs plus reserved future ids."""
 
 from __future__ import annotations
 
@@ -30,6 +30,10 @@ LEGACY_OUTPUT_SCHEMA_MAP: dict[str, str] = {
     "decision_record.document.v1": "decision_record.v1",
     "option_matrix.document.v1": "option_matrix.v1",
     "research_ledger.document.v1": "research_ledger.v1",
+    # PM2 intake outputs — accept `<role>.document.v1` alongside bare ids.
+    "change_brief.document.v1": "change_brief.v1",
+    "clarification_request.document.v1": "clarification_request.v1",
+    "change_intake.v1": "change_brief.v1",
 }
 
 ROLE_TO_SCHEMA: dict[str, str] = {
@@ -40,6 +44,8 @@ ROLE_TO_SCHEMA: dict[str, str] = {
     "quality_findings": "quality_findings.document.v1",
     "security_evidence": "security_evidence.document.v1",
     "feasibility_dossier": "feasibility_dossier.v1",
+    "change_brief": "change_brief.v1",
+    "clarification_request": "clarification_request.v1",
 }
 
 
@@ -170,9 +176,61 @@ def seed_builtin_schemas(registry: SchemaRegistry) -> None:
             description="Options scored against a declared rubric",
         )
     )
+    registry.register(
+        SchemaSpec(
+            id="change_brief.v1",
+            version="1",
+            kind="task_output",
+            json_schema={
+                "type": "object",
+                "required": [
+                    "outcome",
+                    "scope",
+                    "non_goals",
+                    "acceptance_criteria",
+                    "constraints",
+                    "risks",
+                    "assumptions",
+                    "unknowns",
+                    "recommended_next_pack",
+                ],
+                "properties": {
+                    "outcome": {"type": "string"},
+                    "scope": {"type": "string"},
+                    "non_goals": {"type": "array", "items": {"type": "string"}},
+                    "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
+                    "constraints": {"type": "array", "items": {"type": "string"}},
+                    "risks": {"type": "array", "items": {"type": "string"}},
+                    "assumptions": {"type": "array", "items": {"type": "string"}},
+                    "unknowns": {"type": "array", "items": {"type": "string"}},
+                    "recommended_next_pack": {"type": "string"},
+                    "text": {"type": "string"},
+                },
+            },
+            description="Pinned change brief from change_intake framing",
+        )
+    )
+    registry.register(
+        SchemaSpec(
+            id="clarification_request.v1",
+            version="1",
+            kind="task_output",
+            json_schema={
+                "type": "object",
+                "required": ["questions", "blocking_unknowns", "partial_outcome"],
+                "properties": {
+                    "questions": {"type": "array", "items": {"type": "string"}},
+                    "blocking_unknowns": {"type": "array", "items": {"type": "string"}},
+                    "partial_outcome": {"type": "string"},
+                    "recommended_next_pack": {"type": ["string", "null"]},
+                    "text": {"type": "string"},
+                },
+            },
+            description="Typed clarification request from change_intake framing",
+        )
+    )
 
     for schema_id in (
-        "change_brief.v1",
         "spike_result.v1",
         "verification_report.v1",
         "release_plan.v1",

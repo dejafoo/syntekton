@@ -869,9 +869,20 @@ class HostService:
         self, run_id: str, *, after_seq: int, limit: int
     ) -> list[dict[str, Any]] | None:
         url = f"{self.observe_base_url}/api/v1/runs/{run_id}/events"
+        headers: dict[str, str] = {}
+        token = (
+            os.environ.get("PRODUCT_FACTORY_OBSERVE_TOKEN")
+            or os.environ.get("PRODUCT_FACTORY_HOST_TOKEN")
+        )
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         try:
             with httpx.Client(timeout=0.75) as client:
-                response = client.get(url, params={"after_seq": after_seq, "limit": limit})
+                response = client.get(
+                    url,
+                    params={"after_seq": after_seq, "limit": limit},
+                    headers=headers,
+                )
                 if response.status_code != 200:
                     return None
                 payload = response.json()

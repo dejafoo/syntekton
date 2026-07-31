@@ -105,6 +105,8 @@ from product_factory.validation.pipeline import (
     validate_behavioral_commands,
     validate_citations,
     validate_document_sections,
+    validate_intake_no_invention,
+    validate_intake_sections,
     validate_investigation_document,
     validate_option_comparison,
     validate_patch_applies,
@@ -117,6 +119,8 @@ from product_factory.validation.pipeline import (
 )
 from product_factory.workflows.artifacts import (
     ROLE_ARCHITECTURE_DOCUMENT,
+    ROLE_CHANGE_BRIEF,
+    ROLE_CLARIFICATION_REQUEST,
     ROLE_EVIDENCE_REPORT,
     ROLE_FEASIBILITY_DOSSIER,
     ROLE_PROPOSED_PATCH,
@@ -140,15 +144,19 @@ _TECHNICAL_PLAN_WORKFLOW_TYPES = frozenset({"architecture", "technical_plan"})
 _INVESTIGATION_WORKFLOW_TYPES = frozenset({"repository_investigation"})
 _QUALITY_GATE_WORKFLOW_TYPES = frozenset({"quality_gate"})
 _DISCOVERY_WORKFLOW_TYPES = frozenset({"feasibility_discovery"})
+_INTAKE_WORKFLOW_TYPES = frozenset({"change_intake"})
 _PACK_BACKED_WORKFLOW_TYPES = (
     _CODE_CHANGE_WORKFLOW_TYPES
     | _TECHNICAL_PLAN_WORKFLOW_TYPES
     | _INVESTIGATION_WORKFLOW_TYPES
     | _QUALITY_GATE_WORKFLOW_TYPES
     | _DISCOVERY_WORKFLOW_TYPES
+    | _INTAKE_WORKFLOW_TYPES
 )
 # Packs that never receive repository mutation or arbitrary validation commands.
-_READ_ONLY_STRIP_WORKFLOW_TYPES = _INVESTIGATION_WORKFLOW_TYPES | _DISCOVERY_WORKFLOW_TYPES
+_READ_ONLY_STRIP_WORKFLOW_TYPES = (
+    _INVESTIGATION_WORKFLOW_TYPES | _DISCOVERY_WORKFLOW_TYPES | _INTAKE_WORKFLOW_TYPES
+)
 
 # Live architecture compose used to hardcode 8k output tokens, which truncated
 # long research docs mid-Citations even when the model profile allowed more.
@@ -216,6 +224,8 @@ _QUALITY_GATE_ROLES: dict[str, str] = {
     ROLE_QUALITY_FINDINGS: "QUALITY_FINDINGS.md",
     ROLE_SECURITY_EVIDENCE: "SECURITY_EVIDENCE.md",
     ROLE_FEASIBILITY_DOSSIER: "FEASIBILITY_DISCOVERY.md",
+    ROLE_CHANGE_BRIEF: "CHANGE_BRIEF.md",
+    ROLE_CLARIFICATION_REQUEST: "CLARIFICATION_REQUEST.md",
 }
 
 
@@ -253,6 +263,12 @@ def default_feasibility_discovery_plan(request_text: str) -> PlannerOutput:
     from product_factory.workflows.default_plans import (
         default_feasibility_discovery_plan as _plan,
     )
+
+    return _plan(request_text)
+
+
+def default_change_intake_plan(request_text: str) -> PlannerOutput:
+    from product_factory.workflows.default_plans import default_change_intake_plan as _plan
 
     return _plan(request_text)
 
@@ -1731,7 +1747,9 @@ class RunCoordinator:
                         # fallback (mock E2E). Quality gate and similar packs
                         # fail closed when a required deliverable is absent.
                         if request.workflow_type in (
-                            _INVESTIGATION_WORKFLOW_TYPES | _DISCOVERY_WORKFLOW_TYPES
+                            _INVESTIGATION_WORKFLOW_TYPES
+                            | _DISCOVERY_WORKFLOW_TYPES
+                            | _INTAKE_WORKFLOW_TYPES
                         ):
                             try:
                                 document = pack_handler.compose(
@@ -1748,6 +1766,7 @@ class RunCoordinator:
                                         compose_feasibility_dossier=(
                                             self._compose_feasibility_dossier
                                         ),
+                                        compose_change_intake=self._compose_change_intake,
                                         compose_quality_document=self._compose_quality_document,
                                     ),
                                 )
@@ -1804,6 +1823,24 @@ class RunCoordinator:
                         validate_regulated_claims(document, policy=source_policy)
                     )
                     validation_results.append(validate_recommendation(document))
+                if (
+                    request.workflow_type in _INTAKE_WORKFLOW_TYPES
+                    and entry.role in {ROLE_CHANGE_BRIEF, ROLE_CLARIFICATION_REQUEST}
+                    and document.strip()
+                ):
+                    # Role-specific section validator (overrides the generic pass above
+                    # only when the primary landable is present).
+                    validation_results.append(
+                        validate_intake_sections(document, role=entry.role)
+                    )
+                    validation_results.append(
+                        validate_intake_no_invention(
+                            document,
+                            role=entry.role,
+                            request_text=request.request_text,
+                            pack_input=getattr(request, "pack_input", None) or {},
+                        )
+                    )
             if request.workflow_type in _QUALITY_GATE_WORKFLOW_TYPES:
                 findings_doc = documents_by_role.get(ROLE_QUALITY_FINDINGS, "")
                 if findings_doc.strip():
@@ -1854,6 +1891,15 @@ class RunCoordinator:
             or (
                 request.workflow_type in _DISCOVERY_WORKFLOW_TYPES
                 and not str(documents_by_role.get(ROLE_FEASIBILITY_DOSSIER) or "").strip()
+            )
+            or (
+                request.workflow_type in _INTAKE_WORKFLOW_TYPES
+                and sum(
+                    1
+                    for role in (ROLE_CHANGE_BRIEF, ROLE_CLARIFICATION_REQUEST)
+                    if str(documents_by_role.get(role) or "").strip()
+                )
+                != 1
             )
         )
         if terminal_failure:
@@ -2274,6 +2320,12 @@ class RunCoordinator:
         if request.workflow_type in _READ_ONLY_STRIP_WORKFLOW_TYPES:
             granted -= _REPOSITORY_WRITE_TOOL_NAMES
             granted.discard("run_validation_command")
+        if request.workflow_type in _INTAKE_WORKFLOW_TYPES:
+            # Intake must not open a new live research plane (discovery already
+            # did that). Strip web/source retrieval even if decision_analysis
+            # would otherwise inherit external-read catalogue classes.
+            granted.discard(TOOL_WEB_SEARCH)
+            granted -= _SOURCE_READ_TOOL_NAMES
         elif request.workflow_type in _QUALITY_GATE_WORKFLOW_TYPES:
             # A quality gate may execute registered validation commands, but it
             # reports on code rather than changing it (P4.E).
@@ -2853,6 +2905,7 @@ class RunCoordinator:
                     compose_architecture=self._compose_architecture,
                     compose_evidence_report=self._compose_evidence_report,
                     compose_feasibility_dossier=self._compose_feasibility_dossier,
+                    compose_change_intake=self._compose_change_intake,
                     compose_quality_document=self._compose_quality_document,
                     task=task,
                     ctx_messages=ctx.messages,
@@ -2912,9 +2965,11 @@ class RunCoordinator:
                     "list_files",
                     "search_text",
                 }
-                if task.capability in _DISCOVERY_CAPABILITIES:
-                    # Only discovery hands the loop the evidence plane; an
-                    # architecture task keeps the pre-PM1 web_search tool set.
+                if (
+                    task.capability in _DISCOVERY_CAPABILITIES
+                    and request.workflow_type in _DISCOVERY_WORKFLOW_TYPES
+                ):
+                    # Only feasibility discovery hands the loop the evidence plane.
                     loop_tool_names |= _SOURCE_READ_TOOL_NAMES | _EVIDENCE_BUILD_TOOL_NAMES
                 research_tool_names = {name for name in granted if name in loop_tool_names}
                 try:
@@ -3610,6 +3665,110 @@ class RunCoordinator:
             "",
             "## Next step",
             next_step,
+            "",
+        ]
+        return "\n".join(sections) + "\n"
+
+
+    def _compose_change_intake(
+        self,
+        request: RunRequest,
+        *,
+        role: str,
+        findings: list[Finding],
+        dependency_outputs: list[dict[str, Any]],
+        document_name: str = "CHANGE_BRIEF.md",
+    ) -> str:
+        """Deterministic change brief / clarification for mock compose (PM2.A)."""
+        from product_factory.validation.pipeline import request_looks_underspecified
+
+        pack_input = getattr(request, "pack_input", None) or {}
+        request_text = (request.request_text or "").strip()
+        desired = str(pack_input.get("desired_outcome") or "").strip()
+        decision = str(pack_input.get("decision_statement") or "").strip()
+        constraints = [
+            str(item).strip()
+            for item in (pack_input.get("known_constraints") or [])
+            if str(item).strip()
+        ]
+        underspecified = request_looks_underspecified(
+            request_text, pack_input=pack_input
+        )
+        wants_clarification = role == ROLE_CLARIFICATION_REQUEST or (
+            role != ROLE_CHANGE_BRIEF and underspecified
+        )
+
+        outcome = desired or decision or request_text or "Change outcome pending"
+        if wants_clarification or role == ROLE_CLARIFICATION_REQUEST:
+            name = document_name or "CLARIFICATION_REQUEST.md"
+            questions = [
+                "- What concrete outcome should this change produce?",
+                "- What is explicitly out of scope?",
+                "- Which acceptance checks would prove the change is done?",
+            ]
+            if constraints:
+                questions.append(
+                    "- Do the stated constraints still apply: "
+                    + "; ".join(constraints[:3])
+                    + "?"
+                )
+            sections = [
+                f"# {name}",
+                "",
+                "## Questions",
+                *questions,
+                "",
+                "## Blocking unknowns",
+                "- Acceptance criteria are not yet pinned.",
+                "- Scope boundaries are incomplete.",
+                "",
+                "## Partial outcome",
+                outcome,
+                "",
+                "## Recommended next pack",
+                "none — human clarification required before investigation or planning",
+                "",
+            ]
+            return "\n".join(sections) + "\n"
+
+        name = document_name or "CHANGE_BRIEF.md"
+        constraint_lines = [f"- {c}" for c in constraints] or [
+            "- Stay within the existing repository conventions."
+        ]
+        finding_lines = [f"- inference: {f.summary}" for f in findings[:5]]
+        sections = [
+            f"# {name}",
+            "",
+            "## Outcome",
+            outcome,
+            "",
+            "## Scope",
+            "Implement the requested change within the named repository surfaces.",
+            "",
+            "## Non-goals",
+            "- Unrelated refactors",
+            "- New live research or discovery plane work",
+            "",
+            "## Acceptance criteria",
+            "- The stated outcome is observable in the repository.",
+            "- Existing tests relevant to the change still pass.",
+            "- No secrets are introduced.",
+            "",
+            "## Constraints",
+            *constraint_lines,
+            "",
+            "## Risks",
+            "- Mis-scoped acceptance if operator intent was incomplete.",
+            *finding_lines,
+            "",
+            "## Assumptions",
+            "- Request text and optional pinned dossier are authoritative for framing.",
+            "",
+            "## Unknowns",
+            "- Residual edge cases not named in the request.",
+            "",
+            "## Recommended next pack",
+            "technical_plan",
             "",
         ]
         return "\n".join(sections) + "\n"

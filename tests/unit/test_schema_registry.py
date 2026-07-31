@@ -43,7 +43,7 @@ def test_unknown_schema_write_fails() -> None:
 
 def test_reserved_schema_write_fails() -> None:
     with pytest.raises(SchemaValidationError, match="reserved"):
-        assert_schema_writable("change_brief.v1")
+        assert_schema_writable("spike_result.v1")
 
 
 def test_feasibility_dossier_is_writable_after_pm1() -> None:
@@ -54,6 +54,43 @@ def test_feasibility_dossier_is_writable_after_pm1() -> None:
     assert spec.reserved is False
     assert assert_schema_writable("feasibility_dossier.v1") == "feasibility_dossier.v1"
     assert ROLE_TO_SCHEMA["feasibility_dossier"] == "feasibility_dossier.v1"
+
+
+def test_change_brief_and_clarification_are_writable_after_pm2() -> None:
+    """PM2.0 un-reserves change_brief and registers clarification_request."""
+    reg = default_schema_registry()
+    for schema_id, role in (
+        ("change_brief.v1", "change_brief"),
+        ("clarification_request.v1", "clarification_request"),
+    ):
+        spec = reg.require(schema_id, for_write=True)
+        assert spec.kind == "task_output"
+        assert spec.reserved is False
+        assert assert_schema_writable(schema_id) == schema_id
+        assert ROLE_TO_SCHEMA[role] == schema_id
+    validate_write_payload(
+        "change_brief.v1",
+        {
+            "outcome": "Add rate limiting",
+            "scope": "API gateway",
+            "non_goals": ["UI redesign"],
+            "acceptance_criteria": ["429 on burst"],
+            "constraints": ["No new deps"],
+            "risks": ["False positives"],
+            "assumptions": ["Existing auth stays"],
+            "unknowns": ["Exact burst window"],
+            "recommended_next_pack": "technical_plan",
+        },
+    )
+    validate_write_payload(
+        "clarification_request.v1",
+        {
+            "questions": ["What outcome?"],
+            "blocking_unknowns": ["Acceptance"],
+            "partial_outcome": "Improve something",
+            "recommended_next_pack": None,
+        },
+    )
 
 
 @pytest.mark.parametrize(
@@ -98,12 +135,13 @@ def test_pm1_legacy_aliases_resolve_to_canonical_ids() -> None:
     assert resolve_output_schema_id("feasibility_dossier.document.v1") == "feasibility_dossier.v1"
     assert resolve_output_schema_id("feasibility_discovery.v1") == "feasibility_dossier.v1"
     assert resolve_output_schema_id("option_matrix.document.v1") == "option_matrix.v1"
+    assert resolve_output_schema_id("change_brief.document.v1") == "change_brief.v1"
+    assert resolve_output_schema_id("clarification_request.document.v1") == "clarification_request.v1"
 
 
 def test_remaining_reserved_ids_still_block_writes() -> None:
     reg = default_schema_registry()
     for schema_id in (
-        "change_brief.v1",
         "spike_result.v1",
         "verification_report.v1",
         "release_plan.v1",
