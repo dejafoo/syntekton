@@ -103,6 +103,7 @@ def test_handler_plan_compiles_against_pack() -> None:
 
 def test_eligible_next_actions_point_at_technical_plan() -> None:
     actions = eligible_next_actions_for_workflow("feasibility_discovery")
+    assert any(a["pack_id"] == "change_intake" for a in actions)
     assert any(a["pack_id"] == "technical_plan" for a in actions)
     invest = eligible_next_actions_for_workflow("repository_investigation")
     assert any(a["pack_id"] == "feasibility_discovery" for a in invest)

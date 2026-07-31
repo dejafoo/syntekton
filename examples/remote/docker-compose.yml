@@ -1,0 +1,20 @@
+# Minimal private-server sketch for R0. Not a production multi-tenant deployment.
+services:
+  product-factory:
+    image: product-factory:local
+    restart: unless-stopped
+    environment:
+      PRODUCT_FACTORY_DATA_DIR: /data
+      PRODUCT_FACTORY_OBSERVE_TOKEN: ${PRODUCT_FACTORY_OBSERVE_TOKEN:?set token}
+      # Alias also accepted by the server/client:
+      # PRODUCT_FACTORY_HOST_TOKEN: ${PRODUCT_FACTORY_HOST_TOKEN}
+      PRODUCT_FACTORY_REMOTE_MODE: "true"
+      PRODUCT_FACTORY_OBSERVE_URL: ${PRODUCT_FACTORY_OBSERVE_URL:-http://127.0.0.1:8765}
+    volumes:
+      - pf-data:/data
+    ports:
+      - "127.0.0.1:8765:8765"
+    # Bind only to localhost; expose via VPN/tunnel, not the public internet.
+
+volumes:
+  pf-data:

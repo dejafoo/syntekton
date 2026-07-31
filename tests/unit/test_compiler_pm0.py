@@ -75,9 +75,8 @@ def test_reserved_schema_rejected() -> None:
                 title="brief",
                 capability="architecture",
                 objective="x",
-                # PM1 un-reserves feasibility_dossier.v1; change_brief.v1 stays
-                # reserved until PM2 ships change_intake.
-                expected_output_schema="change_brief.v1",
+                # PM2 un-reserves change_brief.v1; spike_result.v1 stays reserved.
+                expected_output_schema="spike_result.v1",
                 required_tool_classes={"artifact_write"},
                 acceptance_criteria=[
                     AcceptanceCriterion(id="ac", description="d", verification="artifact_check")

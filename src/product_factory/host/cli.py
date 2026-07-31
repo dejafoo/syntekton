@@ -21,6 +21,7 @@ from product_factory.gateway.openrouter import OpenRouterGateway
 from product_factory.host.protocol import HostResponse
 from product_factory.host.service import HostService
 from product_factory.host_mcp.factory import resolve_mcp_config_root
+from product_factory.domain.artifacts import HandoffRef
 from product_factory.workflows.inputs import parse_pack_input_option
 
 host_app = typer.Typer(
@@ -149,6 +150,11 @@ def host_submit_cmd(
         "--pack-input",
         help="Typed pack payload as inline JSON or @file.json; validated against the pack",
     ),
+    handoff_refs: str | None = typer.Option(
+        None,
+        "--handoff-refs",
+        help="Handoff ref list as inline JSON array or @file.json",
+    ),
     policy: Path | None = typer.Option(None, "--policy"),
     mock: bool = typer.Option(False, "--mock"),
     inline: bool = typer.Option(
@@ -174,6 +180,51 @@ def host_submit_cmd(
             )
         )
         return
+    handoff_payload: list[HandoffRef] = []
+    if handoff_refs:
+        import json as _json
+        from pathlib import Path as _Path
+
+        text = handoff_refs.strip()
+        if text.startswith("@"):
+            path = _Path(text[1:]).expanduser()
+            if not path.is_file():
+                _emit(
+                    HostResponse.failure(
+                        code="invalid_handoff",
+                        message=f"handoff_refs file not found: {path}",
+                    )
+                )
+                return
+            text = path.read_text(encoding="utf-8")
+        try:
+            parsed = _json.loads(text)
+        except Exception as exc:
+            _emit(
+                HostResponse.failure(
+                    code="invalid_handoff",
+                    message=f"handoff_refs is not valid JSON: {exc}",
+                )
+            )
+            return
+        if not isinstance(parsed, list):
+            _emit(
+                HostResponse.failure(
+                    code="invalid_handoff",
+                    message="handoff_refs must be a JSON array",
+                )
+            )
+            return
+        try:
+            handoff_payload = [HandoffRef.model_validate(item) for item in parsed]
+        except Exception as exc:
+            _emit(
+                HostResponse.failure(
+                    code="invalid_handoff",
+                    message=f"Invalid handoff_refs: {exc}",
+                )
+            )
+            return
     service = _service(mock=mock, policy=policy)
     run_request = RunRequest(
         request_id=f"req-{uuid.uuid4().hex[:8]}",
@@ -184,6 +235,7 @@ def host_submit_cmd(
         validation_commands=_parse_validation_commands(validation_command, validation_commands),
         artifact_overrides=_parse_artifact_overrides(artifact_override, artifact_name),
         pack_input=pack_input_payload,
+        handoff_refs=handoff_payload,
         budget=run_budget_from_policy(
             max_cost_usd=Decimal(str(budget_usd)),
             budgets=service.config.policies.budgets,

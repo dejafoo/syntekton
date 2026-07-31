@@ -26,6 +26,7 @@ from product_factory.host.cli import host_app
 from product_factory.observability.logging import setup_logging
 from product_factory.orchestration.coordinator import RunCoordinator
 from product_factory.orchestration.graph import build_graph
+from product_factory.remote.cli import remote_app
 from product_factory.workflows.inputs import parse_pack_input_option
 
 app = typer.Typer(
@@ -43,6 +44,7 @@ app.add_typer(lessons_app, name="lessons")
 observe_app = typer.Typer(help="Observability API commands")
 app.add_typer(observe_app, name="observe")
 app.add_typer(host_app, name="host")
+app.add_typer(remote_app, name="remote")
 console = Console()
 
 

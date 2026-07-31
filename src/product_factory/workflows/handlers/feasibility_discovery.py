@@ -47,8 +47,12 @@ class FeasibilityDiscoveryHandler:
     def eligible_next_actions(self) -> list[EligibleNextAction]:
         return [
             EligibleNextAction(
+                pack_id="change_intake",
+                reason="A grounded dossier commonly feeds change intake framing",
+            ),
+            EligibleNextAction(
                 pack_id="technical_plan",
-                reason="A grounded dossier commonly feeds a technical plan",
+                reason="A grounded dossier may also feed a technical plan directly",
             ),
         ]
 

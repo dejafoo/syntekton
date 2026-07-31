@@ -198,8 +198,12 @@ def test_control_writes_require_token_when_configured(control_env, monkeypatch) 
     )
     assert denied.status_code == 401
 
-    # Reads remain open on loopback even when token is configured.
-    assert client.get("/api/v1/health").status_code == 200
+    # Observe reads also require the bearer when a token is configured (PM2.B1).
+    assert client.get("/api/v1/health").status_code == 401
+    assert (
+        client.get("/api/v1/health", headers={"Authorization": "Bearer secret-token"}).status_code
+        == 200
+    )
 
     allowed = client.post(
         "/api/v1/plan",
@@ -222,6 +226,9 @@ def test_control_openapi_lists_write_routes(control_env) -> None:
     assert "/api/v1/runs/{run_id}/revise" in paths
     assert "/api/v1/runs/{run_id}/materialize" in paths
     assert "/api/v1/runs/{run_id}/materialize-all" in paths
+    assert "/api/v1/runs/{run_id}/status" in paths
+    assert "/api/v1/runs/{run_id}/inspect" in paths
+    assert "/api/v1/runs/{run_id}/tail" in paths
 
 
 def test_control_materialize_happy_path_and_path_escape(control_env) -> None:

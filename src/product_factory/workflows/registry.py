@@ -12,6 +12,7 @@ from product_factory.workflows.artifacts import (
     resolve_artifact_land_map,
 )
 from product_factory.workflows.base import WorkflowPack
+from product_factory.workflows.change_intake import CHANGE_INTAKE_PACK
 from product_factory.workflows.feasibility_discovery import FEASIBILITY_DISCOVERY_PACK
 from product_factory.workflows.quality_gate import QUALITY_GATE_PACK
 from product_factory.workflows.repository_change import REPOSITORY_CHANGE_PACK
@@ -19,6 +20,7 @@ from product_factory.workflows.repository_investigation import REPOSITORY_INVEST
 from product_factory.workflows.technical_plan import TECHNICAL_PLAN_PACK
 
 _PACKS: dict[str, WorkflowPack] = {
+    CHANGE_INTAKE_PACK.id: CHANGE_INTAKE_PACK,
     FEASIBILITY_DISCOVERY_PACK.id: FEASIBILITY_DISCOVERY_PACK,
     QUALITY_GATE_PACK.id: QUALITY_GATE_PACK,
     REPOSITORY_CHANGE_PACK.id: REPOSITORY_CHANGE_PACK,

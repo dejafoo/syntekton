@@ -7,6 +7,8 @@ from product_factory.domain.tasks import AcceptanceCriterion, TaskSpec
 from product_factory.workflows.artifacts import (
     ROLE_ARCHITECTURE_DOCUMENT,
     ROLE_EVIDENCE_REPORT,
+    ROLE_CHANGE_BRIEF,
+    ROLE_CLARIFICATION_REQUEST,
     ROLE_FEASIBILITY_DOSSIER,
     ROLE_PROPOSED_PATCH,
     ROLE_QUALITY_FINDINGS,
@@ -535,5 +537,120 @@ def default_feasibility_discovery_plan(request_text: str) -> PlannerOutput:
             "feasibility sections, research provenance, option comparison, "
             "regulated claims review, secret scan"
         ),
+        risk_classification="low",
+    )
+
+
+
+def request_needs_clarification(request_text: str) -> bool:
+    """Fixed-plan heuristic: ambiguous fixtures emit clarification_request."""
+    from product_factory.validation.pipeline import request_looks_underspecified
+
+    return request_looks_underspecified(request_text)
+
+
+def default_change_intake_plan(request_text: str) -> PlannerOutput:
+    """Frozen fixed planner for change framing (PM2.A / WF2).
+
+    Exactly one primary landable is selected from request heuristics: a
+    change_brief for well-scoped requests, or a clarification_request otherwise.
+    """
+    clarification = request_needs_clarification(request_text)
+    if clarification:
+        primary_role = ROLE_CLARIFICATION_REQUEST
+        logical_name = "CLARIFICATION_REQUEST.md"
+        schema_id = "clarification_request.v1"
+        compose_title = "Compose clarification request"
+        compose_objective = "Produce CLARIFICATION_REQUEST.md with questions and blocking unknowns"
+        ac_desc = "Clarification sections complete; no invented acceptance set"
+    else:
+        primary_role = ROLE_CHANGE_BRIEF
+        logical_name = "CHANGE_BRIEF.md"
+        schema_id = "change_brief.v1"
+        compose_title = "Compose change brief"
+        compose_objective = "Produce CHANGE_BRIEF.md with outcome, scope, and acceptance criteria"
+        ac_desc = "Change brief sections complete with recommended next pack"
+
+    return PlannerOutput(
+        objective=request_text[:200],
+        assumptions=[],
+        tasks=[
+            TaskSpec(
+                id="T-001",
+                title="Frame the change request",
+                capability="decision_analysis",
+                objective="Clarify outcome, scope boundaries, and whether clarification is required",
+                expected_output_schema="decision_record.v1",
+                required_tool_classes={"artifact_write", "evidence_build"},
+                prohibited_actions={"file_write", "repository_write", "git_write"},
+                acceptance_criteria=[
+                    AcceptanceCriterion(
+                        id="AC-001",
+                        description="Request framed as brief-ready or clarification-needed",
+                        verification="static_rule",
+                    )
+                ],
+            ),
+            TaskSpec(
+                id="T-002",
+                title="Read optional pinned evidence",
+                capability="repository_analysis",
+                objective="Optionally inspect the repository or pinned dossier; do not open live web research",
+                dependencies=["T-001"],
+                expected_output_schema="repository_analysis.v1",
+                required_skills=["repository-inspection"],
+                required_tool_classes={"repository_read"},
+                prohibited_actions={"file_write", "repository_write", "git_write"},
+                acceptance_criteria=[
+                    AcceptanceCriterion(
+                        id="AC-002",
+                        description="Evidence read without inventing unconstrained acceptance criteria",
+                        verification="evidence_check",
+                    )
+                ],
+            ),
+            TaskSpec(
+                id="T-003",
+                title=compose_title,
+                capability="composition",
+                objective=compose_objective,
+                dependencies=["T-002"],
+                expected_output_schema=schema_id,
+                required_tool_classes={"repository_read", "artifact_write"},
+                prohibited_actions={"file_write", "repository_write", "git_write"},
+                acceptance_criteria=[
+                    AcceptanceCriterion(
+                        id="AC-003",
+                        description=ac_desc,
+                        verification="static_rule",
+                    )
+                ],
+            ),
+            TaskSpec(
+                id="T-004",
+                title="Independent intake review",
+                capability="independent_review",
+                objective="Challenge invented acceptance criteria and empty unknowns on underspecified requests",
+                dependencies=["T-003"],
+                expected_output_schema="review_findings.v1",
+                required_tool_classes={"repository_read", "git_read"},
+                prohibited_actions={"file_write", "repository_write", "git_write"},
+                acceptance_criteria=[
+                    AcceptanceCriterion(
+                        id="AC-004",
+                        description="Review confirms exactly one primary landable and no invention",
+                        verification="evidence_check",
+                    )
+                ],
+            ),
+        ],
+        final_artifacts=[
+            FinalArtifactSpec(
+                logical_name=logical_name,
+                composer_task_id="T-003",
+                role=primary_role,
+            )
+        ],
+        validation_strategy="intake sections, intake no invention, secret scan",
         risk_classification="low",
     )

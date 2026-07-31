@@ -40,6 +40,7 @@ class ComposeContext:
     compose_architecture: Any | None = None
     compose_evidence_report: Any | None = None
     compose_feasibility_dossier: Any | None = None
+    compose_change_intake: Any | None = None
     compose_quality_document: Any | None = None
     compose_patch: Any | None = None
     task: Any | None = None
