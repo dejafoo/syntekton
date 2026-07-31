@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from product_factory.domain.capabilities import CAPABILITIES, CAPABILITY_TOOL_CLASSES
 from product_factory.domain.plans import (
     CompiledPlan,
@@ -9,6 +11,12 @@ from product_factory.domain.plans import (
     CompileResult,
     PlannerOutput,
 )
+from product_factory.schemas.builtin import resolve_output_schema_id
+from product_factory.schemas.registry import SchemaRegistry, default_schema_registry
+
+if TYPE_CHECKING:
+    from product_factory.skills.registry import SkillRegistry
+    from product_factory.workflows.base import WorkflowPack
 
 
 def _topo_sort(tasks: dict[str, list[str]]) -> tuple[list[str], list[CompilerError]]:
@@ -45,16 +53,40 @@ def _topo_sort(tasks: dict[str, list[str]]) -> tuple[list[str], list[CompilerErr
     return order, errors
 
 
+def _skill_known(registry: SkillRegistry, skill_id: str) -> bool:
+    for skill in registry.skills:
+        if skill.manifest.id == skill_id or skill.manifest.title == skill_id:
+            return True
+    return False
+
+
 def compile_plan(
     proposal: PlannerOutput,
     *,
     max_tasks: int = 20,
     max_parallel_tasks: int = 3,
     require_baseline_validators: bool = True,
+    workflow_pack: WorkflowPack | None = None,
+    skill_registry: SkillRegistry | None = None,
+    schema_registry: SchemaRegistry | None = None,
+    enforce_output_schemas: bool | None = None,
 ) -> CompileResult:
     errors: list[CompilerError] = []
     notes_pending: list[str] = []
     task_ids = [t.id for t in proposal.tasks]
+    schemas = schema_registry or default_schema_registry()
+    # Pack-backed compiles always enforce registry membership; bare unit tests may skip.
+    check_schemas = (
+        enforce_output_schemas
+        if enforce_output_schemas is not None
+        else workflow_pack is not None
+    )
+    pack_roles = (
+        {spec.role for spec in workflow_pack.artifacts} if workflow_pack is not None else set()
+    )
+    skill_policy = dict(workflow_pack.skill_policy) if workflow_pack is not None else {}
+    allow_skills = set(skill_policy.get("allow") or skill_policy.get("allowlist") or [])
+    deny_skills = set(skill_policy.get("deny") or skill_policy.get("denylist") or [])
 
     if len(task_ids) != len(set(task_ids)):
         errors.append(CompilerError(code="duplicate_task_id", message="Task IDs must be unique"))
@@ -78,6 +110,17 @@ def compile_plan(
                     task_id=task.id,
                 )
             )
+        if workflow_pack is not None and task.capability not in workflow_pack.allowed_capabilities:
+            errors.append(
+                CompilerError(
+                    code="capability_not_allowed",
+                    message=(
+                        f"Capability {task.capability} not allowed by pack "
+                        f"{workflow_pack.id}"
+                    ),
+                    task_id=task.id,
+                )
+            )
         if not task.expected_output_schema:
             errors.append(
                 CompilerError(
@@ -86,6 +129,25 @@ def compile_plan(
                     task_id=task.id,
                 )
             )
+        elif check_schemas:
+            resolved = resolve_output_schema_id(task.expected_output_schema)
+            spec = schemas.get(resolved)
+            if spec is None:
+                errors.append(
+                    CompilerError(
+                        code="unknown_output_schema",
+                        message=f"Unknown expected_output_schema {task.expected_output_schema!r}",
+                        task_id=task.id,
+                    )
+                )
+            elif spec.reserved:
+                errors.append(
+                    CompilerError(
+                        code="reserved_output_schema",
+                        message=f"Schema {resolved!r} is reserved for a later phase",
+                        task_id=task.id,
+                    )
+                )
         if not task.acceptance_criteria:
             errors.append(
                 CompilerError(
@@ -151,6 +213,49 @@ def compile_plan(
             notes_pending.append(
                 f"Task {task.id} uses universal write scope **/* without justification"
             )
+
+        for skill_id in task.required_skills or []:
+            if allow_skills and skill_id not in allow_skills:
+                errors.append(
+                    CompilerError(
+                        code="skill_not_allowed",
+                        message=f"Skill {skill_id!r} not in pack skill allowlist",
+                        task_id=task.id,
+                    )
+                )
+            if skill_id in deny_skills:
+                errors.append(
+                    CompilerError(
+                        code="skill_denied",
+                        message=f"Skill {skill_id!r} denied by pack skill policy",
+                        task_id=task.id,
+                    )
+                )
+            if skill_registry is not None and not _skill_known(skill_registry, skill_id):
+                errors.append(
+                    CompilerError(
+                        code="unknown_skill",
+                        message=f"Unknown required skill {skill_id!r}",
+                        task_id=task.id,
+                    )
+                )
+            elif skill_registry is not None:
+                for skill in skill_registry.skills:
+                    if skill.manifest.id == skill_id or skill.manifest.title == skill_id:
+                        caps = set(skill.manifest.capabilities or [])
+                        if caps and task.capability not in caps:
+                            errors.append(
+                                CompilerError(
+                                    code="skill_capability_mismatch",
+                                    message=(
+                                        f"Skill {skill_id!r} does not declare "
+                                        f"capability {task.capability}"
+                                    ),
+                                    task_id=task.id,
+                                )
+                            )
+                        break
+
         tasks_by_id[task.id] = task
         dep_map[task.id] = list(task.dependencies)
 
@@ -187,6 +292,17 @@ def compile_plan(
                     CompilerError(
                         code="missing_composer",
                         message=f"Composer task {fa.composer_task_id} not found",
+                        task_id=fa.composer_task_id,
+                    )
+                )
+            if workflow_pack is not None and fa.role and pack_roles and fa.role not in pack_roles:
+                errors.append(
+                    CompilerError(
+                        code="unknown_artifact_role",
+                        message=(
+                            f"Final artifact role {fa.role!r} not in pack "
+                            f"{workflow_pack.id} land map"
+                        ),
                         task_id=fa.composer_task_id,
                     )
                 )

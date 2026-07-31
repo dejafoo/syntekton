@@ -1,0 +1,29 @@
+id: g2-option-unknown-cells
+skill: discovery.option-framing
+scenario: incomplete
+decision_statement: Choose between Vendor X and Vendor Y for SSO.
+domain: identity
+options:
+  - Vendor X
+  - Vendor Y
+rubric:
+  - cost
+  - retention
+  - reversibility
+evidence_coverage:
+  Vendor X:
+    cost: known
+    retention: unknown
+    reversibility: known
+  Vendor Y:
+    cost: unknown
+    retention: unknown
+    reversibility: known
+expected_outcome: insufficient_evidence
+expected_unknown_cells:
+  - Vendor X.retention
+  - Vendor Y.cost
+  - Vendor Y.retention
+rationale: >-
+  Rubric must be declared before scoring; unknown cells stay unknown; blockers
+  from missing retention evidence prevent a go recommendation.

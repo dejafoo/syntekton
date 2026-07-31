@@ -1,0 +1,21 @@
+id: integration.contract-analysis
+version: 1.0.0
+title: Contract Analysis
+owner: product-factory
+capabilities:
+  - interface_analysis
+languages:
+  - "*"
+frameworks:
+  - openapi
+  - json-schema
+trigger:
+  description: >-
+    Use for local OpenAPI or JSON Schema inventory, addressability mapping,
+    and compatibility diff classification.
+negative_triggers:
+  - Do not call live partner endpoints or use authenticated remote APIs.
+  - Do not treat a synthetic simulation as production compatibility proof.
+content_ref: SKILL.md
+status: active
+max_prompt_chars: 12000

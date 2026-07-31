@@ -1,0 +1,22 @@
+id: regulated-domain
+version: 1.0.0
+description: >-
+  Discovery policy for regulated subject matter. Secondary commentary is not an
+  admissible basis for a claim, evidence ages out after a year, and compliance,
+  clinical, legal, and privacy conclusions require a named human expert verdict.
+allowed_source_classes:
+  - standard
+  - regulator
+  - vendor_api
+  - operator_artifact
+preferred_source_classes:
+  - regulator
+  - standard
+allowed_domains: []
+denied_domains: []
+max_source_age_days: 365
+require_expert_review_for:
+  - compliance
+  - clinical
+  - legal
+  - privacy

@@ -167,6 +167,18 @@ class BenchmarkRunner:
                 },
                 use_deterministic_planner=True,
             ),
+            "orchestration_with_skills": OrchestrationAblationRunner(
+                app_config,
+                subject_id="orchestration_with_skills",
+                metadata={"disable_skills": False},
+                use_deterministic_planner=use_deterministic_planner,
+            ),
+            "orchestration_no_skills": OrchestrationAblationRunner(
+                app_config,
+                subject_id="orchestration_no_skills",
+                metadata={"disable_skills": True},
+                use_deterministic_planner=use_deterministic_planner,
+            ),
             "frontier_reference": FrontierReferenceRunner(app_config),
         }
 

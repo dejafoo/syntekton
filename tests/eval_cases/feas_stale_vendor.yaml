@@ -1,0 +1,29 @@
+id: feas_stale_vendor
+workflow_type: feasibility_discovery
+request: |
+  Evaluate whether a vendor's OAuth device-code flow still supports our
+  offline-clinic sync scenario. The only retrieved vendor document is marked
+  stale relative to the freshness policy.
+tags: ['feasibility', 'discovery', 'staleness']
+expected_status:
+  - completed
+  - awaiting_approval
+acceptance_criteria:
+  - Staleness is recorded as evidence metadata, not ignored
+  - Recommendation does not treat the stale document as current fact alone
+must_cover:
+  - OAuth
+  - device-code
+  - stale
+  - freshness
+expected_source_classes:
+  - vendor_api
+reference_hints: |
+  A stale vendor page may still be cited with an explicit published/retrieved
+  date and confidence discount.
+isolation_targets:
+  - domain_research
+  - decision_analysis
+metadata:
+  min_cited_sources: 1
+  expected_recommendation: insufficient_evidence

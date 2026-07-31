@@ -1,0 +1,12 @@
+# Thin server-side repository registry for remote mode (R1 / PM2.B).
+#
+# Remote clients submit `repository_id` (never a laptop `repository_path`).
+# The server resolves the id to an absolute path it owns.
+#
+# Example:
+# repositories:
+#   sample_api:
+#     path: /var/lib/product-factory/repos/sample_api
+#     description: Sample FastAPI fixture used in contract tests
+
+repositories: {}

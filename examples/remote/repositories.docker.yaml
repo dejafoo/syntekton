@@ -1,0 +1,9 @@
+# Docker-sandbox repository registry (mounted over /app/config/repositories.yaml).
+# Paths are absolute *inside* the container. Do not commit secrets here.
+repositories:
+  sample_api:
+    path: /data/repos/sample_api
+    fetch_url: /data/repos/sample_api
+    refs:
+      - refs/heads/main
+    description: Seeded sample_api git fixture for the remote mock sandbox (PM3.0 / R2 prep)

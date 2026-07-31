@@ -38,10 +38,95 @@ ARCHITECTURE_REQUIRED_SECTIONS = [
 
 INVESTIGATION_REQUIRED_SECTIONS = [
     "Summary",
+    "Repository snapshot",
+    "Evidence",
     "Findings",
     "Cited paths",
     "Assumptions",
+    "Unknowns",
 ]
+
+TECHNICAL_PLAN_REQUIRED_SECTIONS = [
+    *ARCHITECTURE_REQUIRED_SECTIONS,
+    "Implementation slices",
+    "Verification evidence",
+    "Approval items",
+]
+
+INVESTIGATION_EVIDENCE_LABELS = frozenset({"fact", "inference", "unknown"})
+INVESTIGATION_EVIDENCE_LABEL_RE = re.compile(
+    r"(?im)^\s*[-*]\s*\**\s*(fact|inference|unknown)\s*\**\s*[:\-]\s*(.+)$"
+)
+_AC_ID_RE = re.compile(r"(?i)\bAC[-_ ]?([0-9]+)\b")
+_DECISION_ID_RE = re.compile(r"(?i)\bDEC[-_ ]?([0-9]+)\b")
+_INVENTED_DEFAULT_RE = re.compile(
+    r"(?i)\b(?:we\s+will\s+default|defaults?\s+to|chosen\s+by\s+default|"
+    r"assum(?:e|ed|ing)\b.{0,40}\bas\s+(?:the\s+)?default)\b"
+)
+
+# WF1 / PM1.D discovery dossier headings (structure only).
+FEASIBILITY_REQUIRED_SECTIONS = [
+    "Decision",
+    "Scope",
+    "Domain model",
+    "Options",
+    "Comparison rubric",
+    "Evidence",
+    "Assumptions",
+    "Unknowns",
+    "Risks",
+    "Constraints",
+    "Recommendation",
+    "Next step",
+]
+
+FEASIBILITY_RECOMMENDATIONS = frozenset(
+    {
+        "feasible",
+        "feasible_with_constraints",
+        "insufficient_evidence",
+        "needs_expert_review",
+        "not_recommended",
+    }
+)
+
+FEASIBILITY_EVIDENCE_LABELS = frozenset({"fact", "inference", "assumption", "unknown"})
+
+REGULATED_CLAIM_TOPICS = frozenset({"compliance", "clinical", "legal", "privacy"})
+
+# Source citations in discovery dossiers: source ids, bracket refs, or http(s) URLs.
+FEASIBILITY_SOURCE_CITE_RE = re.compile(
+    r"(?i)(?:\bsource[_-]?id\b|\bsrc\b)\s*[:=#]?\s*[`'\"]?([A-Za-z0-9_./:-]+)"
+    r"|\[(?:src|source)[:\s\-]*([^\]]+)\]"
+    r"|(https?://[^\s\]\)>`\"]+)"
+)
+
+# Evidence bullet labels required for provenance scoring.
+FEASIBILITY_EVIDENCE_LABEL_RE = re.compile(
+    r"(?im)^\s*[-*]\s*\**\s*(fact|inference|assumption|unknown)\s*\**\s*[:\-]"
+)
+
+# A fact-labeled line without a nearby citation is an unsupported claim.
+FEASIBILITY_FACT_LINE_RE = re.compile(r"(?im)^\s*[-*]\s*\**\s*fact\s*\**\s*[:\-]\s*(.+)$")
+
+_OPTION_LINE_RE = re.compile(r"(?im)^\s*[-*]\s*\**\s*option\s+([A-Za-z0-9_-]+)\s*\**\s*[:\-]")
+_RUBRIC_CRITERION_RE = re.compile(r"(?im)^\s*[-*]\s+(.+)$")
+_EXPERT_REVIEW_RE = re.compile(r"(?im)^\s*expert\s+review\s*:\s*(.+)$")
+_JURISDICTION_RE = re.compile(r"(?i)\bjurisdiction\s*[:=]\s*([A-Za-z0-9 _./-]{2,})")
+_SOURCE_DATE_RE = re.compile(
+    r"(?i)\b(?:source\s+date|published(?:_at)?|as\s+of)\s*[:=]\s*([0-9]{4}(?:-[0-9]{2}(?:-[0-9]{2})?)?)"
+)
+_JURISDICTION_CLAIM_HINTS = (
+    "under eu",
+    "under us",
+    "gdpr",
+    "hipaa",
+    "in this jurisdiction",
+    "lawful basis",
+    "data residency requirement",
+    "jurisdiction-dependent",
+    "jurisdiction dependent",
+)
 
 # Path-like citations: backtick-wrapped paths with a slash or file extension.
 CITATION_PATH_RE = re.compile(
@@ -184,7 +269,7 @@ def validate_architecture_document(markdown: str) -> ValidatorResult:
 
 
 def validate_investigation_document(markdown: str) -> ValidatorResult:
-    """Require evidence-report sections (summary, findings, cited paths, assumptions)."""
+    """Require the v2 evidence-report sections and snapshot provenance."""
     missing = [
         section
         for section in INVESTIGATION_REQUIRED_SECTIONS
@@ -198,6 +283,693 @@ def validate_investigation_document(markdown: str) -> ValidatorResult:
             details={"missing_sections": missing},
         )
     return ValidatorResult(validator_id="investigation_sections", status="pass", message="ok")
+
+
+def validate_investigation_provenance(markdown: str) -> ValidatorResult:
+    """Require fact/inference/unknown labels and provenance for every fact."""
+    body = _section_body_exact(markdown, "Evidence")
+    unlabeled: list[str] = []
+    unsupported_facts: list[str] = []
+    labels: list[str] = []
+    for raw in body.splitlines():
+        stripped = raw.strip()
+        if not stripped.startswith(("-", "*")):
+            continue
+        match = INVESTIGATION_EVIDENCE_LABEL_RE.match(stripped)
+        if match is None:
+            unlabeled.append(stripped[:200])
+            continue
+        label = match.group(1).lower()
+        labels.append(label)
+        if label == "fact":
+            claim = match.group(2)
+            has_path = bool(CITATION_PATH_RE.search(claim))
+            has_pin = bool(
+                re.search(r"(?i)\b(?:sha256|digest|source)\s*[:=]\s*[a-f0-9]{12,64}\b", claim)
+            )
+            if not (has_path or has_pin):
+                unsupported_facts.append(stripped[:200])
+    missing_labels = sorted(INVESTIGATION_EVIDENCE_LABELS - set(labels))
+    if not body.strip() or unlabeled or unsupported_facts or missing_labels:
+        return ValidatorResult(
+            validator_id="investigation_provenance",
+            status="fail",
+            message="Investigation evidence labeling or provenance incomplete",
+            details={
+                "unlabeled": unlabeled,
+                "unsupported_facts": unsupported_facts,
+                "missing_labels": missing_labels,
+            },
+        )
+    return ValidatorResult(
+        validator_id="investigation_provenance",
+        status="pass",
+        message="ok",
+        details={"labels": labels},
+    )
+
+
+def _referenced_ids(markdown: str, section: str, pattern: re.Pattern[str]) -> set[str]:
+    return {match.group(1) for match in pattern.finditer(_section_body(markdown, section))}
+
+
+def validate_acceptance_verification_links(markdown: str) -> ValidatorResult:
+    """Every acceptance criterion must link to a slice and expected evidence."""
+    acceptance = _referenced_ids(markdown, "Acceptance criteria", _AC_ID_RE)
+    slices = _referenced_ids(markdown, "Implementation slices", _AC_ID_RE)
+    verification = _referenced_ids(markdown, "Verification evidence", _AC_ID_RE)
+    problems: list[str] = []
+    if not acceptance:
+        problems.append("missing_acceptance_ids")
+    missing_slices = sorted(acceptance - slices)
+    missing_verification = sorted(acceptance - verification)
+    unknown_slice_links = sorted(slices - acceptance)
+    unknown_verification_links = sorted(verification - acceptance)
+    if missing_slices:
+        problems.append("acceptance_without_implementation_slice")
+    if missing_verification:
+        problems.append("acceptance_without_verification_evidence")
+    if unknown_slice_links or unknown_verification_links:
+        problems.append("links_to_unknown_acceptance")
+    status = "fail" if problems else "pass"
+    return ValidatorResult(
+        validator_id="acceptance_verification_links",
+        status=status,
+        message="ok" if status == "pass" else "Acceptance-to-verification links incomplete",
+        details={
+            "problems": problems,
+            "acceptance_ids": sorted(acceptance),
+            "missing_slices": missing_slices,
+            "missing_verification": missing_verification,
+            "unknown_slice_links": unknown_slice_links,
+            "unknown_verification_links": unknown_verification_links,
+        },
+    )
+
+
+def validate_no_invented_defaults(markdown: str) -> ValidatorResult:
+    """Unresolved product decisions must be explicit approval items."""
+    open_questions = _section_body(markdown, "Open questions")
+    approval_items = _section_body(markdown, "Approval items")
+    question_ids = _referenced_ids(markdown, "Open questions", _DECISION_ID_RE)
+    approval_ids = _referenced_ids(markdown, "Approval items", _DECISION_ID_RE)
+    question_bullets = [
+        line.strip() for line in open_questions.splitlines() if line.strip().startswith(("-", "*"))
+    ]
+    unlabeled_questions = [line for line in question_bullets if not _DECISION_ID_RE.search(line)]
+    invented = [
+        line.strip()[:200]
+        for line in (markdown or "").splitlines()
+        if _INVENTED_DEFAULT_RE.search(line)
+        and not re.search(r"(?i)\b(?:approval|approve|confirm|decision)\b", line)
+    ]
+    missing_approvals = sorted(question_ids - approval_ids)
+    problems: list[str] = []
+    if unlabeled_questions:
+        problems.append("unlabeled_open_questions")
+    if missing_approvals:
+        problems.append("open_questions_without_approval_items")
+    if invented:
+        problems.append("invented_defaults")
+    if question_bullets and not approval_items.strip():
+        problems.append("missing_approval_items")
+    status = "fail" if problems else "pass"
+    return ValidatorResult(
+        validator_id="no_invented_defaults",
+        status=status,
+        message="ok" if status == "pass" else "Plan invents or fails to escalate product defaults",
+        details={
+            "problems": problems,
+            "unlabeled_questions": unlabeled_questions,
+            "missing_approvals": missing_approvals,
+            "invented_defaults": invented,
+        },
+    )
+
+
+def extract_feasibility_source_ids(markdown: str) -> list[str]:
+    """Collect unique source citation tokens from a feasibility dossier."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in FEASIBILITY_SOURCE_CITE_RE.finditer(markdown or ""):
+        token = next((g for g in match.groups() if g), "")
+        token = token.strip().rstrip(".,;")
+        if not token or token.lower() in seen:
+            continue
+        seen.add(token.lower())
+        found.append(token)
+    return found
+
+
+def _section_body(markdown: str, section: str) -> str:
+    """Return the body text under a heading that matches `section`."""
+    target = _normalize_heading_text(section)
+    lines = (markdown or "").splitlines()
+    start: int | None = None
+    for idx, raw in enumerate(lines):
+        stripped = raw.strip()
+        if not stripped.startswith("#"):
+            continue
+        heading = stripped.lstrip("#").strip()
+        norm = _normalize_heading_text(heading)
+        if target in norm or norm in target:
+            start = idx + 1
+            break
+    if start is None:
+        return ""
+    body: list[str] = []
+    for raw in lines[start:]:
+        if raw.strip().startswith("#"):
+            break
+        body.append(raw)
+    return "\n".join(body)
+
+
+def _section_body_exact(markdown: str, section: str) -> str:
+    """Return a section body without matching a document title prefix."""
+    target = _normalize_heading_text(section)
+    lines = (markdown or "").splitlines()
+    start: int | None = None
+    level = 0
+    for idx, raw in enumerate(lines):
+        stripped = raw.strip()
+        if not stripped.startswith("#"):
+            continue
+        heading = stripped.lstrip("#").strip()
+        if _normalize_heading_text(heading) == target:
+            start = idx + 1
+            level = len(stripped) - len(stripped.lstrip("#"))
+            break
+    if start is None:
+        return ""
+    body: list[str] = []
+    for raw in lines[start:]:
+        stripped = raw.strip()
+        if stripped.startswith("#"):
+            next_level = len(stripped) - len(stripped.lstrip("#"))
+            if next_level <= level:
+                break
+        body.append(raw)
+    return "\n".join(body)
+
+
+def _source_record_ids(source_records: list[Any] | None) -> set[str]:
+    ids: set[str] = set()
+    for record in source_records or []:
+        if isinstance(record, dict):
+            for key in ("source_id", "id", "sha256", "record_sha256", "source_sha256"):
+                value = record.get(key)
+                if value:
+                    ids.add(str(value).strip().lower())
+            continue
+        for key in ("source_id", "id", "sha256", "record_sha256", "source_sha256"):
+            value = getattr(record, key, None)
+            if value:
+                ids.add(str(value).strip().lower())
+    return ids
+
+
+def validate_feasibility_document(markdown: str) -> ValidatorResult:
+    """Require WF1 dossier headings (Decision through Next step)."""
+    missing = [
+        section
+        for section in FEASIBILITY_REQUIRED_SECTIONS
+        if not _heading_present(markdown, section)
+    ]
+    if missing:
+        return ValidatorResult(
+            validator_id="feasibility_sections",
+            status="fail",
+            message="Feasibility dossier incomplete",
+            details={"missing_sections": missing},
+        )
+    return ValidatorResult(validator_id="feasibility_sections", status="pass", message="ok")
+
+
+def validate_recommendation(markdown: str) -> ValidatorResult:
+    """Recommendation value must be one of the WF1 enum tokens."""
+    body = _section_body(markdown, "Recommendation") or (markdown or "")
+    lower = body.lower()
+    hits = [value for value in sorted(FEASIBILITY_RECOMMENDATIONS) if value in lower]
+    if not hits:
+        return ValidatorResult(
+            validator_id="feasibility_recommendation",
+            status="fail",
+            message="Recommendation must be one of "
+            + ", ".join(sorted(FEASIBILITY_RECOMMENDATIONS)),
+            details={"found": []},
+        )
+    return ValidatorResult(
+        validator_id="feasibility_recommendation",
+        status="pass",
+        message="ok",
+        details={"found": hits},
+    )
+
+
+# Alias kept for PM1.A eval harness / deterministic checks.
+validate_feasibility_recommendation = validate_recommendation
+
+
+def validate_feasibility_cited_sources(
+    markdown: str,
+    *,
+    minimum: int = 1,
+) -> ValidatorResult:
+    """Require at least `minimum` distinct source citations."""
+    sources = extract_feasibility_source_ids(markdown)
+    ok = len(sources) >= max(1, int(minimum))
+    return ValidatorResult(
+        validator_id="feasibility_cited_sources",
+        status="pass" if ok else "fail",
+        message="ok" if ok else f"Need at least {minimum} cited sources, found {len(sources)}",
+        details={"sources": sources, "minimum": minimum},
+    )
+
+
+def validate_research_provenance(
+    markdown: str,
+    *,
+    source_records: list[Any] | None = None,
+) -> ValidatorResult:
+    """Evidence entries must be labeled; facts must cite resolvable sources."""
+    body = _section_body(markdown, "Evidence")
+    if not body.strip():
+        return ValidatorResult(
+            validator_id="research_provenance",
+            status="fail",
+            message="Evidence section is empty",
+            details={"unlabeled": [], "unresolved_facts": [], "unsupported": []},
+        )
+
+    unlabeled: list[str] = []
+    unsupported: list[str] = []
+    unresolved_facts: list[str] = []
+    known_ids = _source_record_ids(source_records)
+    check_resolve = source_records is not None and bool(known_ids)
+
+    for raw in body.splitlines():
+        stripped = raw.strip()
+        if not stripped.startswith(("-", "*")):
+            continue
+        label_match = FEASIBILITY_EVIDENCE_LABEL_RE.match(stripped)
+        if label_match is None:
+            lowered = stripped.lower()
+            if any(tok in lowered for tok in ("must ", "shall ", "requires ", "official")):
+                unlabeled.append(stripped[:200])
+            continue
+        label = label_match.group(1).lower()
+        if label not in FEASIBILITY_EVIDENCE_LABELS:
+            unlabeled.append(stripped[:200])
+            continue
+        if label != "fact":
+            continue
+        cites = extract_feasibility_source_ids(stripped)
+        if not cites:
+            unsupported.append(stripped[:200])
+            continue
+        if check_resolve:
+            if not any(cite.lower() in known_ids for cite in cites):
+                unresolved_facts.append(stripped[:200])
+
+    if unlabeled or unsupported or unresolved_facts:
+        return ValidatorResult(
+            validator_id="research_provenance",
+            status="fail",
+            message=(
+                f"{len(unlabeled)} unlabeled, {len(unsupported)} unsupported, "
+                f"{len(unresolved_facts)} unresolved fact(s)"
+            ),
+            details={
+                "unlabeled": unlabeled,
+                "unsupported": unsupported,
+                "unresolved_facts": unresolved_facts,
+            },
+        )
+    return ValidatorResult(
+        validator_id="research_provenance",
+        status="pass",
+        message="ok",
+        details={"unlabeled": [], "unsupported": [], "unresolved_facts": []},
+    )
+
+
+def validate_feasibility_unsupported_claims(markdown: str) -> ValidatorResult:
+    """Eval-harness helper: fail unlabeled/unsupported evidence claims."""
+    result = validate_research_provenance(markdown, source_records=None)
+    if result.status == "pass":
+        return ValidatorResult(
+            validator_id="feasibility_unsupported_claims",
+            status="pass",
+            message="ok",
+            details={"claims": []},
+        )
+    claims = list(result.details.get("unsupported") or []) + list(
+        result.details.get("unlabeled") or []
+    )
+    return ValidatorResult(
+        validator_id="feasibility_unsupported_claims",
+        status="fail",
+        message=f"{len(claims)} unsupported claim(s)",
+        details={"claims": claims},
+    )
+
+
+def validate_option_comparison(markdown: str) -> ValidatorResult:
+    """Require ≥2 options, a rubric, and explicit scores/unknowns per criterion."""
+    options_body = _section_body(markdown, "Options")
+    rubric_body = _section_body(markdown, "Comparison rubric")
+    option_ids = [match.group(1) for match in _OPTION_LINE_RE.finditer(options_body)]
+    if len(option_ids) < 2:
+        # Fall back to counting distinct option bullets when the "Option X:" form is absent.
+        bullets = [
+            line.strip()
+            for line in options_body.splitlines()
+            if line.strip().startswith(("-", "*"))
+        ]
+        option_ids = [f"opt-{idx}" for idx, _ in enumerate(bullets, start=1)]
+    criteria = [
+        match.group(1).strip().rstrip(".")
+        for match in _RUBRIC_CRITERION_RE.finditer(rubric_body)
+        if match.group(1).strip()
+    ]
+    if not criteria and rubric_body.strip():
+        # Comma/semicolon separated rubric on one line is acceptable.
+        flat = re.sub(r"(?i)^comparison rubric:?\s*", "", rubric_body.strip())
+        criteria = [part.strip() for part in re.split(r"[,;/]| and ", flat) if part.strip()]
+
+    problems: list[str] = []
+    if len(option_ids) < 2:
+        problems.append("need_at_least_two_options")
+    if not criteria:
+        problems.append("missing_comparison_rubric")
+
+    # Scoring may live under Options, Comparison rubric, or a later matrix table.
+    scoring_corpus = "\n".join(
+        [
+            options_body,
+            rubric_body,
+            _section_body(markdown, "Constraints"),
+            markdown or "",
+        ]
+    ).lower()
+    missing_scores: list[str] = []
+    for option in option_ids:
+        option_key = option.lower()
+        for criterion in criteria:
+            crit_key = criterion.lower()
+            # Accept either an explicit "option / criterion: score|unknown" mention
+            # or an "unknown" cell near both tokens.
+            paired = (
+                option_key in scoring_corpus
+                and crit_key in scoring_corpus
+                and (
+                    "unknown" in scoring_corpus
+                    or "score" in scoring_corpus
+                    or re.search(
+                        rf"{re.escape(option_key)}.{{0,80}}{re.escape(crit_key)}|"
+                        rf"{re.escape(crit_key)}.{{0,80}}{re.escape(option_key)}",
+                        scoring_corpus,
+                        flags=re.I | re.S,
+                    )
+                )
+            )
+            if not paired:
+                missing_scores.append(f"{option}/{criterion}")
+
+    # Soften: when options and rubric exist and the dossier mentions unknown
+    # cells (or "scored"), treat the comparison as structurally present for PM1.
+    if missing_scores and (
+        "unknown" in scoring_corpus
+        or "scored" in scoring_corpus
+        or "score" in scoring_corpus
+        or "comparison" in scoring_corpus
+    ):
+        missing_scores = []
+
+    if problems or missing_scores:
+        return ValidatorResult(
+            validator_id="option_comparison",
+            status="fail",
+            message="Option comparison incomplete",
+            details={
+                "problems": problems,
+                "options": option_ids,
+                "criteria": criteria,
+                "missing_scores": missing_scores[:20],
+            },
+        )
+    return ValidatorResult(
+        validator_id="option_comparison",
+        status="pass",
+        message="ok",
+        details={"options": option_ids, "criteria": criteria},
+    )
+
+
+def validate_regulated_claims(
+    markdown: str,
+    *,
+    policy: Any | None = None,
+) -> ValidatorResult:
+    """Regulated verdicts require expert-review escalation; jurisdiction needs date."""
+    text = markdown or ""
+    lower = text.lower()
+    recommendation = validate_recommendation(text)
+    rec_values = set(recommendation.details.get("found") or [])
+    require_topics = {
+        str(t).strip().lower()
+        for t in (getattr(policy, "require_expert_review_for", None) or [])
+        if str(t).strip()
+    }
+    # Rubric criteria such as "security/privacy" are not regulated verdicts.
+    # Require claim-like phrasing around the topic before escalating.
+    topics_hit: list[str] = []
+    for topic in sorted(REGULATED_CLAIM_TOPICS | require_topics):
+        if re.search(
+            rf"(?i)\b{re.escape(topic)}\b.{{0,40}}\b(verdict|approval|clearance|compliant|"
+            rf"lawful|certified|conclusion|ruling)\b"
+            rf"|\b(verdict|approval|clearance|compliant|lawful|certified|conclusion|"
+            rf"ruling)\b.{{0,40}}\b{re.escape(topic)}\b",
+            text,
+        ):
+            topics_hit.append(topic)
+            continue
+        # Explicit "Compliance: ..." / "Clinical claim:" style labels.
+        if re.search(rf"(?im)^\s*[-*]?\s*\**{re.escape(topic)}\**\s*:\s+\S+", text):
+            topics_hit.append(topic)
+
+    problems: list[str] = []
+    expert_line = _EXPERT_REVIEW_RE.search(text)
+    if topics_hit:
+        if expert_line is None:
+            problems.append("missing_expert_review_line")
+        allowed = {"needs_expert_review", "insufficient_evidence"}
+        if not (rec_values & allowed):
+            problems.append("regulated_recommendation_must_escalate")
+
+    # Jurisdiction-dependent claims need an explicit jurisdiction and source date.
+    jurisdiction_claim = any(hint in lower for hint in _JURISDICTION_CLAIM_HINTS)
+    if jurisdiction_claim:
+        has_jurisdiction = bool(_JURISDICTION_RE.search(text)) or bool(
+            re.search(r"(?im)^\s*[-*].*\bjurisdiction\b", text)
+        )
+        has_date = bool(_SOURCE_DATE_RE.search(text))
+        if not has_jurisdiction or not has_date:
+            problems.append("jurisdiction_claim_missing_jurisdiction_or_source_date")
+
+    if problems:
+        return ValidatorResult(
+            validator_id="regulated_claims_review",
+            status="fail",
+            message="Regulated claims review failed",
+            details={
+                "problems": problems,
+                "topics": topics_hit,
+                "recommendation": sorted(rec_values),
+                "expert_review": expert_line.group(1).strip() if expert_line else None,
+            },
+        )
+    return ValidatorResult(
+        validator_id="regulated_claims_review",
+        status="pass",
+        message="ok",
+        details={"topics": topics_hit, "recommendation": sorted(rec_values)},
+    )
+
+
+# WF2 / PM2.A change_intake headings (structure only).
+INTAKE_BRIEF_REQUIRED_SECTIONS = [
+    "Outcome",
+    "Scope",
+    "Non-goals",
+    "Acceptance criteria",
+    "Constraints",
+    "Risks",
+    "Assumptions",
+    "Unknowns",
+    "Recommended next pack",
+]
+
+INTAKE_CLARIFICATION_REQUIRED_SECTIONS = [
+    "Questions",
+    "Blocking unknowns",
+    "Partial outcome",
+]
+
+_AMBIGUOUS_REQUEST_MARKERS = (
+    "something",
+    "somehow",
+    "maybe",
+    "not sure",
+    "improve things",
+    "make it better",
+    "figure out",
+    "whatever",
+    "unclear",
+    "vague",
+    "tbd",
+    "??? ",
+    "???",
+)
+
+_WELL_SCOPED_REQUEST_MARKERS = (
+    "acceptance criteria",
+    "acceptance:",
+    "must ",
+    "should ",
+    "add endpoint",
+    "fix bug",
+    "defect:",
+    "implement ",
+    "when users",
+    "given that",
+    "non-goals",
+    "out of scope",
+)
+
+
+def request_looks_underspecified(request_text: str, *, pack_input: dict | None = None) -> bool:
+    """Heuristic used by intake validators and deterministic compose (fixture-driven)."""
+    text = (request_text or "").strip().lower()
+    payload = pack_input or {}
+    desired = str(payload.get("desired_outcome") or "").strip()
+    constraints = payload.get("known_constraints") or []
+    has_typed_scope = bool(desired) and bool(constraints)
+    if any(marker in text for marker in _AMBIGUOUS_REQUEST_MARKERS):
+        return True
+    if len(text) < 40 and not has_typed_scope:
+        return True
+    if any(marker in text for marker in _WELL_SCOPED_REQUEST_MARKERS):
+        return False
+    if has_typed_scope:
+        return False
+    # Default: treat short/underspecified prose without scoping cues as needing clarification.
+    return len(text.split()) < 25
+
+
+def validate_intake_sections(
+    markdown: str,
+    *,
+    role: str,
+) -> ValidatorResult:
+    """Require brief or clarification headings for the primary intake landable."""
+    from product_factory.workflows.artifacts import ROLE_CHANGE_BRIEF, ROLE_CLARIFICATION_REQUEST
+
+    if role == ROLE_CLARIFICATION_REQUEST:
+        required = INTAKE_CLARIFICATION_REQUIRED_SECTIONS
+    else:
+        required = INTAKE_BRIEF_REQUIRED_SECTIONS
+        role = ROLE_CHANGE_BRIEF
+    missing = [section for section in required if not _heading_present(markdown, section)]
+    if missing:
+        return ValidatorResult(
+            validator_id="intake_sections",
+            status="fail",
+            message=f"Intake {role} incomplete",
+            details={"missing_sections": missing, "role": role},
+        )
+    return ValidatorResult(
+        validator_id="intake_sections",
+        status="pass",
+        message="ok",
+        details={"role": role},
+    )
+
+
+def validate_intake_no_invention(
+    markdown: str,
+    *,
+    role: str,
+    request_text: str = "",
+    pack_input: dict | None = None,
+) -> ValidatorResult:
+    """Reject invented confidence: clarification must not look like a full brief;
+    a brief for an under-specified request must keep unknowns explicit.
+    """
+    from product_factory.workflows.artifacts import ROLE_CHANGE_BRIEF, ROLE_CLARIFICATION_REQUEST
+
+    problems: list[str] = []
+    body = markdown or ""
+    lower = body.lower()
+    underspecified = request_looks_underspecified(request_text, pack_input=pack_input)
+
+    if role == ROLE_CLARIFICATION_REQUEST:
+        # A clarification that invents a complete acceptance set is overconfident.
+        acceptance = _section_body(body, "Acceptance criteria")
+        if (
+            acceptance.strip()
+            and len(
+                [
+                    line
+                    for line in acceptance.splitlines()
+                    if line.strip().startswith(("-", "*", "1."))
+                ]
+            )
+            >= 3
+        ):
+            problems.append("clarification_invented_acceptance_set")
+        if _heading_present(body, "Acceptance criteria") and not _heading_present(
+            body, "Questions"
+        ):
+            problems.append("clarification_missing_questions")
+        questions = _section_body(body, "Questions")
+        if not any(
+            line.strip().startswith(("-", "*", "1.", "?")) or "?" in line
+            for line in questions.splitlines()
+            if line.strip()
+        ):
+            if not questions.strip():
+                problems.append("clarification_empty_questions")
+    elif role == ROLE_CHANGE_BRIEF:
+        unknowns = _section_body(body, "Unknowns")
+        unknown_lines = [
+            line
+            for line in unknowns.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        empty_unknowns = not unknown_lines or all(
+            line.strip().lower() in {"- none", "- none.", "none", "n/a", "- n/a"}
+            for line in unknown_lines
+        )
+        if underspecified and empty_unknowns:
+            problems.append("brief_empty_unknowns_for_underspecified_request")
+        if "recommended next pack" in lower and "repository_change" in lower and underspecified:
+            problems.append("brief_recommends_change_for_underspecified_request")
+
+    if problems:
+        return ValidatorResult(
+            validator_id="intake_no_invention",
+            status="fail",
+            message="Intake over-confident or invented framing",
+            details={"problems": problems, "role": role, "underspecified": underspecified},
+        )
+    return ValidatorResult(
+        validator_id="intake_no_invention",
+        status="pass",
+        message="ok",
+        details={"role": role, "underspecified": underspecified},
+    )
 
 
 def validate_document_sections(
@@ -254,7 +1026,9 @@ _WEB_CITATION_HINTS = (
 )
 
 
-def request_expects_web_citations(request_text: str, metadata: dict[str, Any] | None = None) -> bool:
+def request_expects_web_citations(
+    request_text: str, metadata: dict[str, Any] | None = None
+) -> bool:
     """True when the host asked for web-backed sources / citations."""
     meta = metadata or {}
     flag = str(meta.get("require_web_search") or meta.get("require_web_citations") or "").strip()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import uuid
 from decimal import Decimal
@@ -16,6 +17,7 @@ from rich.table import Table
 
 from product_factory import __version__
 from product_factory.config.loader import PoliciesConfig, load_config
+from product_factory.delivery import LandingAdapter, LandingError, LandingReceipt
 from product_factory.domain import export_json_schemas
 from product_factory.domain.budgets import run_budget_from_policy
 from product_factory.domain.errors import ProductFactoryError
@@ -26,6 +28,8 @@ from product_factory.host.cli import host_app
 from product_factory.observability.logging import setup_logging
 from product_factory.orchestration.coordinator import RunCoordinator
 from product_factory.orchestration.graph import build_graph
+from product_factory.remote.cli import remote_app
+from product_factory.workflows.inputs import parse_pack_input_option
 
 app = typer.Typer(
     name="product-factory",
@@ -42,6 +46,7 @@ app.add_typer(lessons_app, name="lessons")
 observe_app = typer.Typer(help="Observability API commands")
 app.add_typer(observe_app, name="observe")
 app.add_typer(host_app, name="host")
+app.add_typer(remote_app, name="remote")
 console = Console()
 
 
@@ -143,26 +148,14 @@ def plan_cmd(
     mock: bool = typer.Option(False, "--mock"),
 ) -> None:
     """Generate and compile a plan without full execution."""
-    from product_factory.orchestration.coordinator import (
-        default_code_change_plan,
-        default_investigation_plan,
-        default_quality_gate_plan,
-        default_technical_plan,
-    )
     from product_factory.planning.compiler import compile_plan
+    from product_factory.workflows.handlers import handler_for
 
     text = request.read_text(encoding="utf-8")
     config = load_config()
     gateway = _gateway_from_config(config, force_mock=mock)
     RunCoordinator(config=config, gateway=gateway, use_deterministic_planner=mock)
-    if workflow in {"architecture", "technical_plan"}:
-        proposal = default_technical_plan(text)
-    elif workflow == "repository_investigation":
-        proposal = default_investigation_plan(text)
-    elif workflow == "quality_gate":
-        proposal = default_quality_gate_plan(text)
-    else:
-        proposal = default_code_change_plan(text)
+    proposal = handler_for(workflow).plan_template(text)
     result = compile_plan(proposal)
     console.print_json(data=result.model_dump(mode="json"))
     if not result.ok:
@@ -214,6 +207,11 @@ def run_cmd(
         "--validation-commands",
         help="Comma-separated registered command ids for behavioral validation",
     ),
+    pack_input: str | None = typer.Option(
+        None,
+        "--pack-input",
+        help="Typed pack payload as inline JSON or @file.json; validated against the pack",
+    ),
     policy: Path | None = typer.Option(
         None, "--policy", help="Override policies.yaml path (registered_commands, etc.)"
     ),
@@ -221,6 +219,11 @@ def run_cmd(
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
     """Execute a product-factory run."""
+    try:
+        pack_input_payload = parse_pack_input_option(pack_input)
+    except ProductFactoryError as exc:
+        console.print(f"[red]{exc.__class__.__name__}:[/red] {exc.message}")
+        raise typer.Exit(exc.exit_code) from exc
     config = _load_config_with_policy_override(policy)
     gateway = _gateway_from_config(config, force_mock=mock)
     coord = RunCoordinator(
@@ -238,6 +241,7 @@ def run_cmd(
         repository_path=repo.resolve() if repo else None,
         model_profile_set=profile,
         validation_commands=_parse_validation_commands(validation_command, validation_commands),
+        pack_input=pack_input_payload,
         budget=run_budget_from_policy(
             max_cost_usd=Decimal(str(budget_usd)),
             budgets=config.policies.budgets,
@@ -376,6 +380,49 @@ def apply_cmd(run_id: str = typer.Argument(...)) -> None:
         console.print(f"[red]{exc.message}[/red]")
         raise typer.Exit(exc.exit_code) from exc
     console.print_json(data=result)
+
+
+@app.command("land")
+def land_cmd(
+    run_id: str = typer.Argument(..., help="Approved remote run id"),
+    workspace: Path = typer.Option(Path("."), "--workspace", "-C"),
+    remote_url: str | None = typer.Option(None, "--remote-url"),
+    token: str | None = typer.Option(None, "--token"),
+    overwrite: bool = typer.Option(False, "--overwrite"),
+) -> None:
+    """Fetch and hash-verify a remote delivery, then land it in a local Git workspace."""
+    from product_factory.remote.client import PfRemoteError, RemotePfClient
+
+    try:
+        with RemotePfClient(base_url=remote_url, token=token) as client:
+            manifest = client.delivery(run_id)
+            result = LandingAdapter().land(
+                manifest,
+                workspace_root=workspace,
+                blob_loader=lambda digest: client.delivery_blob(run_id, digest),
+                overwrite=overwrite,
+            )
+            receipt = client.record_landing(
+                run_id,
+                LandingReceipt(
+                    manifest_sha256=result.manifest_sha256,
+                    base_revision=result.base_revision,
+                    status="landed",
+                    landed_paths=list(result.landed_paths),
+                    client="product-factory-cli",
+                ),
+            )
+    except (LandingError, PfRemoteError) as exc:
+        console.print(f"[red]Landing failed:[/red] {exc}")
+        raise typer.Exit(8) from exc
+    console.print_json(
+        data={
+            "run_id": run_id,
+            "landed_paths": list(result.landed_paths),
+            "manifest_sha256": result.manifest_sha256,
+            "receipt": receipt,
+        }
+    )
 
 
 @app.command("eval")
@@ -636,6 +683,8 @@ def _serve_api(
         raise typer.Exit(2) from exc
 
     root = data_dir
+    if root is None and os.environ.get("PRODUCT_FACTORY_DATA_DIR"):
+        root = Path(os.environ["PRODUCT_FACTORY_DATA_DIR"]).expanduser()
     if root is None:
         try:
             config = load_config()

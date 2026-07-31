@@ -12,16 +12,21 @@ core. The plugin only:
 3. **after an explicit operator confirmation**, lands results into the workspace
    (patch apply or artifact materialize).
 
-## Transport: host CLI JSON (preferred)
+## Transport: CLI or remote HTTP
 
-The plugin talks to Product Factory by shelling out to
-`product-factory host … ` and parsing the emitted JSON envelope
-(`product-factory.host/v1`). This avoids running a second MCP client inside
-OpenCode. MCP remains available for hosts that prefer raw `mcp` config (see
+By default the plugin shells out to `product-factory host …` and parses the
+emitted JSON envelope (`product-factory.host/v1`). Set
+`PRODUCT_FACTORY_REMOTE_URL` to use `RemotePfClient` against a private host's
+`/api/v1/...` control/observe API (bearer from `PRODUCT_FACTORY_OBSERVE_TOKEN`
+or `PRODUCT_FACTORY_HOST_TOKEN`). When the remote URL is set, the plugin
+**never** falls back to the laptop CLI if the host is unreachable.
+
+MCP remains available for hosts that prefer raw `mcp` config (see
 [`examples/opencode/`](../../examples/opencode/)).
 
-The protocol version is checked on the first call; a mismatch fails fast with a
-clear "upgrade the CLI or the plugin" error.
+The protocol version is checked on the first successful host envelope; a
+mismatch fails fast with a clear "upgrade the CLI or the plugin" error.
+Remote `pf_merge` / materialize are unsupported until delivery landing (R3).
 
 ## Tools
 
@@ -110,6 +115,8 @@ OpenCode auto-loads TypeScript files from `.opencode/plugins/` (and
 
 ### Environment
 
+- `PRODUCT_FACTORY_REMOTE_URL` — private host base URL; selects remote HTTP transport (fail-closed).
+- `PRODUCT_FACTORY_OBSERVE_TOKEN` / `PRODUCT_FACTORY_HOST_TOKEN` — bearer for remote observe/control.
 - `PRODUCT_FACTORY_BIN` — override the CLI executable (defaults to `product-factory` on PATH).
 - `PRODUCT_FACTORY_FORCE_MOCK=1` — pass `--mock` on submit (deterministic planner, no live models).
 - `PRODUCT_FACTORY_ROOT` — PF config checkout when the OpenCode project cwd is not the

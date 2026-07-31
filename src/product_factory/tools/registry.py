@@ -140,6 +140,137 @@ def default_tool_registry() -> ToolRegistry:
             risk_class="R1",
         ),
         ToolDefinition(
+            name="extract_document",
+            description="Extract bounded text from a persisted source capture",
+            tool_class="evidence_build",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "source_sha256": {"type": "string"},
+                    "max_chars": {"type": "integer", "minimum": 1},
+                    "section": {"type": "string"},
+                },
+                "required": ["source_sha256", "max_chars"],
+                "additionalProperties": False,
+            },
+            risk_class="R1",
+        ),
+        ToolDefinition(
+            name="normalize_citation",
+            description="Create a deterministic policy-checked source record",
+            tool_class="evidence_build",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "source_sha256": {"type": "string"},
+                    "source_class": {"type": "string"},
+                    "published_at": {"type": "string"},
+                },
+                "required": ["source_sha256", "source_class"],
+                "additionalProperties": False,
+            },
+            risk_class="R1",
+        ),
+        ToolDefinition(
+            name="compare_options",
+            description="Write an explicit-unknown option matrix artifact",
+            tool_class="evidence_build",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "options": {"type": "array"},
+                    "criteria": {"type": "array"},
+                    "evidence_refs": {"type": "array"},
+                },
+                "required": ["options", "criteria", "evidence_refs"],
+                "additionalProperties": False,
+            },
+            risk_class="R1",
+        ),
+        ToolDefinition(
+            name="parse_contract",
+            description="Parse a local OpenAPI or JSON Schema contract",
+            tool_class="interface_analysis",
+            input_schema={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            risk_class="R1",
+        ),
+        ToolDefinition(
+            name="contract_inventory",
+            description="Inventory addressable operations and schemas in a local contract",
+            tool_class="interface_analysis",
+            input_schema={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            risk_class="R1",
+        ),
+        ToolDefinition(
+            name="diff_contracts",
+            description="Classify local contract changes as breaking or non-breaking",
+            tool_class="interface_analysis",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "baseline_path": {"type": "string"},
+                    "candidate_path": {"type": "string"},
+                },
+                "required": ["baseline_path", "candidate_path"],
+                "additionalProperties": False,
+            },
+            risk_class="R1",
+        ),
+        ToolDefinition(
+            name="map_capabilities",
+            description="Map local contract addresses into tagged capabilities",
+            tool_class="interface_analysis",
+            input_schema={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            risk_class="R1",
+        ),
+        ToolDefinition(
+            name="generate_synthetic_fixture",
+            description="Generate a synthetic JSON fixture inside the confined spike worktree",
+            tool_class="synthetic_write",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "contract_path": {"type": "string"},
+                    "output_path": {"type": "string"},
+                    "schema_name": {"type": "string"},
+                },
+                "required": ["contract_path", "output_path"],
+                "additionalProperties": False,
+            },
+            risk_class="R2",
+        ),
+        ToolDefinition(
+            name="run_contract_simulation",
+            description="Validate a synthetic fixture locally without network access",
+            tool_class="interface_analysis",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "contract_path": {"type": "string"},
+                    "fixture_path": {"type": "string"},
+                    "schema_name": {"type": "string"},
+                },
+                "required": ["contract_path", "fixture_path"],
+                "additionalProperties": False,
+            },
+            risk_class="R1",
+        ),
+        ToolDefinition(
             name="run_validation_command",
             description=(
                 "Run a registered validation command by policy id "

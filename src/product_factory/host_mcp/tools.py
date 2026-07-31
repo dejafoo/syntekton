@@ -33,6 +33,8 @@ _WORKFLOW_VALUES = {
     "repository_change",
     "repository_investigation",
     "quality_gate",
+    "feasibility_discovery",
+    "change_intake",
 }
 
 
@@ -64,9 +66,9 @@ def tool_schemas() -> list[dict[str, Any]]:
                     "workflow": {
                         "type": "string",
                         "description": (
-                            "Workflow pack id: repository_investigation, "
-                            "technical_plan, quality_gate, repository_change, "
-                            "code_change, architecture"
+                            "Workflow pack id: change_intake, feasibility_discovery, "
+                            "repository_investigation, technical_plan, "
+                            "quality_gate, repository_change, code_change, architecture"
                         ),
                         "default": "code_change",
                     },
@@ -100,6 +102,24 @@ def tool_schemas() -> list[dict[str, Any]]:
                             },
                             "additionalProperties": False,
                         },
+                    },
+                    "pack_input": {
+                        "type": "object",
+                        "description": (
+                            "Typed payload for the pack's input_schema, e.g. "
+                            '{"decision_statement": "...", "domain": "..."}. '
+                            "Validated at submit; unknown or missing required "
+                            "fields are rejected before the run starts."
+                        ),
+                    },
+                    "handoff_refs": {
+                        "type": "array",
+                        "description": (
+                            "Typed cross-run handoff pointers (schema_id, digest, "
+                            "producer_run_id, producer_task_id, role, state). "
+                            "Used to pin a prior dossier or change brief."
+                        ),
+                        "items": {"type": "object"},
                     },
                     "mock": {
                         "type": "boolean",
@@ -297,6 +317,22 @@ def pf_submit(service: HostService, arguments: dict[str, Any]) -> dict[str, Any]
     mock = bool(arguments.get("mock", False))
     profile = str(arguments.get("profile") or "local-target")
 
+    pack_input = arguments.get("pack_input") or {}
+    if not isinstance(pack_input, dict):
+        return _failure("invalid_pack_input", "pack_input must be an object")
+
+    raw_handoffs = arguments.get("handoff_refs") or []
+    if raw_handoffs is None:
+        raw_handoffs = []
+    if not isinstance(raw_handoffs, list):
+        return _failure("invalid_handoff", "handoff_refs must be a list")
+    try:
+        from product_factory.domain.artifacts import HandoffRef
+
+        handoff_refs = [HandoffRef.model_validate(item) for item in raw_handoffs]
+    except Exception as exc:
+        return _failure("invalid_handoff", f"Invalid handoff_refs: {exc}")
+
     raw_overrides = arguments.get("artifact_overrides") or {}
     try:
         artifact_overrides = {
@@ -314,6 +350,8 @@ def pf_submit(service: HostService, arguments: dict[str, Any]) -> dict[str, Any]
         model_profile_set=profile,
         validation_commands=[str(c) for c in validation_commands],
         artifact_overrides=artifact_overrides,
+        pack_input=pack_input,
+        handoff_refs=handoff_refs,
         budget=run_budget_from_policy(
             max_cost_usd=Decimal(str(budget_usd)),
             budgets=service.config.policies.budgets,

@@ -9,12 +9,13 @@
 
 import type {
   ArtifactOverride,
+  DeliveryManifest,
   LandMapEntry,
   MaterializeInput,
   PfClient,
   PfResponse,
 } from "./pf-client.js";
-import { landMapFrom } from "./pf-client.js";
+import { landMapFrom, landRemoteDelivery } from "./pf-client.js";
 
 /** Workflows that end in a proposed patch → land via `approve(apply=true)`. */
 export const PATCH_WORKFLOWS = new Set(["code_change", "repository_change"]);
@@ -33,6 +34,11 @@ export const MATERIALIZE_DEFAULTS: Record<string, { artifact: string; dest: stri
   // A quality run has three deliverables; without a land map only the primary
   // report can be placed, so `pf_merge` lands that and reports what it skipped.
   quality_gate: { artifact: "QUALITY_FINDINGS.md", dest: "docs/QUALITY_FINDINGS.md" },
+  feasibility_discovery: {
+    artifact: "FEASIBILITY_DISCOVERY.md",
+    dest: "docs/FEASIBILITY_DISCOVERY.md",
+  },
+  change_intake: { artifact: "CHANGE_BRIEF.md", dest: "docs/CHANGE_BRIEF.md" },
 };
 
 const AWAITING = "awaiting_approval";
@@ -75,7 +81,17 @@ export interface PfToolDeps {
 export interface PfRunArgs {
   request: string;
   workflow?: string;
+  pack_input?: Record<string, unknown>;
+  handoff_refs?: Array<Record<string, unknown>>;
   repository_path?: string;
+  /** Server-registered repository id (remote mode). */
+  repository_id?: string;
+  workspace?: {
+    kind: "git_ref";
+    repository_id: string;
+    ref: string;
+    commit?: string;
+  };
   budget_usd?: number;
   validation_commands?: string[];
   /**
@@ -118,7 +134,15 @@ export interface PfDeclineArgs {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function summarize(res: PfResponse): string {
+function transportMeta(client: PfClient): Record<string, unknown> {
+  const t = client.transport ?? { mode: "cli" as const };
+  return {
+    mode: t.mode,
+    ...(t.endpoint ? { endpoint: t.endpoint } : {}),
+  };
+}
+
+function summarize(res: PfResponse, client?: PfClient): string {
   return JSON.stringify(
     {
       ok: res.ok,
@@ -128,6 +152,7 @@ function summarize(res: PfResponse): string {
       plan_summary: res.plan_summary ?? undefined,
       artifacts: res.artifacts?.map((a) => a.logical_name).filter(Boolean),
       data: res.data ?? undefined,
+      transport: client ? transportMeta(client) : undefined,
     },
     null,
     2,
@@ -166,41 +191,57 @@ export function normalizeArtifactOverrides(
 }
 
 export async function pfRun(deps: PfToolDeps, ctx: PfToolContext, args: PfRunArgs): Promise<string> {
-  const repositoryPath = args.repository_path ?? ctx.worktree ?? ctx.directory;
+  const remote = deps.client.transport?.mode === "remote";
+  const repositoryPath = remote
+    ? undefined
+    : (args.repository_path ?? ctx.worktree ?? ctx.directory);
   const res = await deps.client.submit({
     requestText: args.request,
     workflow: args.workflow ?? "code_change",
     repositoryPath,
+    repositoryId: args.repository_id,
+    workspace: args.workspace,
     budgetUsd: args.budget_usd ?? deps.defaultBudgetUsd,
     validationCommands: args.validation_commands,
     artifactOverrides: normalizeArtifactOverrides(args.artifact_overrides),
+    packInput: args.pack_input,
+    handoffRefs: args.handoff_refs,
   });
-  return summarize(res);
+  return summarize(res, deps.client);
 }
 
 export async function pfWait(deps: PfToolDeps, _ctx: PfToolContext, args: PfWaitArgs): Promise<string> {
   const maxPolls = args.max_polls ?? deps.wait?.maxPolls ?? 60;
   const intervalMs = deps.wait?.intervalMs ?? 2_000;
   const sleep = deps.wait?.sleep ?? defaultSleep;
+
+  if (typeof deps.client.wait === "function") {
+    const waited = await deps.client.wait(args.run_id, { maxPolls, intervalMs, sleep });
+    return summarize(waited, deps.client);
+  }
+
   let last: PfResponse | undefined;
   for (let poll = 0; poll < maxPolls; poll += 1) {
     last = await deps.client.status(args.run_id);
     const status = last.status ?? undefined;
-    if (!last.ok) return summarize(last);
+    if (!last.ok) return summarize(last, deps.client);
     if (status === AWAITING || (status && TERMINAL.has(status))) {
-      return summarize(last);
+      return summarize(last, deps.client);
     }
     if (poll < maxPolls - 1) await sleep(intervalMs);
   }
-  return summarize({
-    ...(last ?? { protocol: "product-factory.host/v1", ok: true, artifacts: [], events: [] }),
-    data: { ...(last?.data ?? {}), timed_out: true, polls: maxPolls },
-  } as PfResponse);
+  return summarize(
+    {
+      ...(last ?? { protocol: "product-factory.host/v1", ok: true, artifacts: [], events: [] }),
+      data: { ...(last?.data ?? {}), timed_out: true, polls: maxPolls },
+    } as PfResponse,
+    deps.client,
+  );
 }
 
 export async function pfReview(deps: PfToolDeps, _ctx: PfToolContext, args: PfReviewArgs): Promise<string> {
   const res = await deps.client.inspect(args.run_id);
-  return summarize(res);
+  return summarize(res, deps.client);
 }
 
 /**
@@ -209,19 +250,23 @@ export async function pfReview(deps: PfToolDeps, _ctx: PfToolContext, args: PfRe
  * INVARIANT: no `approve`/`materialize` call happens without an explicit
  * operator confirmation via `context.ask`. If `ask` is unavailable the merge is
  * refused (fail-closed) rather than silently proceeding.
+ *
  */
 export async function pfMerge(deps: PfToolDeps, ctx: PfToolContext, args: PfMergeArgs): Promise<string> {
+  if (deps.client.transport?.mode === "remote") {
+    return pfMergeRemote(deps, ctx, args);
+  }
+
   const status = await deps.client.status(args.run_id);
-  if (!status.ok) return summarize(status);
+  if (!status.ok) return summarize(status, deps.client);
 
   const workflow = workflowOf(status, args.workflow);
   const isPatch = workflow ? PATCH_WORKFLOWS.has(workflow) : false;
 
   // A single explicit artifact/dest bypasses the land map; otherwise the run's
   // own land map decides which files land where.
-  const singleFile = Boolean(args.artifact || args.dest_path);
   let landMap: LandMapEntry[] = [];
-  if (!isPatch && !singleFile) {
+  if (!isPatch && !singleFile(args)) {
     const inspected = await deps.client.inspect(args.run_id);
     if (inspected.ok) {
       landMap = landMapFrom(inspected).filter(
@@ -241,29 +286,32 @@ export async function pfMerge(deps: PfToolDeps, ctx: PfToolContext, args: PfMerg
     destinations: landMap.map((entry) => entry.suggested_dest_path),
   });
   if (!confirmed) {
-    return summarize({
-      protocol: status.protocol,
-      ok: false,
-      run_id: args.run_id,
-      status: status.status,
-      artifacts: [],
-      events: [],
-      error: {
-        code: "merge_declined",
-        message: "Operator declined the merge; no approve/materialize was performed.",
+    return summarize(
+      {
+        protocol: status.protocol,
+        ok: false,
+        run_id: args.run_id,
+        status: status.status,
+        artifacts: [],
+        events: [],
+        error: {
+          code: "merge_declined",
+          message: "Operator declined the merge; no approve/materialize was performed.",
+        },
       },
-    });
+      deps.client,
+    );
   }
 
   if (isPatch) {
     const approved = await deps.client.approve(args.run_id, { apply: true });
-    return summarize(approved);
+    return summarize(approved, deps.client);
   }
 
   // Doc/report workflow: approve if still awaiting, then land.
   if (status.status === AWAITING) {
     const approved = await deps.client.approve(args.run_id, { apply: false });
-    if (!approved.ok) return summarize(approved);
+    if (!approved.ok) return summarize(approved, deps.client);
   }
 
   // One confirmation covers the whole land map; the host still audits per file.
@@ -272,7 +320,7 @@ export async function pfMerge(deps: PfToolDeps, ctx: PfToolContext, args: PfMerg
       roles: args.roles,
       overwrite: args.overwrite ?? false,
     });
-    return summarize(landed);
+    return summarize(landed, deps.client);
   }
 
   const preset = workflow ? MATERIALIZE_DEFAULTS[workflow] : undefined;
@@ -280,7 +328,99 @@ export async function pfMerge(deps: PfToolDeps, ctx: PfToolContext, args: PfMerg
   const destPath = args.dest_path ?? preset?.dest ?? "docs/ARCHITECTURE.md";
   const input: MaterializeInput = { artifact, destPath, overwrite: args.overwrite ?? false };
   const materialized = await deps.client.materialize(args.run_id, input);
-  return summarize(materialized);
+  return summarize(materialized, deps.client);
+}
+
+async function pfMergeRemote(
+  deps: PfToolDeps,
+  ctx: PfToolContext,
+  args: PfMergeArgs,
+): Promise<string> {
+  const status = await deps.client.status(args.run_id);
+  if (!status.ok) return summarize(status, deps.client);
+  if (!deps.client.delivery || !deps.client.deliveryBlob || !deps.client.recordLanding) {
+    throw new Error("Remote client does not implement delivery landing");
+  }
+  if (args.artifact || args.dest_path || args.roles || args.overwrite) {
+    return summarize(
+      {
+        protocol: status.protocol,
+        ok: false,
+        run_id: args.run_id,
+        status: status.status,
+        artifacts: [],
+        events: [],
+        error: {
+          code: "remote_delivery_override_rejected",
+          message: "Remote delivery uses the server-verified manifest; per-file overrides are not accepted.",
+        },
+      },
+      deps.client,
+    );
+  }
+  const inspected = await deps.client.inspect(args.run_id);
+  if (!inspected.ok) return summarize(inspected, deps.client);
+  const destinations = landMapFrom(inspected)
+    .filter((entry) => entry.landable !== false)
+    .map((entry) => entry.suggested_dest_path);
+  const confirmed = await confirmMerge(ctx, {
+    runId: args.run_id,
+    workflow: workflowOf(status, args.workflow),
+    action: "approve remote run + fetch verified delivery + land locally",
+    destinations,
+  });
+  if (!confirmed) {
+    return summarize(
+      {
+        protocol: status.protocol,
+        ok: false,
+        run_id: args.run_id,
+        status: status.status,
+        artifacts: [],
+        events: [],
+        error: {
+          code: "merge_declined",
+          message: "Operator declined the merge; no approval, download, or local write occurred.",
+        },
+      },
+      deps.client,
+    );
+  }
+  if (status.status === AWAITING) {
+    const approved = await deps.client.approve(args.run_id, { apply: false });
+    if (!approved.ok) return summarize(approved, deps.client);
+  }
+  const root = ctx.worktree ?? ctx.directory;
+  if (!root) throw new Error("OpenCode workspace root is unavailable; refusing remote landing");
+  const manifest: DeliveryManifest = await deps.client.delivery(args.run_id);
+  const blobs = new Map<string, Uint8Array>();
+  for (const entry of manifest.entries) {
+    blobs.set(entry.blob_sha256, await deps.client.deliveryBlob(args.run_id, entry.blob_sha256));
+  }
+  const landed = landRemoteDelivery(manifest, blobs, root, false);
+  const receipt = await deps.client.recordLanding(args.run_id, {
+    manifest_sha256: landed.manifest_sha256,
+    base_revision: landed.base_revision,
+    status: "landed",
+    landed_paths: landed.landed_paths,
+    client: "opencode-plugin",
+  });
+  return summarize(
+    {
+      protocol: status.protocol,
+      ok: true,
+      run_id: args.run_id,
+      status: "completed",
+      artifacts: [],
+      events: [],
+      data: { landed_paths: landed.landed_paths, receipt },
+    },
+    deps.client,
+  );
+}
+
+function singleFile(args: PfMergeArgs): boolean {
+  return Boolean(args.artifact || args.dest_path);
 }
 
 export async function pfDecline(deps: PfToolDeps, _ctx: PfToolContext, args: PfDeclineArgs): Promise<string> {
@@ -290,7 +430,7 @@ export async function pfDecline(deps: PfToolDeps, _ctx: PfToolContext, args: PfD
     action = status.status === AWAITING ? "reject" : "cancel";
   }
   const res = action === "reject" ? await deps.client.reject(args.run_id) : await deps.client.cancel(args.run_id);
-  return summarize(res);
+  return summarize(res, deps.client);
 }
 
 async function confirmMerge(
@@ -334,6 +474,7 @@ export type ToolHelper = {
     array: (inner: unknown) => any;
     enum: (values: string[]) => any;
     record: (key: unknown, value: unknown) => any;
+    any: () => any;
   };
 };
 
@@ -343,18 +484,33 @@ export function createPfTools(tool: ToolHelper, deps: PfToolDeps): Record<string
     pf_run: tool({
       description:
         "Submit a curated Product Factory run (workflow pack + request text). " +
-        "Defaults repository_path to the current OpenCode workspace. Returns a run_id; " +
-        "does NOT approve or apply anything. Send curated request text only, never the full chat.",
+        "Defaults repository_path to the current OpenCode workspace (local/CLI mode). " +
+        "In remote mode pass repository_id instead — laptop repository_path is rejected. " +
+        "Returns a run_id; does NOT approve or apply anything. Send curated request text only, never the full chat.",
       args: {
         request: s.string().describe("Curated request text for the run (not the full transcript)."),
         workflow: s
           .string()
           .optional()
           .describe(
-            "Workflow pack id (code_change, repository_change, technical_plan, " +
-              "repository_investigation, quality_gate).",
+            "Workflow pack id (change_intake, feasibility_discovery, code_change, " +
+              "repository_change, technical_plan, repository_investigation, quality_gate).",
           ),
-        repository_path: s.string().optional().describe("Target repo; defaults to the OpenCode workspace root."),
+        repository_path: s
+          .string()
+          .optional()
+          .describe("Target repo (local/CLI mode); defaults to the OpenCode workspace root. Rejected when remote."),
+        repository_id: s
+          .string()
+          .optional()
+          .describe("Server-registered repository id (remote mode). Prefer this over repository_path remotely."),
+        workspace: s
+          .record(s.string(), s.any())
+          .optional()
+          .describe(
+            'Pinned remote workspace: {"kind":"git_ref","repository_id":"sample_api",' +
+              '"ref":"refs/heads/main","commit":"<optional SHA>"}.',
+          ),
         budget_usd: s.number().optional().describe("Cost ceiling in USD."),
         validation_commands: s.array(s.string()).optional().describe("Validation command ids to run."),
         artifact_overrides: s
@@ -365,15 +521,29 @@ export function createPfTools(tool: ToolHelper, deps: PfToolDeps): Record<string
               '{"architecture_document": "docs/integration_testing_architecture.md"}. ' +
               "Use this whenever the user asks for a scoped document instead of the generic default.",
           ),
+        pack_input: s
+          .record(s.string(), s.any())
+          .optional()
+          .describe(
+            "Typed pack payload (pack input_schema). Example for feasibility_discovery: " +
+              '{"decision_statement": "...", "domain": "..."}.',
+          ),
+        handoff_refs: s
+          .array(s.record(s.string(), s.any()))
+          .optional()
+          .describe(
+            "Cross-run handoff pointers to pin a prior dossier or change brief.",
+          ),
       },
       execute: (args: PfRunArgs, context: PfToolContext) => pfRun(deps, context, args),
     }),
     pf_wait: tool({
       description:
-        "Poll a run until it reaches awaiting_approval or a terminal status (bounded polling). Returns the latest status envelope.",
+        "Wait until a run reaches awaiting_approval or a terminal status. " +
+        "Prefers SSE from subscription.sse_url when available, with bounded status-poll fallback.",
       args: {
         run_id: s.string().describe("Run id returned by pf_run."),
-        max_polls: s.number().optional().describe("Maximum status polls before returning."),
+        max_polls: s.number().optional().describe("Maximum status polls / SSE status checks before returning."),
       },
       execute: (args: PfWaitArgs, context: PfToolContext) => pfWait(deps, context, args),
     }),
@@ -387,7 +557,8 @@ export function createPfTools(tool: ToolHelper, deps: PfToolDeps): Record<string
         "Land a run's results into the workspace. ALWAYS asks the operator for confirmation first. " +
         "Patch workflows are approved+applied; doc/report workflows are approved (if needed) and every " +
         "deliverable in the run's artifact_land_map is landed at its suggested path (see pf_review). " +
-        "Pass artifact/dest_path only to override the land map for a single file.",
+        "Pass artifact/dest_path only to override the land map for a single file. " +
+        "Remote mode approves without server apply, downloads hash-verified blobs, lands locally, then records a receipt.",
       args: {
         run_id: s.string().describe("Run id to merge."),
         workflow: s.string().optional().describe("Override detected workflow (patch vs doc/report)."),

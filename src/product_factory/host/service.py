@@ -34,7 +34,9 @@ from product_factory.observability.contracts import EventSeverity
 from product_factory.observability.query import ObservabilityQueryService
 from product_factory.observability.recorder import TelemetryRecorder
 from product_factory.orchestration.coordinator import RunCoordinator
+from product_factory.policy.source_policy import resolve_request_source_policy
 from product_factory.workflows.artifacts import ArtifactLandMap
+from product_factory.workflows.inputs import validate_request_pack_input
 from product_factory.workflows.registry import land_map_for_request
 
 DEFAULT_OBSERVE_URL = "http://127.0.0.1:8765"
@@ -120,6 +122,34 @@ class HostService:
                 code="invalid_artifact_override",
                 message=exc.message,
                 details=exc.details,
+            )
+        # A typed pack payload that does not satisfy the pack contract fails
+        # here rather than after planning spend.
+        try:
+            validate_request_pack_input(request)
+            resolve_request_source_policy(request, profiles_root=self.config.root / "profiles")
+        except ConfigurationError as exc:
+            return HostResponse.failure(
+                code="invalid_pack_input",
+                message=exc.message,
+                details=exc.details,
+            )
+        try:
+            from product_factory.workflows.handoffs import validate_request_handoffs
+
+            validate_request_handoffs(request)
+        except Exception as exc:  # SchemaValidationError / ValidationError
+            from product_factory.domain.errors import SchemaValidationError
+
+            if isinstance(exc, SchemaValidationError):
+                return HostResponse.failure(
+                    code="invalid_handoff",
+                    message=exc.message,
+                    details=exc.details,
+                )
+            return HostResponse.failure(
+                code="invalid_handoff",
+                message=str(exc),
             )
 
         run_id = f"run-{uuid.uuid4().hex[:12]}"
@@ -311,6 +341,15 @@ class HostService:
         plan = self.query.plan(run_id)
         validations = self.coord.db.list_validator_results(run_id)
         artifacts = self._artifact_dicts(run_id)
+        from product_factory.observability.foundation import collect_foundation_projections
+        from product_factory.workflows.handlers import eligible_next_actions_for_workflow
+
+        foundation = collect_foundation_projections(run_dir)
+        eligible = eligible_next_actions_for_workflow(row.get("workflow_type") or "")
+        request_payload = self._request_dict(run_id) or {}
+        workspace_provenance = (manifest or {}).get("workspace_provenance") or request_payload.get(
+            "workspace_provenance"
+        )
         return HostResponse.success(
             run_id=run_id,
             status=row["status"],
@@ -318,10 +357,16 @@ class HostService:
             artifacts=artifacts,
             data={
                 "manifest": manifest,
+                "workspace_provenance": workspace_provenance,
                 "plan": plan.model_dump(mode="json") if plan else None,
                 "validations": validations,
                 "approval": self._approval_record(run_id),
                 "artifact_land_map": self.land_map(run_id).as_payload(),
+                "schema_ids": foundation.get("schema_ids", []),
+                "receipt_summaries": foundation.get("receipt_summaries", []),
+                "classification_decisions": foundation.get("classification_decisions", []),
+                "skill_digests": foundation.get("skill_digests", {}),
+                "eligible_next_actions": eligible,
             },
         )
 
@@ -729,22 +774,10 @@ class HostService:
         workflow_type: str = "code_change",
     ) -> HostResponse:
         """Compile a plan without creating a run or executing workers."""
-        from product_factory.orchestration.coordinator import (
-            default_code_change_plan,
-            default_investigation_plan,
-            default_quality_gate_plan,
-            default_technical_plan,
-        )
         from product_factory.planning.compiler import compile_plan
+        from product_factory.workflows.handlers import handler_for
 
-        if workflow_type in {"architecture", "technical_plan"}:
-            proposal = default_technical_plan(request_text)
-        elif workflow_type == "repository_investigation":
-            proposal = default_investigation_plan(request_text)
-        elif workflow_type == "quality_gate":
-            proposal = default_quality_gate_plan(request_text)
-        else:
-            proposal = default_code_change_plan(request_text)
+        proposal = handler_for(workflow_type).plan_template(request_text)
         result = compile_plan(proposal)
         plan = result.plan
         plan_summary = {
@@ -841,9 +874,19 @@ class HostService:
         self, run_id: str, *, after_seq: int, limit: int
     ) -> list[dict[str, Any]] | None:
         url = f"{self.observe_base_url}/api/v1/runs/{run_id}/events"
+        headers: dict[str, str] = {}
+        token = os.environ.get("PRODUCT_FACTORY_OBSERVE_TOKEN") or os.environ.get(
+            "PRODUCT_FACTORY_HOST_TOKEN"
+        )
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         try:
             with httpx.Client(timeout=0.75) as client:
-                response = client.get(url, params={"after_seq": after_seq, "limit": limit})
+                response = client.get(
+                    url,
+                    params={"after_seq": after_seq, "limit": limit},
+                    headers=headers,
+                )
                 if response.status_code != 200:
                     return None
                 payload = response.json()

@@ -1,0 +1,25 @@
+id: discovery.evidence-assessment
+version: 1.0.0
+title: Evidence Assessment
+owner: product-factory
+capabilities:
+  - domain_research
+  - independent_review
+languages:
+  - "*"
+frameworks:
+  - "*"
+trigger:
+  description: >-
+    Use when assessing public or approved sources for a feasibility question,
+    labeling claims, and recording conflicts or staleness.
+negative_triggers:
+  - Do not use to grant network, repository write, or approval authority.
+  - Do not use to average contradictory evidence into a false consensus.
+prohibited_tools:
+  - repository_write
+content_ref: SKILL.md
+status: active
+max_prompt_chars: 12000
+profile_slots:
+  - source

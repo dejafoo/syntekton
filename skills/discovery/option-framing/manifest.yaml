@@ -1,0 +1,23 @@
+id: discovery.option-framing
+version: 1.0.0
+title: Option Framing
+owner: product-factory
+capabilities:
+  - decision_analysis
+  - composition
+languages:
+  - "*"
+frameworks:
+  - "*"
+trigger:
+  description: >-
+    Use when framing decision options, declaring a comparison rubric, and
+    recording reversibility and blockers before recommending.
+negative_triggers:
+  - Do not use to invent missing evidence cells as scored facts.
+  - Do not use to grant tools, sources, or approval authority.
+content_ref: SKILL.md
+status: active
+max_prompt_chars: 12000
+profile_slots:
+  - source

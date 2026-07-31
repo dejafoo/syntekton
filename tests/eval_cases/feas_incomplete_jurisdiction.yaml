@@ -1,0 +1,28 @@
+id: feas_incomplete_jurisdiction
+workflow_type: feasibility_discovery
+request: |
+  Is storing appointment metadata in an EU-hosted SaaS feasible for a clinic
+  integration? Jurisdiction and data-residency requirements were not supplied
+  by the operator.
+tags: ['feasibility', 'discovery', 'jurisdiction']
+expected_status:
+  - completed
+  - awaiting_approval
+acceptance_criteria:
+  - Missing jurisdiction is an explicit unknown / blocker
+  - Recommendation is needs_expert_review or insufficient_evidence
+  - No universal compliance verdict
+must_cover:
+  - jurisdiction
+  - data residency
+  - appointment metadata
+expected_source_classes:
+  - regulator
+reference_hints: |
+  Without a recorded jurisdiction and source date, do not conclude lawful basis.
+isolation_targets:
+  - domain_research
+  - decision_analysis
+metadata:
+  min_cited_sources: 1
+  expected_recommendation: needs_expert_review

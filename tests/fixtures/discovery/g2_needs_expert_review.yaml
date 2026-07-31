@@ -1,0 +1,22 @@
+id: g2-needs-expert-review
+skill: discovery.evidence-assessment
+scenario: needs_expert_review
+decision_statement: Is this processing lawful for clinical data under local rules?
+domain: clinical
+source_policy_profile: regulated-domain
+require_expert_review_for:
+  - clinical
+  - legal
+  - privacy
+evidence:
+  - id: src-regulator-overview
+    source_class: regulator
+    published_at: "2024-11-01"
+    excerpt: Controllers must document lawful basis before processing health data.
+expected_outcome: needs_expert_review
+expected_labels:
+  - fact
+  - unknown
+rationale: >-
+  Clinical/legal verdicts require named expert review under regulated-domain
+  policy; the skill must escalate rather than conclude compliance.

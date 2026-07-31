@@ -10,6 +10,7 @@ from product_factory.evaluation.cases import (
     CaseBudget,
     EvalCase,
     validate_behavioral_contract,
+    validate_discovery_contract,
 )
 
 
@@ -44,5 +45,6 @@ def load_eval_cases(cases_dir: Path) -> list[EvalCase]:
             data.setdefault("metadata", {})["behavioral_contract_defaulted"] = True
         case = EvalCase.model_validate(data)
         validate_behavioral_contract(case)
+        validate_discovery_contract(case)
         cases.append(case)
     return cases

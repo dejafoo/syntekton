@@ -9,10 +9,11 @@ User=product-factory
 Group=product-factory
 WorkingDirectory=/opt/product-factory
 Environment=PRODUCT_FACTORY_DATA_DIR=/var/lib/product-factory
-Environment=PRODUCT_FACTORY_HOST_TOKEN=replace-me
+Environment=PRODUCT_FACTORY_OBSERVE_TOKEN=replace-me
+Environment=PRODUCT_FACTORY_REMOTE_MODE=true
 Environment=PRODUCT_FACTORY_OBSERVE_URL=https://pf.example.internal
-# Adjust to the repo's actual observe/API entrypoint.
-ExecStart=/opt/product-factory/.venv/bin/python -m product_factory.api.app
+# Prefer the packaged CLI entrypoint when installed.
+ExecStart=/opt/product-factory/.venv/bin/product-factory observe serve --host 127.0.0.1 --port 8765
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

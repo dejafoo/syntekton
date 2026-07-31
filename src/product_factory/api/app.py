@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from product_factory.api.control import router as control_router
+from product_factory.api.delivery import router as delivery_router
 from product_factory.api.deps import ApiState
 from product_factory.api.routes import router
 from product_factory.api.streaming import HEARTBEAT_SECONDS, MAX_QUEUE, iter_events
@@ -61,6 +62,7 @@ def create_app(
         )
     app.include_router(router)
     app.include_router(control_router)
+    app.include_router(delivery_router)
     dashboard_dir = Path(__file__).with_name("static") / "dashboard"
     if dashboard_dir.is_dir():
         # Deliberately mounted after /api/v1 and docs: this is a single-user
@@ -176,15 +178,27 @@ def serve(
     port: int = 8765,
     cors_origins: list[str] | None = None,
 ) -> None:
+    import os
+
     import uvicorn
 
-    if host not in {"127.0.0.1", "::1", "localhost"}:
-        import os
+    from product_factory.api.remote_mode import configured_control_token, resolve_project_root
 
-        if not os.environ.get("PRODUCT_FACTORY_OBSERVE_TOKEN"):
+    if host not in {"127.0.0.1", "::1", "localhost"}:
+        if not configured_control_token():
             raise SystemExit(
-                "Non-loopback host requires PRODUCT_FACTORY_OBSERVE_TOKEN in the environment"
+                "Non-loopback host requires PRODUCT_FACTORY_OBSERVE_TOKEN "
+                "(or PRODUCT_FACTORY_HOST_TOKEN) in the environment"
             )
 
-    app = create_app(data_dir, cors_origins=cors_origins)
+    project_root = None
+    if (os.environ.get("PRODUCT_FACTORY_ROOT") or "").strip():
+        project_root = resolve_project_root(data_dir=data_dir)
+    observe_base = (os.environ.get("PRODUCT_FACTORY_OBSERVE_URL") or "").strip() or None
+    app = create_app(
+        data_dir,
+        cors_origins=cors_origins,
+        project_root=project_root,
+        observe_base_url=observe_base,
+    )
     uvicorn.run(app, host=host, port=port, log_level="info")

@@ -1,0 +1,31 @@
+id: feas_unfamiliar_integration
+workflow_type: feasibility_discovery
+request: |
+  Assess whether our product can integrate with a national eReferral exchange
+  for ambulatory clinics without claiming clinical or legal approval. Compare
+  certified gateway vs custom adapter options using public documentation only.
+tags: ['feasibility', 'discovery', 'integration']
+expected_status:
+  - completed
+  - awaiting_approval
+acceptance_criteria:
+  - Dossier separates facts, inferences, and unknowns
+  - At least two integration options with an explicit comparison rubric
+  - Recommendation stays within the WF1 enum
+must_cover:
+  - eReferral
+  - certified gateway
+  - custom adapter
+  - interoperability
+expected_source_classes:
+  - regulator
+  - vendor_api
+reference_hints: |
+  Prefer primary standards and official vendor API material over secondary blogs.
+isolation_targets:
+  - domain_research
+  - decision_analysis
+  - composition
+metadata:
+  min_cited_sources: 2
+  expected_recommendation: feasible_with_constraints

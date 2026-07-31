@@ -1,0 +1,30 @@
+id: feas_conflicting_sources
+workflow_type: feasibility_discovery
+request: |
+  Two public sources disagree on whether a vendor webhook guarantees
+  at-least-once delivery with signed payloads. Produce a feasibility dossier
+  that records the conflict without averaging the evidence.
+tags: ['feasibility', 'discovery', 'conflict']
+expected_status:
+  - completed
+  - awaiting_approval
+acceptance_criteria:
+  - Conflicting claims are both cited and not collapsed into one fact
+  - Recommendation escalates or marks insufficient evidence rather than inventing certainty
+must_cover:
+  - webhook
+  - at-least-once
+  - signed payload
+  - conflicting
+expected_source_classes:
+  - vendor_api
+  - secondary_commentary
+reference_hints: |
+  Do not reconcile contradictions by preferring the newer blog post over the
+  official API document without labeling the conflict.
+isolation_targets:
+  - domain_research
+  - decision_analysis
+metadata:
+  min_cited_sources: 2
+  expected_recommendation: insufficient_evidence
