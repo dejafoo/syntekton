@@ -420,6 +420,7 @@ def _seed_materialize_run(
     status: str = "awaiting_approval",
     artifact_name: str = "ARCHITECTURE.md",
     artifact_body: str = "# ARCHITECTURE.md\n\n## Objective\nLand me.\n",
+    artifact_overrides: dict[str, dict[str, str]] | None = None,
 ) -> str:
     run_dir = service.pf_root / "runs" / run_id
     for sub in ("input", "output", "artifacts/blobs", "content"):
@@ -432,6 +433,7 @@ def _seed_materialize_run(
         "repository_path": str(fixture.resolve()),
         "model_profile_set": "local-target",
         "validation_commands": [],
+        "artifact_overrides": artifact_overrides or {},
         "budget": {"max_cost_usd": "3.00"},
         "metadata": {},
     }
@@ -556,3 +558,289 @@ def test_host_cli_materialize(tmp_path: Path, monkeypatch) -> None:
     payload = HostResponse.model_validate(json.loads(result.output))
     assert payload.ok
     assert (fixture / "docs" / "ARCHITECTURE.md").is_file()
+
+
+def _named_service(tmp_path: Path) -> HostService:
+    return HostService(
+        config=load_config(_project_root(tmp_path)),
+        gateway=MockGateway(),
+        data_dir=tmp_path / ".product-factory",
+        use_deterministic_planner=True,
+    )
+
+
+def test_host_inspect_exposes_land_map_and_suggested_dest(tmp_path: Path) -> None:
+    fixture = _fixture_repo(tmp_path)
+    service = _named_service(tmp_path)
+    run_id = _seed_materialize_run(
+        service,
+        fixture,
+        run_id="run-land-map",
+        artifact_name="integration_testing_architecture.md",
+        artifact_body="# integration_testing_architecture.md\n\n## Objective\nScoped.\n",
+        artifact_overrides={
+            "architecture_document": {"dest_path": "docs/integration_testing_architecture.md"}
+        },
+    )
+
+    inspected = service.inspect(run_id)
+    assert inspected.ok, inspected.model_dump()
+    assert inspected.data is not None
+    land_map = inspected.data["artifact_land_map"]
+    assert land_map == [
+        {
+            "role": "architecture_document",
+            "logical_name": "integration_testing_architecture.md",
+            "suggested_dest_path": "docs/integration_testing_architecture.md",
+            "media_type": "text/markdown",
+            "landable": True,
+            "renamable": True,
+            "required": True,
+        }
+    ]
+
+    named = [
+        a for a in inspected.artifacts if a["logical_name"] == "integration_testing_architecture.md"
+    ]
+    assert named, inspected.artifacts
+    assert named[0]["role"] == "architecture_document"
+    assert named[0]["suggested_dest_path"] == "docs/integration_testing_architecture.md"
+
+
+def test_host_materialize_all_lands_named_deliverable(tmp_path: Path) -> None:
+    fixture = _fixture_repo(tmp_path)
+    service = _named_service(tmp_path)
+    run_id = _seed_materialize_run(
+        service,
+        fixture,
+        run_id="run-mat-all",
+        artifact_name="integration_testing_architecture.md",
+        artifact_body="# integration_testing_architecture.md\n\n## Objective\nScoped.\n",
+        artifact_overrides={
+            "architecture_document": {"dest_path": "docs/integration_testing_architecture.md"}
+        },
+    )
+
+    result = service.materialize_all(run_id)
+    assert result.ok, result.model_dump()
+    assert result.data is not None
+    assert [entry["role"] for entry in result.data["landed"]] == ["architecture_document"]
+    landed = fixture / "docs" / "integration_testing_architecture.md"
+    assert landed.is_file()
+    assert "Scoped." in landed.read_text(encoding="utf-8")
+
+    events = service.list_events(run_id, after_seq=0, limit=50)
+    materialized = [e for e in events if e.get("type") == "artifact.materialized"]
+    assert len(materialized) == 1
+
+
+def test_host_materialize_all_skips_deliverables_not_produced(tmp_path: Path) -> None:
+    fixture = _fixture_repo(tmp_path)
+    service = _named_service(tmp_path)
+    run_id = _seed_materialize_run(
+        service,
+        fixture,
+        run_id="run-mat-all-missing",
+        artifact_name="unrelated.txt",
+        artifact_body="nothing to land\n",
+    )
+
+    result = service.materialize_all(run_id)
+    assert result.ok, result.model_dump()
+    assert result.data is not None
+    assert result.data["landed"] == []
+    assert result.data["skipped"] == [
+        {
+            "role": "architecture_document",
+            "artifact": "ARCHITECTURE.md",
+            "reason": "not_produced",
+        }
+    ]
+    assert not (fixture / "docs").exists()
+
+
+def test_host_materialize_all_rejects_unknown_role(tmp_path: Path) -> None:
+    fixture = _fixture_repo(tmp_path)
+    service = _named_service(tmp_path)
+    run_id = _seed_materialize_run(service, fixture, run_id="run-mat-all-role")
+
+    result = service.materialize_all(run_id, roles=["not_a_role"])
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code == "invalid_artifact_override"
+
+
+def test_host_submit_rejects_unsafe_artifact_override(tmp_path: Path) -> None:
+    service = _named_service(tmp_path)
+    response = service.submit(
+        RunRequest(
+            request_id="req-bad-override",
+            workflow_type="technical_plan",
+            request_text="Design something.",
+            artifact_overrides={"architecture_document": {"dest_path": "../../escape.md"}},
+            budget=RunBudget(max_cost_usd=Decimal("1.00")),
+        ),
+        mock=True,
+        detach=False,
+    )
+    assert response.ok is False
+    assert response.error is not None
+    assert response.error.code == "invalid_artifact_override"
+    assert response.run_id is None
+
+
+def test_host_cli_submit_accepts_artifact_override(tmp_path: Path, monkeypatch) -> None:
+    project = _project_root(tmp_path)
+    _clear_pf_env(monkeypatch)
+    monkeypatch.chdir(project)
+    request = _request_file(tmp_path, "Design an integration testing architecture.")
+
+    result = runner.invoke(
+        app,
+        [
+            "host",
+            "submit",
+            "--request",
+            str(request),
+            "--workflow",
+            "technical_plan",
+            "--artifact-override",
+            "architecture_document=docs/integration_testing_architecture.md",
+            "--mock",
+            "--sync",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = HostResponse.model_validate(json.loads(result.output.strip().splitlines()[-1]))
+    assert payload.ok, payload.model_dump()
+    assert payload.run_id is not None
+
+    service = HostService(
+        config=load_config(project),
+        gateway=MockGateway(),
+        use_deterministic_planner=True,
+    )
+    inspected = service.inspect(payload.run_id)
+    assert inspected.data is not None
+    assert inspected.data["artifact_land_map"][0]["suggested_dest_path"] == (
+        "docs/integration_testing_architecture.md"
+    )
+    output = service.pf_root / "runs" / payload.run_id / "output"
+    assert (output / "integration_testing_architecture.md").is_file()
+
+
+def test_host_cli_submit_rejects_malformed_artifact_override(tmp_path: Path, monkeypatch) -> None:
+    project = _project_root(tmp_path)
+    _clear_pf_env(monkeypatch)
+    monkeypatch.chdir(project)
+    request = _request_file(tmp_path, "Design something.")
+
+    result = runner.invoke(
+        app,
+        [
+            "host",
+            "submit",
+            "--request",
+            str(request),
+            "--artifact-override",
+            "no-equals-sign",
+            "--mock",
+        ],
+    )
+    assert result.exit_code != 0
+
+
+def test_host_cli_materialize_all(tmp_path: Path, monkeypatch) -> None:
+    project = _project_root(tmp_path)
+    fixture = _fixture_repo(tmp_path)
+    _clear_pf_env(monkeypatch)
+    monkeypatch.chdir(project)
+    service = HostService(
+        config=load_config(project),
+        gateway=MockGateway(),
+        use_deterministic_planner=True,
+    )
+    run_id = _seed_materialize_run(
+        service,
+        fixture,
+        run_id="run-cli-mat-all",
+        artifact_name="scoped_architecture.md",
+        artifact_body="# scoped_architecture.md\n\n## Objective\nLand all.\n",
+        artifact_overrides={"architecture_document": {"dest_path": "docs/scoped_architecture.md"}},
+    )
+
+    result = runner.invoke(app, ["host", "materialize-all", run_id])
+    assert result.exit_code == 0, result.output
+    payload = HostResponse.model_validate(json.loads(result.output))
+    assert payload.ok, payload.model_dump()
+    assert (fixture / "docs" / "scoped_architecture.md").is_file()
+
+
+def test_host_quality_gate_submit_inspect_and_materialize_all(tmp_path: Path) -> None:
+    """One quality_gate run lands three deliverables through one host call (P4.E)."""
+    fixture = _fixture_repo(tmp_path)
+    service = _named_service(tmp_path)
+
+    submitted = service.submit(
+        RunRequest(
+            request_id="req-quality-contract",
+            workflow_type="quality_gate",
+            request_text="Assess release readiness for the sample API.",
+            repository_path=fixture,
+            budget=RunBudget(max_cost_usd=Decimal("3.00")),
+            approval_policy="none",
+            artifact_overrides={"quality_findings": {"dest_path": "docs/qa/release_readiness.md"}},
+        ),
+        mock=True,
+        detach=False,
+    )
+    assert submitted.ok, submitted.model_dump()
+    run_id = submitted.run_id
+    assert run_id is not None
+
+    inspected = service.inspect(run_id)
+    assert inspected.ok, inspected.model_dump()
+    assert inspected.data is not None
+    land_map = {entry["role"]: entry for entry in inspected.data["artifact_land_map"]}
+    assert set(land_map) == {"test_plan", "quality_findings", "security_evidence"}
+    assert land_map["quality_findings"]["logical_name"] == "release_readiness.md"
+    assert land_map["quality_findings"]["suggested_dest_path"] == "docs/qa/release_readiness.md"
+    assert land_map["test_plan"]["suggested_dest_path"] == "docs/TEST_PLAN.md"
+
+    result = service.materialize_all(run_id)
+    assert result.ok, result.model_dump()
+    assert result.data is not None
+    assert {entry["role"] for entry in result.data["landed"]} == {
+        "test_plan",
+        "quality_findings",
+        "security_evidence",
+    }
+    assert (fixture / "docs" / "qa" / "release_readiness.md").is_file()
+    assert (fixture / "docs" / "TEST_PLAN.md").is_file()
+    assert (fixture / "docs" / "SECURITY_EVIDENCE.md").is_file()
+
+
+def test_host_quality_gate_materialize_all_can_land_one_role(tmp_path: Path) -> None:
+    fixture = _fixture_repo(tmp_path)
+    service = _named_service(tmp_path)
+    submitted = service.submit(
+        RunRequest(
+            request_id="req-quality-one-role",
+            workflow_type="quality_gate",
+            request_text="Assess release readiness for the sample API.",
+            repository_path=fixture,
+            budget=RunBudget(max_cost_usd=Decimal("3.00")),
+            approval_policy="none",
+        ),
+        mock=True,
+        detach=False,
+    )
+    assert submitted.ok, submitted.model_dump()
+    assert submitted.run_id is not None
+
+    result = service.materialize_all(submitted.run_id, roles=["test_plan"])
+    assert result.ok, result.model_dump()
+    assert result.data is not None
+    assert [entry["role"] for entry in result.data["landed"]] == ["test_plan"]
+    assert (fixture / "docs" / "TEST_PLAN.md").is_file()
+    assert not (fixture / "docs" / "QUALITY_FINDINGS.md").exists()

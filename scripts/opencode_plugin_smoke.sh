@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# Tier-2 OpenCode reality smoke for @product-factory/opencode-plugin (P3.G.D).
+# Tier-2 OpenCode reality smoke for @product-factory/opencode-plugin (P3.G.D + P4.F).
 #
 # Default: skip cleanly (exit 0) when `opencode` is not on PATH.
 # OPENCODE_INTEGRATION=1: fail if `opencode` is missing.
 #
 # Does not call a live model / OpenRouter. Asserts that OpenCode 1.x loads the
 # plugin and exposes pf_* tools via `opencode serve` + GET /experimental/tool/ids.
-# Optionally also drives a mock host technical_plan → materialize into the temp
-# project (same CLI path the plugin uses) when PRODUCT_FACTORY_BIN is usable.
+# Also drives mock host runs through the same CLI path the plugin uses:
+#   - default technical_plan → materialize docs/ARCHITECTURE.md
+#   - named technical_plan  → materialize-all docs/integration_testing_architecture.md
+#   - quality_gate          → materialize-all three docs under docs/
+# when PRODUCT_FACTORY_BIN is usable.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -228,5 +231,93 @@ printf '%s\n' "${MAT_JSON}" | python3 -c 'import sys,json; d=json.load(sys.stdin
 [[ -f "${ARCH_PATH}" ]] || die "expected materialized file missing: ${ARCH_PATH}"
 log "materialized ${ARCH_PATH} ($(wc -c < "${ARCH_PATH}" | tr -d ' ') bytes)"
 
-log "PASS (opencode ${OPENCODE_VERSION}; tools + mock materialize)"
+# Landed files leave the tree dirty, and a run refuses to snapshot a dirty repo.
+# Committing between runs is what an operator does anyway.
+commit_landed() {
+  git -C "${PROJ}" add -A
+  git -C "${PROJ}" commit -q -m "$1" || true
+}
+commit_landed "land architecture overview"
+
+# --- named deliverable (P4.A): the user-chosen name must reach the workspace ---
+NAMED_DEST="docs/integration_testing_architecture.md"
+NAMED_REQ="${TMP}/named-request.md"
+cat > "${NAMED_REQ}" <<'EOF'
+Design an integration testing architecture for this fixture repository.
+EOF
+
+NAMED_SUBMIT="$(
+  cd "${PROJ}"
+  "${PF_BIN}" host submit \
+    --request "${NAMED_REQ}" \
+    --workflow technical_plan \
+    --repo "${PROJ}" \
+    --artifact-override "architecture_document=${NAMED_DEST}" \
+    --mock \
+    --sync
+)"
+NAMED_RUN="$(printf '%s\n' "${NAMED_SUBMIT}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["run_id"])')"
+[[ -n "${NAMED_RUN}" && "${NAMED_RUN}" != "None" ]] || die "named submit returned no run_id: ${NAMED_SUBMIT}"
+
+# The land map, not the client, decides the produced name and destination.
+# Payloads travel via env: `python3 -` already consumes stdin for the program.
+NAMED_INSPECT="$("${PF_BIN}" host inspect "${NAMED_RUN}")"
+PF_JSON="${NAMED_INSPECT}" NAMED_DEST="${NAMED_DEST}" python3 - <<'PY' \
+  || die "land map did not carry the requested deliverable name"
+import json, os
+data = json.loads(os.environ["PF_JSON"]).get("data") or {}
+entries = {e["role"]: e for e in data.get("artifact_land_map") or []}
+entry = entries.get("architecture_document")
+assert entry, f"no architecture_document in land map: {entries}"
+assert entry["suggested_dest_path"] == os.environ["NAMED_DEST"], entry
+assert entry["logical_name"] == "integration_testing_architecture.md", entry
+PY
+
+NAMED_MAT="$("${PF_BIN}" host materialize-all "${NAMED_RUN}")"
+printf '%s\n' "${NAMED_MAT}" | python3 -c 'import sys,json; d=json.load(sys.stdin); assert d.get("ok"), d' \
+  || die "materialize-all failed for named deliverable: ${NAMED_MAT}"
+[[ -f "${PROJ}/${NAMED_DEST}" ]] || die "named deliverable not landed: ${PROJ}/${NAMED_DEST}"
+log "landed named deliverable ${NAMED_DEST}"
+commit_landed "land integration testing architecture"
+
+# --- quality_gate multi-land (P4.E): three documents, one materialize-all -----
+QG_REQ="${TMP}/quality-request.md"
+cat > "${QG_REQ}" <<'EOF'
+Assess test coverage and quality risk for this fixture repository.
+EOF
+
+QG_SUBMIT="$(
+  cd "${PROJ}"
+  "${PF_BIN}" host submit \
+    --request "${QG_REQ}" \
+    --workflow quality_gate \
+    --repo "${PROJ}" \
+    --mock \
+    --sync
+)"
+QG_RUN="$(printf '%s\n' "${QG_SUBMIT}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["run_id"])')"
+[[ -n "${QG_RUN}" && "${QG_RUN}" != "None" ]] || die "quality_gate submit returned no run_id: ${QG_SUBMIT}"
+
+QG_STATUS="$("${PF_BIN}" host status "${QG_RUN}" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status") or "")')"
+log "submitted mock quality_gate run_id=${QG_RUN} status=${QG_STATUS}"
+if [[ "${QG_STATUS}" == "awaiting_approval" ]]; then
+  "${PF_BIN}" host approve "${QG_RUN}" >/dev/null
+fi
+
+QG_MAT="$("${PF_BIN}" host materialize-all "${QG_RUN}")"
+PF_JSON="${QG_MAT}" python3 - <<'PY' \
+  || die "quality_gate materialize-all did not land all three roles: ${QG_MAT}"
+import json, os
+payload = json.loads(os.environ["PF_JSON"])
+assert payload.get("ok"), payload
+landed = {entry["role"] for entry in (payload.get("data") or {}).get("landed") or []}
+expected = {"test_plan", "quality_findings", "security_evidence"}
+assert landed == expected, f"landed {landed}, expected {expected}"
+PY
+for doc in TEST_PLAN.md QUALITY_FINDINGS.md SECURITY_EVIDENCE.md; do
+  [[ -f "${PROJ}/docs/${doc}" ]] || die "quality deliverable not landed: docs/${doc}"
+done
+log "landed quality_gate deliverables: TEST_PLAN.md QUALITY_FINDINGS.md SECURITY_EVIDENCE.md"
+
+log "PASS (opencode ${OPENCODE_VERSION}; tools + materialize + named land + quality_gate multi-land)"
 exit 0

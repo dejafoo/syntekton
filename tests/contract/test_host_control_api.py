@@ -161,9 +161,7 @@ def test_control_cancel_via_host_service(control_env) -> None:
         },
     )
     run_id = submitted.json()["run_id"]
-    _wait_for_status(
-        client, run_id, wanted={"awaiting_approval", "completed", "failed", "blocked"}
-    )
+    _wait_for_status(client, run_id, wanted={"awaiting_approval", "completed", "failed", "blocked"})
 
     cancel = client.post(f"/api/v1/runs/{run_id}/cancel")
     cancel_body = HostResponse.model_validate(cancel.json())
@@ -223,6 +221,7 @@ def test_control_openapi_lists_write_routes(control_env) -> None:
     assert "/api/v1/runs/{run_id}/cancel" in paths
     assert "/api/v1/runs/{run_id}/revise" in paths
     assert "/api/v1/runs/{run_id}/materialize" in paths
+    assert "/api/v1/runs/{run_id}/materialize-all" in paths
 
 
 def test_control_materialize_happy_path_and_path_escape(control_env) -> None:
@@ -281,3 +280,65 @@ def test_control_materialize_happy_path_and_path_escape(control_env) -> None:
     assert err.ok is False
     assert err.error is not None
     assert err.error.code == "path_escape"
+
+
+def test_control_materialize_all_lands_named_deliverable(control_env) -> None:
+    client, fixture, data_dir = control_env
+    host = client.app.state.api_state.host(mock=True)
+    run_id = "run-http-mat-all"
+    run_dir = data_dir / "runs" / run_id
+    (run_dir / "output").mkdir(parents=True)
+    (run_dir / "input").mkdir(parents=True)
+    (run_dir / "output" / "integration_testing_architecture.md").write_text(
+        "# integration_testing_architecture.md\n\n## Objective\nScoped.\n",
+        encoding="utf-8",
+    )
+    request = {
+        "request_id": "req-http-mat-all",
+        "workflow_type": "technical_plan",
+        "request_text": "Design integration testing",
+        "repository_path": str(fixture.resolve()),
+        "model_profile_set": "local-target",
+        "validation_commands": [],
+        "artifact_overrides": {
+            "architecture_document": {"dest_path": "docs/integration_testing_architecture.md"}
+        },
+        "budget": {"max_cost_usd": "3.00"},
+        "metadata": {},
+    }
+    (run_dir / "input" / "request.json").write_text(
+        json.dumps(request, indent=2) + "\n", encoding="utf-8"
+    )
+    host.coord.db.upsert_run(
+        run_id=run_id,
+        workflow_type="technical_plan",
+        status="completed",
+        request=request,
+    )
+
+    response = client.post(f"/api/v1/runs/{run_id}/materialize-all", json={})
+    assert response.status_code == 200, response.text
+    body = HostResponse.model_validate(response.json())
+    assert body.ok
+    assert body.data is not None
+    assert [entry["role"] for entry in body.data["landed"]] == ["architecture_document"]
+    assert (fixture / "docs" / "integration_testing_architecture.md").is_file()
+
+
+def test_control_submit_rejects_unsafe_artifact_override(control_env) -> None:
+    client, _, _ = control_env
+    response = client.post(
+        "/api/v1/runs",
+        json={
+            "request_text": "Design it",
+            "workflow_type": "technical_plan",
+            "artifact_overrides": {"architecture_document": {"dest_path": "../../escape.md"}},
+            "mock": True,
+            "sync": True,
+        },
+    )
+    assert response.status_code == 400, response.text
+    body = HostResponse.model_validate(response.json())
+    assert body.ok is False
+    assert body.error is not None
+    assert body.error.code == "invalid_artifact_override"

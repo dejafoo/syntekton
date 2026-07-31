@@ -1,0 +1,40 @@
+# Example: enable read-only filesystem access over MCP.
+#
+# Copy the `filesystem_mcp` block into `config/connectors.yaml` and adjust the
+# roots. Requires `npx` on PATH; the server package is fetched on first use.
+#
+# Enabling the connector is not the same as granting it. A task can only call
+# these tools if its workflow pack requests the `mcp_filesystem_read` tool class,
+# and every call is still audited through the tool broker.
+
+allow_write_connectors: false
+
+connectors:
+  filesystem_mcp:
+    enabled: true
+    max_timeout_seconds: 30
+    options:
+      # Absolute directories the connector may read. Paths are resolved and
+      # confined here, so a symlink pointing outside a root is denied even if the
+      # server would have followed it. Reference material only — never a home
+      # directory, and never a path holding credentials.
+      roots:
+        - /Users/you/reference/specs
+        - /Users/you/reference/standards
+      command: npx
+      args:
+        - "-y"
+        - "@modelcontextprotocol/server-filesystem"
+
+# Tools this exposes, all read-only:
+#
+#   mcp_read_file       {path, max_bytes?}    file text, clamped
+#   mcp_list_directory  {path}                entry names and kinds
+#   mcp_search_files    {path, pattern}       matching paths under path
+#
+# Anything else the server advertises is rejected client-side, so a server
+# update cannot quietly add a write tool to a granted task.
+#
+# Smoke-test the wiring against the real server:
+#
+#   MCP_FILESYSTEM_INTEGRATION=1 uv run pytest tests/connectors/test_filesystem_mcp.py

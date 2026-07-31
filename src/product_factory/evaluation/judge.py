@@ -283,9 +283,7 @@ class LLMJudge(Judge):
                 max_cost_usd=self.max_cost_usd,
             )
         )
-        raw = response.structured_data or (
-            json.loads(response.text) if response.text else None
-        )
+        raw = response.structured_data or (json.loads(response.text) if response.text else None)
         verdict = (
             PairwiseVerdict.model_validate(raw)
             if raw is not None

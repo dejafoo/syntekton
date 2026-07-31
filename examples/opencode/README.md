@@ -77,10 +77,10 @@ The sections below document the **MCP + slash-command** path.
    `OPENROUTER_API_KEY` in the environment OpenCode inherits.
 
 3. Restart OpenCode (or reload MCP). Confirm tools `pf_submit`, `pf_status`,
-   `pf_tail`, `pf_inspect`, `pf_approve`, `pf_reject`, `pf_cancel`, `pf_export`
-   are available. If OpenCode hangs on startup, run the same `command` in a
-   terminal — a bad `uv` flag or missing binary fails instantly with an error
-   OpenCode may not surface.
+   `pf_tail`, `pf_inspect`, `pf_approve`, `pf_reject`, `pf_cancel`, `pf_export`,
+   `pf_materialize` are available. If OpenCode hangs on startup, run the same
+   `command` in a terminal — a bad `uv` flag or missing binary fails instantly
+   with an error OpenCode may not surface.
 
    Optional env (useful when OpenCode cwd is not this repo):
 
@@ -100,9 +100,16 @@ The sections below document the **MCP + slash-command** path.
    python3 -c 'import json; json.load(open("/Users/'"$USER"'/.config/opencode/opencode.json")); print("OK")'
    ```
 
-2. **Prove the MCP binary outside OpenCode** (should print a `Content-Length` reply, then exit):
+2. **Prove the MCP binary outside OpenCode** (should print a JSON-RPC
+   `initialize` result, then exit). Current PF replies in NDJSON by default;
+   it mirrors `Content-Length` when the client sends that framing:
 
    ```bash
+   # NDJSON (what OpenCode's MCP client uses):
+   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}' \
+     | /absolute/path/to/orchestration/.venv/bin/product-factory mcp --mock
+
+   # Or Content-Length (LSP-style) — PF mirrors the framing:
    INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}'
    LEN=$(printf '%s' "$INIT" | wc -c | tr -d ' ')
    printf 'Content-Length: %s\r\n\r\n%s' "$LEN" "$INIT" \
@@ -155,5 +162,6 @@ Manual smoke checklist:
 | `pf_inspect` | Plan, validations, artifacts |
 | `pf_approve` / `pf_reject` / `pf_cancel` | Control |
 | `pf_export` | Evidence bundle path |
+| `pf_materialize` | Copy a run artifact into the target repo (`artifact`, `dest_path`) |
 
 Protocol docs: [`docs/host-integration.md`](../../docs/host-integration.md).

@@ -35,9 +35,7 @@ def _new_coordinator(tmp_path: Path) -> RunCoordinator:
     )
 
 
-def test_resume_skips_completed_tasks_and_retries_crashed_task(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_resume_skips_completed_tasks_and_retries_crashed_task(tmp_path: Path, monkeypatch) -> None:
     fixture = _fixture(tmp_path)
     coord1 = _new_coordinator(tmp_path)
 

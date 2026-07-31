@@ -8,15 +8,14 @@ import sys
 import uuid
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
 
 import typer
 import yaml
 
 from product_factory.config.loader import PoliciesConfig, load_config
-from product_factory.domain.budgets import RunBudget
+from product_factory.domain.budgets import run_budget_from_policy
 from product_factory.domain.errors import ProductFactoryError
-from product_factory.domain.runs import RunRequest
+from product_factory.domain.runs import ArtifactOverride, RunRequest
 from product_factory.gateway.mock import MockGateway
 from product_factory.gateway.openrouter import OpenRouterGateway
 from product_factory.host.protocol import HostResponse
@@ -60,6 +59,29 @@ def _parse_validation_commands(
             seen.add(cid)
             result.append(cid)
     return result
+
+
+def _parse_artifact_overrides(
+    artifact_override: list[str], artifact_name: list[str]
+) -> dict[str, ArtifactOverride]:
+    """`--artifact-override ROLE=docs/x.md` / `--artifact-name ROLE=x.md`."""
+    overrides: dict[str, ArtifactOverride] = {}
+
+    def _split(entry: str, flag: str) -> tuple[str, str]:
+        role, sep, value = entry.partition("=")
+        if not sep or not role.strip() or not value.strip():
+            raise typer.BadParameter(f"Expected {flag} ROLE=VALUE, got {entry!r}")
+        return role.strip(), value.strip()
+
+    for entry in artifact_override:
+        role, dest = _split(entry, "--artifact-override")
+        current = overrides.get(role) or ArtifactOverride()
+        overrides[role] = current.model_copy(update={"dest_path": dest})
+    for entry in artifact_name:
+        role, logical = _split(entry, "--artifact-name")
+        current = overrides.get(role) or ArtifactOverride()
+        overrides[role] = current.model_copy(update={"logical_name": logical})
+    return overrides
 
 
 def _load_config_with_policy_override(policy: Path | None):
@@ -108,6 +130,19 @@ def host_submit_cmd(
     max_wall_clock_seconds: int | None = typer.Option(None, "--max-wall-clock-seconds"),
     validation_command: list[str] = typer.Option([], "--validation-command"),
     validation_commands: str | None = typer.Option(None, "--validation-commands"),
+    artifact_override: list[str] = typer.Option(
+        [],
+        "--artifact-override",
+        help=(
+            "Land a deliverable at a chosen repository path: "
+            "ROLE=PATH (e.g. architecture_document=docs/integration_testing_architecture.md)"
+        ),
+    ),
+    artifact_name: list[str] = typer.Option(
+        [],
+        "--artifact-name",
+        help="Name a deliverable without changing its directory: ROLE=FILENAME",
+    ),
     policy: Path | None = typer.Option(None, "--policy"),
     mock: bool = typer.Option(False, "--mock"),
     inline: bool = typer.Option(
@@ -123,9 +158,6 @@ def host_submit_cmd(
 ) -> None:
     """Submit a curated request and return run_id + subscription immediately."""
     service = _service(mock=mock, policy=policy)
-    budget_kwargs: dict[str, Any] = {"max_cost_usd": Decimal(str(budget_usd))}
-    if max_wall_clock_seconds is not None:
-        budget_kwargs["max_wall_clock_seconds"] = max_wall_clock_seconds
     run_request = RunRequest(
         request_id=f"req-{uuid.uuid4().hex[:8]}",
         workflow_type=workflow,  # type: ignore[arg-type]
@@ -133,7 +165,12 @@ def host_submit_cmd(
         repository_path=repo.resolve() if repo else None,
         model_profile_set=profile,
         validation_commands=_parse_validation_commands(validation_command, validation_commands),
-        budget=RunBudget(**budget_kwargs),
+        artifact_overrides=_parse_artifact_overrides(artifact_override, artifact_name),
+        budget=run_budget_from_policy(
+            max_cost_usd=Decimal(str(budget_usd)),
+            budgets=service.config.policies.budgets,
+            max_wall_clock_seconds=max_wall_clock_seconds,
+        ),
     )
     response = service.submit(
         run_request,
@@ -257,6 +294,30 @@ def host_materialize_cmd(
             run_id,
             artifact=artifact,
             dest_path=to_path,
+            overwrite=overwrite,
+        )
+    )
+
+
+@host_app.command("materialize-all")
+def host_materialize_all_cmd(
+    run_id: str = typer.Argument(...),
+    role: list[str] = typer.Option(
+        [],
+        "--role",
+        help="Limit to these deliverable roles (default: every landable role)",
+    ),
+    overwrite: bool = typer.Option(
+        False,
+        "--overwrite",
+        help="Replace existing destination files",
+    ),
+) -> None:
+    """Land every resolved deliverable of a run at its suggested destination."""
+    _emit(
+        _service().materialize_all(
+            run_id,
+            roles=list(role) or None,
             overwrite=overwrite,
         )
     )

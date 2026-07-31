@@ -12,15 +12,14 @@ downgrade.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from product_factory.domain.errors import SkillGrantViolation
 from product_factory.skills.registry import Skill
 
 # Maps a skill-declared tool name to the set of concrete broker tool names it
 # is satisfied by / denies. Tool-class entries expand to every broker tool in
-# that class; concrete tool names map to themselves. `network_access` is
-# never grantable in Phase 1 (no MCP/web access), so it always maps to the
-# empty set — any skill requiring it fails closed, and any skill prohibiting
-# it can never be violated by the current tool surface.
+# that class; concrete tool names map to themselves.
 SKILL_TOOL_GRANT_MAP: dict[str, frozenset[str]] = {
     "repository_read": frozenset({"read_file", "list_files", "search_text"}),
     "repository_write": frozenset({"create_file", "apply_patch"}),
@@ -28,7 +27,6 @@ SKILL_TOOL_GRANT_MAP: dict[str, frozenset[str]] = {
     "git_write": frozenset({"apply_patch"}),
     "artifact_write": frozenset({"write_artifact"}),
     "validation_command": frozenset({"run_validation_command"}),
-    "network_access": frozenset(),
     # Concrete broker tool names pass through unchanged.
     "read_file": frozenset({"read_file"}),
     "list_files": frozenset({"list_files"}),
@@ -41,17 +39,43 @@ SKILL_TOOL_GRANT_MAP: dict[str, frozenset[str]] = {
     "run_validation_command": frozenset({"run_validation_command"}),
 }
 
+# Umbrella name for "reaches outside this machine's repository". A skill that
+# prohibits it must deny every connector, including ones added later, so this
+# resolves against the live connector registry rather than a hardcoded list.
+NETWORK_ACCESS = "network_access"
 
-def resolve_broker_tool_names(skill_tool_name: str) -> frozenset[str]:
+
+def resolve_broker_tool_names(
+    skill_tool_name: str,
+    *,
+    connector_tools: Mapping[str, frozenset[str]] | None = None,
+) -> frozenset[str]:
     """Return the concrete broker tool names a skill-declared name maps to.
 
-    Unknown names resolve to the empty set (fail closed for `required_tools`,
-    never a false-positive violation for `prohibited_tools`).
+    `connector_tools` maps a connector tool class to its tool names. Unknown
+    names resolve to the empty set (fail closed for `required_tools`, never a
+    false-positive violation for `prohibited_tools`).
     """
-    return SKILL_TOOL_GRANT_MAP.get(skill_tool_name, frozenset())
+    builtin = SKILL_TOOL_GRANT_MAP.get(skill_tool_name)
+    if builtin is not None:
+        return builtin
+    by_class = connector_tools or {}
+    if skill_tool_name == NETWORK_ACCESS:
+        return frozenset().union(*by_class.values()) if by_class else frozenset()
+    if skill_tool_name in by_class:
+        return by_class[skill_tool_name]
+    for names in by_class.values():
+        if skill_tool_name in names:
+            return frozenset({skill_tool_name})
+    return frozenset()
 
 
-def enforce_skill_grants(*, skills: list[Skill], granted_tool_names: set[str]) -> None:
+def enforce_skill_grants(
+    *,
+    skills: list[Skill],
+    granted_tool_names: set[str],
+    connector_tools: Mapping[str, frozenset[str]] | None = None,
+) -> None:
     """Fail closed when a matched skill's tool policy is inconsistent with the grant.
 
     - Every `required_tools` entry must resolve to at least one grantable
@@ -62,7 +86,7 @@ def enforce_skill_grants(*, skills: list[Skill], granted_tool_names: set[str]) -
     for skill in skills:
         manifest = skill.manifest
         for required in manifest.required_tools:
-            allowed = resolve_broker_tool_names(required)
+            allowed = resolve_broker_tool_names(required, connector_tools=connector_tools)
             if not allowed or not (allowed & granted_tool_names):
                 raise SkillGrantViolation(
                     f"Skill {manifest.id!r} requires tool {required!r} but it is not "
@@ -75,7 +99,7 @@ def enforce_skill_grants(*, skills: list[Skill], granted_tool_names: set[str]) -
                     },
                 )
         for prohibited in manifest.prohibited_tools:
-            denied = resolve_broker_tool_names(prohibited)
+            denied = resolve_broker_tool_names(prohibited, connector_tools=connector_tools)
             overlap = denied & granted_tool_names
             if overlap:
                 raise SkillGrantViolation(

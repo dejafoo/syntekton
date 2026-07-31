@@ -7,6 +7,10 @@ one-release alias resolved by `workflows/registry.py` (P3.D).
 
 from __future__ import annotations
 
+from product_factory.workflows.artifacts import (
+    ROLE_ARCHITECTURE_DOCUMENT,
+    ArtifactLandSpec,
+)
 from product_factory.workflows.base import WorkflowPack
 
 TECHNICAL_PLAN_PACK = WorkflowPack(
@@ -50,6 +54,17 @@ TECHNICAL_PLAN_PACK = WorkflowPack(
     },
     skill_policy={"grant_enforcement": "fail_closed"},
     routing_defaults={"coding_worker_tier": "mid"},
+    artifacts=(
+        ArtifactLandSpec(
+            role=ROLE_ARCHITECTURE_DOCUMENT,
+            default_logical_name="ARCHITECTURE.md",
+            default_dest_path="docs/ARCHITECTURE.md",
+            description=(
+                "Technical plan / architecture document. Override the name for "
+                "scoped plans, e.g. docs/integration_testing_architecture.md."
+            ),
+        ),
+    ),
     description=(
         "Technical plan with requirements, architecture decision, acceptance "
         "criteria, and implementation handoff — behavior-frozen wrapper around "

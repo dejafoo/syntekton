@@ -6,9 +6,11 @@ OpenCode, Cursor, CI scripts, or any other host CLI. Humans keep using sync
 default).
 
 See also: [observability.md](observability.md) (read models / SSE),
-[next-work-packages-phase3.md](next-work-packages-phase3.md), and
+[next-work-packages-phase3.md](next-work-packages-phase3.md),
 [next-work-packages-phase3g.md](next-work-packages-phase3g.md) (`materialize` +
-optional OpenCode plugin).
+optional OpenCode plugin), and
+[next-work-packages-phase4.md](next-work-packages-phase4.md) (named deliverables,
+connectors, `quality_gate`).
 
 ## Envelope
 
@@ -63,6 +65,14 @@ product-factory host revise <run_id> --note "…"
 product-factory host export-bundle <run_id>
 product-factory host materialize <run_id> \
   --artifact ARCHITECTURE.md --to docs/ARCHITECTURE.md
+
+# Land every deliverable the run produced (one call, still audited per file)
+product-factory host materialize-all <run_id>
+product-factory host materialize-all <run_id> --role test_plan
+
+# Name a deliverable up front, by pack role
+product-factory host submit --request request.md --workflow technical_plan \
+  --artifact-override architecture_document=docs/integration_testing_architecture.md
 ```
 
 Internal (spawned by submit; not for normal host use):
@@ -101,9 +111,52 @@ product-factory run --request request.md --repo ./repo --mock
    status is `awaiting_approval` or `completed`; destination must stay under
    the repo root (path escape rejected). Emits `artifact.materialized` with
    sha256 + dest path. Patch apply still uses `approve --apply` /
-   `approve(apply=true)`. The artifact is selected by logical name, so later
-   packs (Phase 4 quality artifacts) land through the same audited action
-   without new client work.
+   `approve(apply=true)`.
+9. `materialize-all` lands every deliverable in the run's resolved land map.
+   Each file goes through `materialize`, so path checks and the audit event
+   apply per file; a role the run did not produce is reported as `skipped`
+   rather than landed empty. One operator confirmation upstream covers the
+   batch — nothing lands implicitly.
+
+## Named deliverables (artifact land map)
+
+A workflow pack declares deliverables by **role** (a stable key such as
+`architecture_document`), not by filename. Each role carries a default produced
+name and destination that a host may override per run, so a request for an
+integration-testing architecture lands as
+`docs/integration_testing_architecture.md` without forking the pack or the
+client. Validators key off document **content**, so renaming never changes
+whether a deliverable passes.
+
+| Role | Pack | Default destination |
+| --- | --- | --- |
+| `architecture_document` | `technical_plan` | `docs/ARCHITECTURE.md` |
+| `evidence_report` | `repository_investigation` | `docs/EVIDENCE_REPORT.md` |
+| `test_plan` | `quality_gate` | `docs/TEST_PLAN.md` |
+| `quality_findings` | `quality_gate` | `docs/QUALITY_FINDINGS.md` |
+| `security_evidence` | `quality_gate` | `docs/SECURITY_EVIDENCE.md` |
+| `proposed_patch` | `repository_change` | applied via `approve --apply` (never copied, never renamed) |
+
+Overrides are accepted on submit as `artifact_overrides`, either as a
+destination shorthand or with an explicit produced name:
+
+```json
+{
+  "artifact_overrides": {
+    "architecture_document": { "dest_path": "docs/integration_testing_architecture.md" },
+    "quality_findings": { "logical_name": "release_readiness.md",
+                          "dest_path": "docs/qa/release_readiness.md" }
+  }
+}
+```
+
+An unknown role or an unsafe destination (absolute, `~`, or `..`-escaping) is
+rejected as `invalid_artifact_override` at submit time, before any run spend.
+Roles left un-overridden keep their pack defaults.
+
+`inspect` and `artifacts` expose the resolved map as `artifact_land_map`, with
+`role`, `logical_name`, and `suggested_dest_path` per entry, so a host lands
+files where the run says rather than guessing from the workflow id.
 
 ## Authority and content boundaries
 
@@ -127,6 +180,7 @@ Same `HostResponse` envelope as the CLI. Served by `product-factory observe serv
 | `POST` | `/api/v1/runs/{id}/cancel` | Cooperative cancel via `HostService` |
 | `POST` | `/api/v1/runs/{id}/revise` | `{ "note": "…" }` bounded follow-up |
 | `POST` | `/api/v1/runs/{id}/materialize` | `{ "artifact", "dest_path", "overwrite?" }` |
+| `POST` | `/api/v1/runs/{id}/materialize-all` | `{ "roles?", "overwrite?" }` — lands the land map |
 | `POST` | `/api/v1/plan` | Plan-preview (compile only; no run) |
 
 When `PRODUCT_FACTORY_OBSERVE_TOKEN` is set, write routes require
@@ -155,6 +209,7 @@ product-factory mcp [--mock] [--data-dir PATH]
 | `pf_approve` / `pf_reject` / `pf_cancel` | control actions |
 | `pf_export` | `host.export_bundle` |
 | `pf_materialize` | `host.materialize` (`artifact`, `dest_path`, `overwrite?`) |
+| `pf_materialize_all` | `host.materialize_all` (`roles?`, `overwrite?`) |
 
 `revise` is available on the CLI and HTTP control API only (kept out of the
 small MCP tool set to limit context bloat); use `product-factory host revise`
@@ -167,19 +222,10 @@ Each tool returns `product-factory.host/v1` `HostResponse` JSON (also as MCP
 | --- | --- |
 | Scripts / CI | `product-factory host …` JSON or HTTP control API |
 | HTTP clients | Control routes on observe/`serve` (this section) |
-| OpenCode | MCP + slash commands — see [`examples/opencode/`](../examples/opencode/); optional plugin, below |
+| OpenCode | **Recommended:** plugin below. Alternative: MCP + slash commands — [`examples/opencode/`](../examples/opencode/) |
 | Cursor / Claude Code | Same `product-factory mcp` stdio config (no OpenCode files required) |
 
-OpenCode packaging is config only by default. Merge
-`examples/opencode/opencode.json`, enable the `product-factory` MCP server, then
-try `/pf-investigate …` → `/pf-status` → `/pf-approve`.
-
-When the OpenCode working directory is not the Product Factory repo, launch MCP
-with an absolute command — either the venv binary, or
-`uv --directory /path/to/orchestration run product-factory mcp`. Do not use
-`uv -C …` (unsupported; the process exits and OpenCode appears stuck).
-
-### Optional OpenCode plugin (P3.G.C / P3.G.D)
+### OpenCode plugin (recommended)
 
 A thin plugin package at [`integrations/opencode-plugin/`](../integrations/opencode-plugin/)
 removes the need for slash commands: it exposes model-facing `pf_run` /
@@ -194,6 +240,19 @@ Install / env / UAT: see the package README. Gated OpenCode reality smoke:
 `opencode` is absent unless `OPENCODE_INTEGRATION=1`). Tracker:
 [`next-work-packages-phase3g.md`](next-work-packages-phase3g.md).
 
+### MCP + slash commands (non-plugin hosts)
+
+Merge `examples/opencode/opencode.json`, enable the `product-factory` MCP
+server, then try `/pf-investigate …` → `/pf-status` → `/pf-approve`.
+
+When the OpenCode working directory is not the Product Factory repo, launch MCP
+with an absolute command — either the venv binary, or
+`uv --directory /path/to/orchestration run product-factory mcp`. Do not use
+`uv -C …` (unsupported; the process exits and OpenCode appears stuck). Current
+`product-factory mcp` speaks NDJSON on stdio by default (mirrors
+`Content-Length` when the client sends it) and resolves config via
+`PRODUCT_FACTORY_ROOT` / the install tree when cwd has no PF config.
+
 ## Workflow packs (host-facing)
 
 | `workflow_type` | Notes |
@@ -202,13 +261,74 @@ Install / env / UAT: see the package README. Gated OpenCode reality smoke:
 | `repository_investigation` | Read-only evidence report; no write grants by default |
 | `technical_plan` | Requirements / architecture decision / acceptance criteria |
 | `architecture` | Alias → `technical_plan` (compat) |
+| `quality_gate` | Read-only quality review; three deliverables, reports defects without repairing them |
 
 ```bash
 product-factory host submit --workflow repository_investigation \
   --request request.md --repo ./repo --mock
 product-factory host submit --workflow technical_plan \
   --request request.md --mock
+product-factory host submit --workflow quality_gate \
+  --request request.md --repo ./repo --mock
 ```
+
+`quality_gate` produces a test plan, quality findings, and security evidence in
+one run. A blocking finding is the *product* of that run, not a failure: the pack
+holds no write grants, so it never spawns a repair task and the run still
+completes. Land all three with a single `materialize-all`.
+
+## Connectors (external tools)
+
+Workers reach external providers only through the tool broker, so a connector
+never grants a capability. Filesystem MCP still ships disabled; Tavily web search
+is enabled in this checkout's [`config/connectors.yaml`](../config/connectors.yaml)
+but still needs a credential and a capability that may use `web_read`. Every call
+is audited (`connector.invoked` / `connector.denied` / `connector.failed`) with a
+policy decision, bounded result, and provenance. Outages surface as typed
+connector errors and never silently fall back to another model.
+
+| Connector | Tool class | Needs |
+| --- | --- | --- |
+| `tavily_web_search` | `web_read` | `TAVILY_API_KEY`; egress to `api.tavily.com` |
+| `filesystem_mcp` | `mcp_filesystem_read` | Explicit read roots; `npx` for the MCP server |
+
+Read-only in both cases. `filesystem_mcp` resolves and confines every path
+against its configured roots before calling the server, and allowlists three read
+tools regardless of what the server advertises. Example configs:
+[`examples/connectors/tavily.yaml`](../examples/connectors/tavily.yaml),
+[`examples/connectors/filesystem-mcp.yaml`](../examples/connectors/filesystem-mcp.yaml).
+
+### Tavily API key
+
+Put the key in the **environment**, not in YAML:
+
+```bash
+export TAVILY_API_KEY=tvly-...
+```
+
+The variable must be visible to whatever process runs Product Factory (CLI,
+`product-factory host`, or the OpenCode plugin worker). Mock runs
+(`--mock` / `PRODUCT_FACTORY_FORCE_MOCK=1`) use fixture search results and do not
+need a key.
+
+Live smoke:
+
+```bash
+TAVILY_INTEGRATION=1 TAVILY_API_KEY=tvly-... ./scripts/verify.sh
+```
+
+After a research run that asked for citations/sources, confirm search actually
+fired:
+
+```bash
+sqlite3 -readonly .product-factory/data/product_factory.sqlite \
+  "SELECT event_type, summary FROM events
+   WHERE run_id='<run-id>' AND event_type LIKE 'connector%';"
+```
+
+You want `connector.invoked` rows for `tavily_web_search`. Live technical-plan
+runs that ask for citations fail validation when the connector is enabled but
+never invoked.
 
 ## Environment
 
@@ -222,3 +342,6 @@ product-factory host submit --workflow technical_plan \
 | `OPENROUTER_API_KEY` | Live model backend when mock is not forced |
 | `PRODUCT_FACTORY_OBSERVE_TOKEN` | When set, HTTP write routes require `Authorization: Bearer …` |
 | `OPENCODE_INTEGRATION` | When `1`, `scripts/opencode_plugin_smoke.sh` fails if `opencode` is missing |
+| `TAVILY_API_KEY` | Credential for the Tavily web-search connector (env only; never logged). Required for live `web_search`; mock mode does not need it. |
+| `TAVILY_INTEGRATION` | When `1`, `verify.sh` runs the live Tavily query |
+| `MCP_FILESYSTEM_INTEGRATION` | When `1`, `verify.sh` runs the real filesystem MCP server smoke |

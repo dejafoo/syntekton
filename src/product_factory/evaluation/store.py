@@ -131,9 +131,7 @@ class EvalStore:
             """,
             (bench_id,),
         ).fetchall()
-        return {
-            (str(r["case_id"]), str(r["subject_id"]), int(r["seed"] or 0)) for r in rows
-        }
+        return {(str(r["case_id"]), str(r["subject_id"]), int(r["seed"] or 0)) for r in rows}
 
     def save_bench(self, report: ComparisonReport) -> None:
         self.db.conn.execute(

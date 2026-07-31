@@ -1,5 +1,9 @@
 # Phase 3.G — OpenCode plugin + `materialize` (stepped)
 
+> **Status: exit criteria met.** All workstreams P3.G.A–E closed. Mock host
+> contract + MCP stdio smoke + plugin vitest are always-on; gated OpenCode
+> smoke passed on `opencode` **1.18.4**. See exit criteria / evidence below.
+
 Extends [`next-work-packages-phase3.md`](next-work-packages-phase3.md) with a
 vendor-neutral `materialize` host action and an **optional** OpenCode plugin
 adapter on top of the same protocol.

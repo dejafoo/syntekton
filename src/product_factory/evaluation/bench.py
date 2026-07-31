@@ -59,12 +59,12 @@ class BenchmarkRunner:
         self.pf_root.mkdir(parents=True, exist_ok=True)
         self.db = Database(self.pf_root / "data" / "product_factory.sqlite")
         self.store = EvalStore(self.db)
-        self.gateway = _instrument_gateway(
-            gateway, self.db, self.pf_root / "content" / "bench"
-        )
+        self.gateway = _instrument_gateway(gateway, self.db, self.pf_root / "content" / "bench")
         if judge is not None:
             self.judge = judge
-            if isinstance(judge, LLMJudge) and not isinstance(judge.gateway, InstrumentedModelGateway):
+            if isinstance(judge, LLMJudge) and not isinstance(
+                judge.gateway, InstrumentedModelGateway
+            ):
                 judge.gateway = _instrument_gateway(
                     judge.gateway, self.db, self.pf_root / "content" / "bench"
                 )
@@ -246,9 +246,7 @@ class BenchmarkRunner:
                     if subject_id not in self._runners:
                         continue
                     if (case.id, subject_id, seed) in done:
-                        _progress(
-                            f"skip {case.id}/{subject_id}/seed-{seed} (already scored)"
-                        )
+                        _progress(f"skip {case.id}/{subject_id}/seed-{seed} (already scored)")
                         continue
                     if subject_id == "frontier_reference" and oracle_spent >= oracle_budget_usd:
                         continue

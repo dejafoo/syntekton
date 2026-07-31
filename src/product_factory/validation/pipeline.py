@@ -200,6 +200,29 @@ def validate_investigation_document(markdown: str) -> ValidatorResult:
     return ValidatorResult(validator_id="investigation_sections", status="pass", message="ok")
 
 
+def validate_document_sections(
+    markdown: str,
+    *,
+    validator_id: str,
+    required_sections: list[str] | tuple[str, ...],
+) -> ValidatorResult:
+    """Require a set of headings in a composed markdown deliverable.
+
+    Section names come from the workflow pack, so a pack can add a deliverable
+    shape without a new validator here. Matching is on heading text, never on the
+    filename, so a renamed deliverable validates identically.
+    """
+    missing = [section for section in required_sections if not _heading_present(markdown, section)]
+    if missing:
+        return ValidatorResult(
+            validator_id=validator_id,
+            status="fail",
+            message=f"Document missing required sections: {missing}",
+            details={"missing_sections": missing},
+        )
+    return ValidatorResult(validator_id=validator_id, status="pass", message="ok")
+
+
 def validate_citations(markdown: str) -> ValidatorResult:
     """Require at least one path-like citation in backtick form."""
     citations = sorted({match.group(1) for match in CITATION_PATH_RE.finditer(markdown or "")})
@@ -215,6 +238,62 @@ def validate_citations(markdown: str) -> ValidatorResult:
         status="pass",
         message="ok",
         details={"citations": citations},
+    )
+
+
+_WEB_CITATION_HINTS = (
+    "citation",
+    "citations",
+    "cite sources",
+    "cite urls",
+    "web search",
+    "search the web",
+    "with sources",
+    "official docs",
+    "official documentation",
+)
+
+
+def request_expects_web_citations(request_text: str, metadata: dict[str, Any] | None = None) -> bool:
+    """True when the host asked for web-backed sources / citations."""
+    meta = metadata or {}
+    flag = str(meta.get("require_web_search") or meta.get("require_web_citations") or "").strip()
+    if flag.lower() in {"1", "true", "yes", "on"}:
+        return True
+    text = (request_text or "").lower()
+    return any(hint in text for hint in _WEB_CITATION_HINTS)
+
+
+def validate_web_search_used(
+    *,
+    expected: bool,
+    connector_enabled: bool,
+    invocation_count: int,
+    connector_id: str = "tavily_web_search",
+) -> ValidatorResult | None:
+    """Fail when web citations were requested but the search connector never ran.
+
+    Skips when the request did not ask for web sources, or when the connector is
+    disabled (research then cannot search even if the model invents URLs).
+    """
+    if not expected or not connector_enabled:
+        return None
+    if invocation_count >= 1:
+        return ValidatorResult(
+            validator_id="web_search_used",
+            status="pass",
+            message="ok",
+            details={"connector_id": connector_id, "invocation_count": invocation_count},
+        )
+    return ValidatorResult(
+        validator_id="web_search_used",
+        status="fail",
+        message=(
+            "Request asked for web citations/sources but "
+            f"{connector_id!r} was never invoked (no connector.invoked events). "
+            "Ensure TAVILY_API_KEY is set and research tasks call web_search."
+        ),
+        details={"connector_id": connector_id, "invocation_count": 0},
     )
 
 

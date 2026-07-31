@@ -7,10 +7,11 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from product_factory.domain.budgets import RunBudget
-from product_factory.domain.runs import RunRequest
+from product_factory.domain.budgets import run_budget_from_policy
+from product_factory.domain.runs import ArtifactOverride, RunRequest
 from product_factory.host.protocol import HostResponse
 from product_factory.host.service import HostService
+from product_factory.workflows.artifacts import ArtifactOverrideError, normalize_overrides
 
 TOOL_NAMES = (
     "pf_submit",
@@ -22,6 +23,7 @@ TOOL_NAMES = (
     "pf_cancel",
     "pf_export",
     "pf_materialize",
+    "pf_materialize_all",
 )
 
 _WORKFLOW_VALUES = {
@@ -30,6 +32,7 @@ _WORKFLOW_VALUES = {
     "code_change",
     "repository_change",
     "repository_investigation",
+    "quality_gate",
 }
 
 
@@ -62,7 +65,8 @@ def tool_schemas() -> list[dict[str, Any]]:
                         "type": "string",
                         "description": (
                             "Workflow pack id: repository_investigation, "
-                            "technical_plan, repository_change, code_change, architecture"
+                            "technical_plan, quality_gate, repository_change, "
+                            "code_change, architecture"
                         ),
                         "default": "code_change",
                     },
@@ -79,6 +83,23 @@ def tool_schemas() -> list[dict[str, Any]]:
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Validation command ids to require",
+                    },
+                    "artifact_overrides": {
+                        "type": "object",
+                        "description": (
+                            "Name deliverables per pack role, e.g. "
+                            '{"architecture_document": '
+                            '{"dest_path": "docs/integration_testing_architecture.md"}}. '
+                            "A dest_path alone also renames the produced artifact."
+                        ),
+                        "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                                "logical_name": {"type": "string"},
+                                "dest_path": {"type": "string"},
+                            },
+                            "additionalProperties": False,
+                        },
                     },
                     "mock": {
                         "type": "boolean",
@@ -222,6 +243,31 @@ def tool_schemas() -> list[dict[str, Any]]:
                 "required": ["run_id", "artifact", "dest_path"],
             },
         },
+        {
+            "name": "pf_materialize_all",
+            "description": (
+                "Land every deliverable of a run at its suggested destination from "
+                "the run's artifact_land_map (see pf_inspect). Requires the same "
+                "operator confirmation as pf_materialize; nothing lands implicitly."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "string"},
+                    "roles": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": ("Limit to these deliverable roles (default: all landable)"),
+                    },
+                    "overwrite": {
+                        "type": "boolean",
+                        "description": "Replace existing destination files",
+                        "default": False,
+                    },
+                },
+                "required": ["run_id"],
+            },
+        },
     ]
 
 
@@ -243,12 +289,22 @@ def pf_submit(service: HostService, arguments: dict[str, Any]) -> dict[str, Any]
     if repo_raw:
         repository_path = Path(str(repo_raw)).expanduser().resolve()
 
-    budget_usd = float(arguments.get("budget_usd") if arguments.get("budget_usd") is not None else 3.0)
+    budget_raw = arguments.get("budget_usd")
+    budget_usd = 3.0 if budget_raw is None else float(budget_raw)
     validation_commands = arguments.get("validation_commands") or []
     if not isinstance(validation_commands, list):
         return _failure("invalid_arguments", "validation_commands must be a list of strings")
     mock = bool(arguments.get("mock", False))
     profile = str(arguments.get("profile") or "local-target")
+
+    raw_overrides = arguments.get("artifact_overrides") or {}
+    try:
+        artifact_overrides = {
+            role: ArtifactOverride.model_validate(spec)
+            for role, spec in normalize_overrides(raw_overrides).items()
+        }
+    except (ArtifactOverrideError, ValueError) as exc:
+        return _failure("invalid_artifact_override", str(exc))
 
     run_request = RunRequest(
         request_id=f"req-{uuid.uuid4().hex[:8]}",
@@ -257,7 +313,11 @@ def pf_submit(service: HostService, arguments: dict[str, Any]) -> dict[str, Any]
         repository_path=repository_path,
         model_profile_set=profile,
         validation_commands=[str(c) for c in validation_commands],
-        budget=RunBudget(max_cost_usd=Decimal(str(budget_usd))),
+        artifact_overrides=artifact_overrides,
+        budget=run_budget_from_policy(
+            max_cost_usd=Decimal(str(budget_usd)),
+            budgets=service.config.policies.budgets,
+        ),
     )
     return _as_json(
         service.submit(
@@ -354,6 +414,23 @@ def pf_materialize(service: HostService, arguments: dict[str, Any]) -> dict[str,
     )
 
 
+def pf_materialize_all(service: HostService, arguments: dict[str, Any]) -> dict[str, Any]:
+    run_id = arguments.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        return _failure("invalid_arguments", "run_id is required")
+    roles = arguments.get("roles") or []
+    if not isinstance(roles, list):
+        return _failure("invalid_arguments", "roles must be a list of strings")
+    overwrite = bool(arguments.get("overwrite", False))
+    return _as_json(
+        service.materialize_all(
+            run_id,
+            roles=[str(role) for role in roles] or None,
+            overwrite=overwrite,
+        )
+    )
+
+
 _HANDLERS = {
     "pf_submit": pf_submit,
     "pf_status": pf_status,
@@ -364,6 +441,7 @@ _HANDLERS = {
     "pf_cancel": pf_cancel,
     "pf_export": pf_export,
     "pf_materialize": pf_materialize,
+    "pf_materialize_all": pf_materialize_all,
 }
 
 

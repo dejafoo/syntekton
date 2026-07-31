@@ -100,12 +100,9 @@ def run_deterministic_checks(
         )
         results.append(validate_secrets(artifact.artifact_text))
     if case.workflow_type == "code_change":
-        is_diff = (
-            artifact.artifact_kind == "patch"
-            and (
-                artifact_text.startswith("diff --git ")
-                or (artifact_text.startswith("--- ") and "\n+++ " in artifact_text)
-            )
+        is_diff = artifact.artifact_kind == "patch" and (
+            artifact_text.startswith("diff --git ")
+            or (artifact_text.startswith("--- ") and "\n+++ " in artifact_text)
         )
         results.append(
             ValidatorResult(
@@ -271,9 +268,7 @@ def merge_scores(
         deterministic_results=det_results,
         artifact_produced=bool(artifact.artifact_text.strip()),
         patch_applies=patch_result.status == "pass" if patch_result else None,
-        behavioral_pass=(
-            all(r.status == "pass" for r in smoke_results) if smoke_results else None
-        ),
+        behavioral_pass=(all(r.status == "pass" for r in smoke_results) if smoke_results else None),
         judge_overall=overall,
         dimension_scores=dims,
         normalized_quality=normalized if det_pass else min(normalized, 0.2),

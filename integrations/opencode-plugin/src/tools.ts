@@ -7,16 +7,32 @@
  * this module never has to import `@opencode-ai/plugin` at load time.
  */
 
-import type { MaterializeInput, PfClient, PfResponse } from "./pf-client.js";
+import type {
+  ArtifactOverride,
+  LandMapEntry,
+  MaterializeInput,
+  PfClient,
+  PfResponse,
+} from "./pf-client.js";
+import { landMapFrom } from "./pf-client.js";
 
 /** Workflows that end in a proposed patch → land via `approve(apply=true)`. */
 export const PATCH_WORKFLOWS = new Set(["code_change", "repository_change"]);
 
-/** Default artifact + destination for doc/report style workflows. */
+/**
+ * Last-resort artifact + destination per workflow.
+ *
+ * Only used when a run's `artifact_land_map` is unavailable (e.g. a host CLI
+ * older than P4.A). The land map from `pf_inspect` is always preferred, so a run
+ * that asked for `integration_testing_architecture.md` lands under that name.
+ */
 export const MATERIALIZE_DEFAULTS: Record<string, { artifact: string; dest: string }> = {
   technical_plan: { artifact: "ARCHITECTURE.md", dest: "docs/ARCHITECTURE.md" },
   architecture: { artifact: "ARCHITECTURE.md", dest: "docs/ARCHITECTURE.md" },
   repository_investigation: { artifact: "EVIDENCE_REPORT.md", dest: "docs/EVIDENCE_REPORT.md" },
+  // A quality run has three deliverables; without a land map only the primary
+  // report can be placed, so `pf_merge` lands that and reports what it skipped.
+  quality_gate: { artifact: "QUALITY_FINDINGS.md", dest: "docs/QUALITY_FINDINGS.md" },
 };
 
 const AWAITING = "awaiting_approval";
@@ -62,6 +78,12 @@ export interface PfRunArgs {
   repository_path?: string;
   budget_usd?: number;
   validation_commands?: string[];
+  /**
+   * Deliverable naming per pack role, e.g.
+   * `{"architecture_document": "docs/integration_testing_architecture.md"}`.
+   * A bare string is treated as the destination path.
+   */
+  artifact_overrides?: Record<string, string | ArtifactOverride>;
 }
 
 export interface PfWaitArgs {
@@ -77,10 +99,12 @@ export interface PfMergeArgs {
   run_id: string;
   /** Override the detected workflow (patch vs doc/report). */
   workflow?: string;
-  /** Artifact logical name for doc/report materialize (defaults per workflow). */
+  /** Artifact logical name; overrides the land map for a single-file merge. */
   artifact?: string;
-  /** Destination path under the run repository (defaults per workflow). */
+  /** Destination path under the run repository; overrides the land map. */
   dest_path?: string;
+  /** Limit a multi-deliverable merge to these land-map roles. */
+  roles?: string[];
   overwrite?: boolean;
 }
 
@@ -122,6 +146,25 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 // Handlers (pure — unit tested directly)
 // ---------------------------------------------------------------------------
 
+/** Accept `{role: "docs/x.md"}` as well as `{role: {destPath: "docs/x.md"}}`. */
+export function normalizeArtifactOverrides(
+  raw: Record<string, string | ArtifactOverride> | undefined,
+): Record<string, ArtifactOverride> | undefined {
+  if (!raw) return undefined;
+  const out: Record<string, ArtifactOverride> = {};
+  for (const [role, value] of Object.entries(raw)) {
+    if (typeof value === "string") {
+      if (value.trim()) out[role] = { destPath: value.trim() };
+      continue;
+    }
+    const override: ArtifactOverride = {};
+    if (value?.destPath?.trim()) override.destPath = value.destPath.trim();
+    if (value?.logicalName?.trim()) override.logicalName = value.logicalName.trim();
+    if (override.destPath || override.logicalName) out[role] = override;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export async function pfRun(deps: PfToolDeps, ctx: PfToolContext, args: PfRunArgs): Promise<string> {
   const repositoryPath = args.repository_path ?? ctx.worktree ?? ctx.directory;
   const res = await deps.client.submit({
@@ -130,6 +173,7 @@ export async function pfRun(deps: PfToolDeps, ctx: PfToolContext, args: PfRunArg
     repositoryPath,
     budgetUsd: args.budget_usd ?? deps.defaultBudgetUsd,
     validationCommands: args.validation_commands,
+    artifactOverrides: normalizeArtifactOverrides(args.artifact_overrides),
   });
   return summarize(res);
 }
@@ -173,10 +217,28 @@ export async function pfMerge(deps: PfToolDeps, ctx: PfToolContext, args: PfMerg
   const workflow = workflowOf(status, args.workflow);
   const isPatch = workflow ? PATCH_WORKFLOWS.has(workflow) : false;
 
+  // A single explicit artifact/dest bypasses the land map; otherwise the run's
+  // own land map decides which files land where.
+  const singleFile = Boolean(args.artifact || args.dest_path);
+  let landMap: LandMapEntry[] = [];
+  if (!isPatch && !singleFile) {
+    const inspected = await deps.client.inspect(args.run_id);
+    if (inspected.ok) {
+      landMap = landMapFrom(inspected).filter(
+        (entry) => entry.landable !== false && (!args.roles || args.roles.includes(entry.role)),
+      );
+    }
+  }
+
   const confirmed = await confirmMerge(ctx, {
     runId: args.run_id,
     workflow,
-    action: isPatch ? "approve+apply patch" : "approve + materialize document",
+    action: isPatch
+      ? "approve+apply patch"
+      : landMap.length > 0
+        ? `approve + land ${landMap.map((e) => e.suggested_dest_path).join(", ")}`
+        : "approve + materialize document",
+    destinations: landMap.map((entry) => entry.suggested_dest_path),
   });
   if (!confirmed) {
     return summarize({
@@ -198,10 +260,19 @@ export async function pfMerge(deps: PfToolDeps, ctx: PfToolContext, args: PfMerg
     return summarize(approved);
   }
 
-  // Doc/report workflow: approve if still awaiting, then materialize.
+  // Doc/report workflow: approve if still awaiting, then land.
   if (status.status === AWAITING) {
     const approved = await deps.client.approve(args.run_id, { apply: false });
     if (!approved.ok) return summarize(approved);
+  }
+
+  // One confirmation covers the whole land map; the host still audits per file.
+  if (landMap.length > 0) {
+    const landed = await deps.client.materializeAll(args.run_id, {
+      roles: args.roles,
+      overwrite: args.overwrite ?? false,
+    });
+    return summarize(landed);
   }
 
   const preset = workflow ? MATERIALIZE_DEFAULTS[workflow] : undefined;
@@ -224,15 +295,20 @@ export async function pfDecline(deps: PfToolDeps, _ctx: PfToolContext, args: PfD
 
 async function confirmMerge(
   ctx: PfToolContext,
-  info: { runId: string; workflow?: string; action: string },
+  info: { runId: string; workflow?: string; action: string; destinations?: string[] },
 ): Promise<boolean> {
   if (typeof ctx.ask !== "function") return false;
   try {
     await ctx.ask({
       permission: "pf_merge",
-      patterns: [info.runId],
+      patterns: [info.runId, ...(info.destinations ?? [])],
       always: [],
-      metadata: { run_id: info.runId, workflow: info.workflow, action: info.action },
+      metadata: {
+        run_id: info.runId,
+        workflow: info.workflow,
+        action: info.action,
+        destinations: info.destinations,
+      },
     });
     return true;
   } catch {
@@ -257,6 +333,7 @@ export type ToolHelper = {
     boolean: () => any;
     array: (inner: unknown) => any;
     enum: (values: string[]) => any;
+    record: (key: unknown, value: unknown) => any;
   };
 };
 
@@ -273,10 +350,21 @@ export function createPfTools(tool: ToolHelper, deps: PfToolDeps): Record<string
         workflow: s
           .string()
           .optional()
-          .describe("Workflow pack id (code_change, repository_change, technical_plan, repository_investigation)."),
+          .describe(
+            "Workflow pack id (code_change, repository_change, technical_plan, " +
+              "repository_investigation, quality_gate).",
+          ),
         repository_path: s.string().optional().describe("Target repo; defaults to the OpenCode workspace root."),
         budget_usd: s.number().optional().describe("Cost ceiling in USD."),
         validation_commands: s.array(s.string()).optional().describe("Validation command ids to run."),
+        artifact_overrides: s
+          .record(s.string(), s.string())
+          .optional()
+          .describe(
+            "Name the deliverables by pack role, e.g. " +
+              '{"architecture_document": "docs/integration_testing_architecture.md"}. ' +
+              "Use this whenever the user asks for a scoped document instead of the generic default.",
+          ),
       },
       execute: (args: PfRunArgs, context: PfToolContext) => pfRun(deps, context, args),
     }),
@@ -297,14 +385,19 @@ export function createPfTools(tool: ToolHelper, deps: PfToolDeps): Record<string
     pf_merge: tool({
       description:
         "Land a run's results into the workspace. ALWAYS asks the operator for confirmation first. " +
-        "Patch workflows are approved+applied; doc/report workflows are approved (if needed) and materialized " +
-        "to a repo path (defaults docs/ARCHITECTURE.md or docs/EVIDENCE_REPORT.md).",
+        "Patch workflows are approved+applied; doc/report workflows are approved (if needed) and every " +
+        "deliverable in the run's artifact_land_map is landed at its suggested path (see pf_review). " +
+        "Pass artifact/dest_path only to override the land map for a single file.",
       args: {
         run_id: s.string().describe("Run id to merge."),
         workflow: s.string().optional().describe("Override detected workflow (patch vs doc/report)."),
-        artifact: s.string().optional().describe("Artifact logical name for doc/report materialize."),
-        dest_path: s.string().optional().describe("Destination path under the run repository."),
-        overwrite: s.boolean().optional().describe("Overwrite an existing destination file."),
+        artifact: s.string().optional().describe("Artifact logical name for a single-file merge."),
+        dest_path: s.string().optional().describe("Destination path for a single-file merge."),
+        roles: s
+          .array(s.string())
+          .optional()
+          .describe("Limit the merge to these land-map roles (default: every landable deliverable)."),
+        overwrite: s.boolean().optional().describe("Overwrite existing destination files."),
       },
       execute: (args: PfMergeArgs, context: PfToolContext) => pfMerge(deps, context, args),
     }),

@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from product_factory.connectors.broker import ConnectorBroker
 from product_factory.domain.errors import ToolAuthorizationError
 from product_factory.domain.tools import CapabilityGrant, ToolCallRecord
 from product_factory.orchestration.budget_ledger import BudgetLedger
@@ -34,6 +35,8 @@ class ToolBroker:
         base_commit: str | None = None,
         observer: ToolObserver | None = None,
         ledger: BudgetLedger | None = None,
+        connectors: ConnectorBroker | None = None,
+        run_id: str = "",
     ) -> None:
         self.registry = registry
         self.artifact_store = artifact_store
@@ -46,6 +49,8 @@ class ToolBroker:
         self.history: list[ToolCallRecord] = []
         self.observer = observer
         self.ledger = ledger
+        self.connectors = connectors
+        self.run_id = run_id
 
     def set_grant(self, grant: CapabilityGrant) -> None:
         self.grants[grant.task_id] = grant
@@ -156,6 +161,16 @@ class ToolBroker:
             return self._write_artifact(arguments, grant.task_id, tool_call_id)
         if tool_name == "run_validation_command":
             return self._run_command(arguments)
+        if self.connectors is not None and self.connectors.handles(tool_name):
+            # The grant, max_calls, and budget checks in `execute` have already
+            # passed; connector policy is the additional gate for third parties.
+            return self.connectors.invoke(
+                tool_name=tool_name,
+                arguments=arguments,
+                task_id=grant.task_id,
+                tool_call_id=tool_call_id,
+                run_id=self.run_id or grant.run_id,
+            )
         raise ToolAuthorizationError(f"No implementation for tool {tool_name}")
 
     def _list_files(self, arguments: dict[str, Any], grant: CapabilityGrant) -> dict[str, Any]:

@@ -386,12 +386,13 @@ Exit criteria:
 > [`examples/opencode/`](../examples/opencode/). Live OpenRouter Stage B smoke
 > skipped (mock gate sufficient).
 >
-> **Follow-on (Phase 3.G, in progress):** vendor-neutral `materialize` host
-> action (landed) plus optional OpenCode plugin packaging so the happy path
-> needs no slash commands — tracker
-> [`docs/next-work-packages-phase3g.md`](next-work-packages-phase3g.md). Plugin
-> packaging counts as complete only when the 3.G exit criteria are met; MCP and
-> the host protocol stay the source of truth.
+> **Follow-on (Phase 3.G, exit criteria met):** vendor-neutral `materialize`
+> host action (CLI + MCP + control API) plus optional OpenCode plugin packaging
+> so the happy path needs no slash commands — tracker
+> [`docs/next-work-packages-phase3g.md`](next-work-packages-phase3g.md), plugin
+> at [`integrations/opencode-plugin/`](../integrations/opencode-plugin/). MCP
+> and `product-factory.host/v1` remain the source of truth; the plugin is thin
+> packaging over the host CLI.
 
 **Goal:** make Product Factory useful from an existing development CLI without
 becoming a competing CLI product.
@@ -419,6 +420,20 @@ Exit criteria:
   results without reading SQLite or internal run directories.
 
 ### Phase 4 — Controlled connector expansion and quality workflows
+
+> **Status: exit criteria met.** Tracker
+> [`docs/next-work-packages-phase4.md`](next-work-packages-phase4.md). Connector
+> framework behind `ToolBroker` with typed errors and per-call audit; read-only
+> Tavily `web_search` and `@modelcontextprotocol/server-filesystem` connectors,
+> both disabled until an operator enables them in
+> [`config/connectors.yaml`](../config/connectors.yaml); `quality_gate` pack
+> emitting three documents. Also closed the deliverable-naming gap: an
+> artifact land map splits stable role keys from land filenames, so a host can
+> request `docs/integration_testing_architecture.md` and land it via
+> `materialize-all`. Connector suites (**133 passed, 2 skipped**) and the
+> `quality_gate` graph (**7 passed**) are offline and always-on; live Tavily and
+> MCP smokes are env-gated. OpenCode UAT passed on `opencode 1.18.4` for named
+> and multi-document landing.
 
 **Goal:** add useful external information and quality work without weakening
 the authority model.

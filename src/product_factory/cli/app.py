@@ -17,7 +17,7 @@ from rich.table import Table
 from product_factory import __version__
 from product_factory.config.loader import PoliciesConfig, load_config
 from product_factory.domain import export_json_schemas
-from product_factory.domain.budgets import RunBudget
+from product_factory.domain.budgets import run_budget_from_policy
 from product_factory.domain.errors import ProductFactoryError
 from product_factory.domain.runs import RunRequest
 from product_factory.gateway.mock import MockGateway
@@ -146,6 +146,7 @@ def plan_cmd(
     from product_factory.orchestration.coordinator import (
         default_code_change_plan,
         default_investigation_plan,
+        default_quality_gate_plan,
         default_technical_plan,
     )
     from product_factory.planning.compiler import compile_plan
@@ -158,6 +159,8 @@ def plan_cmd(
         proposal = default_technical_plan(text)
     elif workflow == "repository_investigation":
         proposal = default_investigation_plan(text)
+    elif workflow == "quality_gate":
+        proposal = default_quality_gate_plan(text)
     else:
         proposal = default_code_change_plan(text)
     result = compile_plan(proposal)
@@ -225,7 +228,7 @@ def run_cmd(
         gateway=gateway,
         use_deterministic_planner=mock or isinstance(gateway, MockGateway),
     )
-    budget_kwargs: dict[str, Any] = {"max_cost_usd": Decimal(str(budget_usd))}
+    budget_kwargs: dict[str, Any] = {}
     if max_wall_clock_seconds is not None:
         budget_kwargs["max_wall_clock_seconds"] = max_wall_clock_seconds
     run_request = RunRequest(
@@ -235,7 +238,11 @@ def run_cmd(
         repository_path=repo.resolve() if repo else None,
         model_profile_set=profile,
         validation_commands=_parse_validation_commands(validation_command, validation_commands),
-        budget=RunBudget(**budget_kwargs),
+        budget=run_budget_from_policy(
+            max_cost_usd=Decimal(str(budget_usd)),
+            budgets=config.policies.budgets,
+            **budget_kwargs,
+        ),
     )
     try:
         manifest = coord.run(run_request)
@@ -407,9 +414,7 @@ def bench_run_cmd(
     oracle_budget_usd: float = typer.Option(5.0, "--oracle-budget-usd"),
     mock: bool = typer.Option(True, "--mock/--live"),
     seeds: int = typer.Option(1, "--seeds", min=1, help="Independent runs per case/subject"),
-    case_ids: str | None = typer.Option(
-        None, "--case-ids", help="Comma-separated exact case ids"
-    ),
+    case_ids: str | None = typer.Option(None, "--case-ids", help="Comma-separated exact case ids"),
     resume: str | None = typer.Option(
         None,
         "--resume",
@@ -495,7 +500,9 @@ def bench_lessons_cmd(run_id: str = typer.Argument(..., help="Bench id")) -> Non
 @lessons_app.command("list")
 def lessons_list_cmd(
     bench: str = typer.Option(..., "--bench", help="Bench id"),
-    orch_only: bool = typer.Option(True, "--orch-only/--all", help="Default: actionable orch subjects"),
+    orch_only: bool = typer.Option(
+        True, "--orch-only/--all", help="Default: actionable orch subjects"
+    ),
     status: str | None = typer.Option(None, "--status", help="proposed|accepted|rejected|promoted"),
     theme: str | None = typer.Option(None, "--theme"),
 ) -> None:
@@ -579,9 +586,7 @@ def lessons_reject_cmd(
     if not lesson_id:
         console.print("[red]lesson id or --filter required[/red]")
         raise typer.Exit(2)
-    lesson = update_lesson_status(
-        pf_root, lesson_id, status="rejected", note=note, bench_id=bench
-    )
+    lesson = update_lesson_status(pf_root, lesson_id, status="rejected", note=note, bench_id=bench)
     console.print(f"[yellow]rejected[/yellow] {lesson.id}")
 
 
@@ -638,9 +643,7 @@ def _serve_api(
         except ProductFactoryError:
             root = Path(".product-factory")
     origins = [o.strip() for o in cors.split(",") if o.strip()] or None
-    console.print(
-        f"Control + observability API on http://{host}:{port} (data={root.resolve()})"
-    )
+    console.print(f"Control + observability API on http://{host}:{port} (data={root.resolve()})")
     serve(root, host=host, port=port, cors_origins=origins)
 
 

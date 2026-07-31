@@ -20,7 +20,11 @@ from typing import Any
 import httpx
 
 from product_factory.config.loader import AppConfig
-from product_factory.domain.errors import ProductFactoryError, RunCancelledError
+from product_factory.domain.errors import (
+    ConfigurationError,
+    ProductFactoryError,
+    RunCancelledError,
+)
 from product_factory.domain.runs import RunManifest, RunRequest
 from product_factory.gateway.base import ModelGateway
 from product_factory.gateway.mock import MockGateway
@@ -30,6 +34,8 @@ from product_factory.observability.contracts import EventSeverity
 from product_factory.observability.query import ObservabilityQueryService
 from product_factory.observability.recorder import TelemetryRecorder
 from product_factory.orchestration.coordinator import RunCoordinator
+from product_factory.workflows.artifacts import ArtifactLandMap
+from product_factory.workflows.registry import land_map_for_request
 
 DEFAULT_OBSERVE_URL = "http://127.0.0.1:8765"
 TERMINAL_STATUSES = frozenset(
@@ -46,6 +52,9 @@ MATERIALIZE_ALLOWED_STATUSES = frozenset({"awaiting_approval", "completed"})
 KNOWN_MATERIALIZE_OUTPUTS = (
     "ARCHITECTURE.md",
     "EVIDENCE_REPORT.md",
+    "TEST_PLAN.md",
+    "QUALITY_FINDINGS.md",
+    "SECURITY_EVIDENCE.md",
     "proposed.patch",
     "plan.json",
     "run-summary.md",
@@ -74,9 +83,7 @@ class HostService:
             gateway, MockGateway
         )
         self.observe_base_url = (
-            observe_base_url
-            or os.environ.get("PRODUCT_FACTORY_OBSERVE_URL")
-            or DEFAULT_OBSERVE_URL
+            observe_base_url or os.environ.get("PRODUCT_FACTORY_OBSERVE_URL") or DEFAULT_OBSERVE_URL
         ).rstrip("/")
         self.coord = RunCoordinator(
             config=config,
@@ -90,8 +97,7 @@ class HostService:
     def subscription_for(self, run_id: str, *, after_seq: int = 0) -> HostSubscription:
         return HostSubscription(
             sse_url=(
-                f"{self.observe_base_url}/api/v1/runs/{run_id}/events/stream"
-                f"?after_seq={after_seq}"
+                f"{self.observe_base_url}/api/v1/runs/{run_id}/events/stream?after_seq={after_seq}"
             ),
             cli_tail=f"product-factory host tail {run_id}",
         )
@@ -105,6 +111,17 @@ class HostService:
         inline_thread: bool = False,
     ) -> HostResponse:
         """Queue a run and start a background worker; return immediately."""
+        # Reject bad artifact overrides before a run id exists, so a typo never
+        # costs a run and never silently lands the pack default.
+        try:
+            land_map = land_map_for_request(request)
+        except ConfigurationError as exc:
+            return HostResponse.failure(
+                code="invalid_artifact_override",
+                message=exc.message,
+                details=exc.details,
+            )
+
         run_id = f"run-{uuid.uuid4().hex[:12]}"
         run_dir = self.pf_root / "runs" / run_id
         for sub in (
@@ -157,7 +174,11 @@ class HostService:
             run_id=run_id,
             status="queued",
             subscription=self.subscription_for(run_id),
-            data={"request_id": request.request_id, "workflow_type": request.workflow_type},
+            data={
+                "request_id": request.request_id,
+                "workflow_type": request.workflow_type,
+                "artifact_land_map": land_map.as_payload(),
+            },
         )
 
     def _safe_worker(self, *, run_id: str) -> None:
@@ -300,6 +321,7 @@ class HostService:
                 "plan": plan.model_dump(mode="json") if plan else None,
                 "validations": validations,
                 "approval": self._approval_record(run_id),
+                "artifact_land_map": self.land_map(run_id).as_payload(),
             },
         )
 
@@ -313,6 +335,7 @@ class HostService:
             run_id=run_id,
             status=row["status"],
             artifacts=self._artifact_dicts(run_id),
+            data={"artifact_land_map": self.land_map(run_id).as_payload()},
         )
 
     def approve(self, run_id: str, *, apply: bool = False) -> HostResponse:
@@ -404,9 +427,7 @@ class HostService:
                 as_zip=as_zip,
             )
         except FileNotFoundError as exc:
-            return HostResponse.failure(
-                code="not_found", message=str(exc), run_id=run_id
-            )
+            return HostResponse.failure(code="not_found", message=str(exc), run_id=run_id)
         except OSError as exc:
             return HostResponse.failure(
                 code="export_failed",
@@ -443,8 +464,7 @@ class HostService:
             return HostResponse.failure(
                 code="invalid_state",
                 message=(
-                    f"materialize requires status awaiting_approval or completed; "
-                    f"got {status!r}"
+                    f"materialize requires status awaiting_approval or completed; got {status!r}"
                 ),
                 run_id=run_id,
                 status=status,
@@ -549,19 +569,100 @@ class HostService:
             },
         )
 
+    def materialize_all(
+        self,
+        run_id: str,
+        *,
+        overwrite: bool = False,
+        roles: list[str] | None = None,
+    ) -> HostResponse:
+        """Land every resolved land-map deliverable that the run produced.
+
+        Each file goes through `materialize`, so path checks and the
+        `artifact.materialized` audit event apply per file. One operator
+        confirmation upstream covers the batch; nothing lands implicitly.
+        """
+        row = self.coord.db.get_run(run_id)
+        if not row:
+            return HostResponse.failure(
+                code="not_found", message=f"Unknown run {run_id}", run_id=run_id
+            )
+        land_map = self.land_map(run_id)
+        wanted = set(roles or [])
+        unknown = wanted - {entry.role for entry in land_map.entries}
+        if unknown:
+            return HostResponse.failure(
+                code="invalid_artifact_override",
+                message=f"Unknown artifact roles: {sorted(unknown)}",
+                run_id=run_id,
+                status=row["status"],
+                details={"known_roles": [entry.role for entry in land_map.entries]},
+            )
+
+        landed: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        failures: list[dict[str, Any]] = []
+        for entry in land_map.landable():
+            if wanted and entry.role not in wanted:
+                continue
+            if self._resolve_materialize_source(run_id, entry.logical_name) is None:
+                skipped.append(
+                    {
+                        "role": entry.role,
+                        "artifact": entry.logical_name,
+                        "reason": "not_produced",
+                    }
+                )
+                continue
+            response = self.materialize(
+                run_id,
+                artifact=entry.logical_name,
+                dest_path=entry.dest_path,
+                overwrite=overwrite,
+            )
+            if response.ok:
+                landed.append({"role": entry.role, **(response.data or {})})
+            else:
+                failures.append(
+                    {
+                        "role": entry.role,
+                        "artifact": entry.logical_name,
+                        "code": response.error.code if response.error else "unknown",
+                        "message": response.error.message if response.error else "",
+                    }
+                )
+
+        current = self.coord.db.get_run(run_id) or row
+        status = current["status"]
+        if failures and not landed:
+            first = failures[0]
+            return HostResponse.failure(
+                code=str(first["code"]),
+                message=str(first["message"]),
+                run_id=run_id,
+                status=status,
+                details={"failures": failures, "skipped": skipped},
+            )
+        return HostResponse.success(
+            run_id=run_id,
+            status=status,
+            artifacts=self._artifact_dicts(run_id),
+            data={
+                "landed": landed,
+                "skipped": skipped,
+                "failures": failures,
+                "artifact_land_map": land_map.as_payload(),
+            },
+        )
+
     def _resolve_materialize_dest(self, repo_root: Path, dest_path: str | Path) -> Path:
         raw = Path(dest_path).expanduser()
         candidate = raw.resolve() if raw.is_absolute() else (repo_root / raw).resolve()
         if not candidate.is_relative_to(repo_root):
-            raise ValueError(
-                f"Destination escapes repository_path: {dest_path} "
-                f"(repo={repo_root})"
-            )
+            raise ValueError(f"Destination escapes repository_path: {dest_path} (repo={repo_root})")
         return candidate
 
-    def _resolve_materialize_source(
-        self, run_id: str, artifact: str
-    ) -> dict[str, Any] | None:
+    def _resolve_materialize_source(self, run_id: str, artifact: str) -> dict[str, Any] | None:
         """Locate a materializable artifact by logical name or sha256."""
         run_dir = self.pf_root / "runs" / run_id
         output_dir = run_dir / "output"
@@ -631,6 +732,7 @@ class HostService:
         from product_factory.orchestration.coordinator import (
             default_code_change_plan,
             default_investigation_plan,
+            default_quality_gate_plan,
             default_technical_plan,
         )
         from product_factory.planning.compiler import compile_plan
@@ -639,6 +741,8 @@ class HostService:
             proposal = default_technical_plan(request_text)
         elif workflow_type == "repository_investigation":
             proposal = default_investigation_plan(request_text)
+        elif workflow_type == "quality_gate":
+            proposal = default_quality_gate_plan(request_text)
         else:
             proposal = default_code_change_plan(request_text)
         result = compile_plan(proposal)
@@ -739,9 +843,7 @@ class HostService:
         url = f"{self.observe_base_url}/api/v1/runs/{run_id}/events"
         try:
             with httpx.Client(timeout=0.75) as client:
-                response = client.get(
-                    url, params={"after_seq": after_seq, "limit": limit}
-                )
+                response = client.get(url, params={"after_seq": after_seq, "limit": limit})
                 if response.status_code != 200:
                     return None
                 payload = response.json()
@@ -793,17 +895,27 @@ class HostService:
         return {
             "objective": plan.get("objective"),
             "task_count": len(tasks) if isinstance(tasks, list) else 0,
-            "task_ids": [
-                t.get("id") for t in tasks if isinstance(t, dict) and t.get("id")
-            ]
+            "task_ids": [t.get("id") for t in tasks if isinstance(t, dict) and t.get("id")]
             if isinstance(tasks, list)
             else [],
         }
 
+    def land_map(self, run_id: str) -> ArtifactLandMap:
+        """Recover the resolved deliverable land map for a submitted run."""
+        request = self._request_dict(run_id)
+        if not request:
+            return ArtifactLandMap()
+        try:
+            return land_map_for_request(RunRequest.model_validate(request))
+        except Exception:
+            return ArtifactLandMap()
+
     def _artifact_dicts(self, run_id: str) -> list[dict[str, Any]]:
         views = self.query.list_artifacts_for_run(run_id)
         out = [v.model_dump(mode="json") for v in views]
-        # Also surface well-known output files even before DB artifact rows.
+        land_map = self.land_map(run_id)
+        # Also surface well-known output files even before DB artifact rows,
+        # including any name the run's land map resolved to.
         run_dir = self.pf_root / "runs" / run_id / "output"
         candidates = [
             run_dir / "plan.json",
@@ -814,7 +926,12 @@ class HostService:
             run_dir / "approval.json",
             self.pf_root / "runs" / run_id / "run-manifest.json",
         ]
+        candidates.extend(run_dir / entry.logical_name for entry in land_map.entries)
+        seen: set[Path] = set()
         for path in candidates:
+            if path in seen:
+                continue
+            seen.add(path)
             name = path.name
             if path.is_file() and not any(a.get("logical_name") == name for a in out):
                 out.append(
@@ -825,6 +942,14 @@ class HostService:
                         "trust_level": "generated",
                     }
                 )
+        for entry in out:
+            role = land_map.role_for_logical_name(str(entry.get("logical_name") or ""))
+            if role is None:
+                continue
+            resolved = land_map.by_role(role)
+            entry["role"] = role
+            if resolved is not None and resolved.landable:
+                entry["suggested_dest_path"] = resolved.dest_path
         return out
 
     def _approval_record(self, run_id: str) -> dict[str, Any] | None:

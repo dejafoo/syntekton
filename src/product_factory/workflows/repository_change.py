@@ -8,6 +8,7 @@ remains a one-release alias resolved by `workflows/registry.py`.
 from __future__ import annotations
 
 from product_factory.domain.capabilities import CAPABILITIES
+from product_factory.workflows.artifacts import ROLE_PROPOSED_PATCH, ArtifactLandSpec
 from product_factory.workflows.base import WorkflowPack
 
 REPOSITORY_CHANGE_PACK = WorkflowPack(
@@ -39,6 +40,18 @@ REPOSITORY_CHANGE_PACK = WorkflowPack(
     },
     skill_policy={"grant_enforcement": "fail_closed"},
     routing_defaults={"coding_worker_tier": "mid"},
+    artifacts=(
+        ArtifactLandSpec(
+            role=ROLE_PROPOSED_PATCH,
+            default_logical_name="proposed.patch",
+            default_dest_path="proposed.patch",
+            media_type="text/x-diff",
+            # Patches reach the repository through `approve --apply`, never by copy,
+            # and `apply_patch` reads the file back by path, so the name is fixed.
+            landable=False,
+            renamable=False,
+        ),
+    ),
     description=(
         "Bounded repository change with fixed plan, optional review, repair, and "
         "composition — behavior-frozen wrapper around the historical code_change workflow."

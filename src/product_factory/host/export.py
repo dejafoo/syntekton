@@ -9,8 +9,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from product_factory.domain.runs import RunRequest
 from product_factory.observability.redaction import redact_value
 from product_factory.persistence.database import Database
+from product_factory.workflows.registry import land_map_for_request
+
+
+def _land_map_names(row: dict[str, Any]) -> list[str]:
+    """Deliverable names this run resolved, so renamed docs still get exported."""
+    raw_request = row.get("request_json")
+    if not raw_request:
+        return []
+    try:
+        request = RunRequest.model_validate(json.loads(raw_request))
+        return [entry.logical_name for entry in land_map_for_request(request).entries]
+    except Exception:
+        return []
 
 
 def export_evidence_bundle(
@@ -61,6 +75,9 @@ def export_evidence_bundle(
     _copy_if_exists(output_dir / "proposed.patch", "proposed.patch")
     _copy_if_exists(output_dir / "ARCHITECTURE.md", "ARCHITECTURE.md")
     _copy_if_exists(output_dir / "EVIDENCE_REPORT.md", "EVIDENCE_REPORT.md")
+    for name in _land_map_names(row):
+        if name not in included:
+            _copy_if_exists(output_dir / name, name)
     _copy_if_exists(output_dir / "approval.json", "approval.json")
     _copy_if_exists(output_dir / "run-summary.md", "run-summary.md")
     _copy_if_exists(output_dir / "compiler-report.json", "compiler-report.json")

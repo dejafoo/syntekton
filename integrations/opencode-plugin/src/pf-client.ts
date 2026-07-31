@@ -29,6 +29,12 @@ export interface PfResponse {
   [key: string]: unknown;
 }
 
+/** Host-chosen name and/or destination for one pack deliverable role. */
+export interface ArtifactOverride {
+  logicalName?: string;
+  destPath?: string;
+}
+
 export interface SubmitInput {
   requestText: string;
   workflow?: string;
@@ -36,12 +42,30 @@ export interface SubmitInput {
   profile?: string;
   budgetUsd?: number;
   validationCommands?: string[];
+  /** Deliverable naming keyed by pack role, e.g. `architecture_document`. */
+  artifactOverrides?: Record<string, ArtifactOverride>;
 }
 
 export interface MaterializeInput {
   artifact: string;
   destPath: string;
   overwrite?: boolean;
+}
+
+export interface MaterializeAllInput {
+  roles?: string[];
+  overwrite?: boolean;
+}
+
+/** One entry of a run's resolved `artifact_land_map` (from `pf_inspect`). */
+export interface LandMapEntry {
+  role: string;
+  logical_name: string;
+  suggested_dest_path: string;
+  media_type?: string;
+  landable?: boolean;
+  renamable?: boolean;
+  required?: boolean;
 }
 
 /**
@@ -57,6 +81,21 @@ export interface PfClient {
   reject(runId: string): Promise<PfResponse>;
   cancel(runId: string): Promise<PfResponse>;
   materialize(runId: string, input: MaterializeInput): Promise<PfResponse>;
+  materializeAll(runId: string, input?: MaterializeAllInput): Promise<PfResponse>;
+}
+
+/** Read a run's resolved deliverable land map out of an inspect envelope. */
+export function landMapFrom(res: PfResponse): LandMapEntry[] {
+  const raw = res.data?.["artifact_land_map"];
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (entry): entry is LandMapEntry =>
+      typeof entry === "object" &&
+      entry !== null &&
+      typeof (entry as LandMapEntry).role === "string" &&
+      typeof (entry as LandMapEntry).logical_name === "string" &&
+      typeof (entry as LandMapEntry).suggested_dest_path === "string",
+  );
 }
 
 export interface CliPfClientOptions {
@@ -150,6 +189,10 @@ export class CliPfClient implements PfClient {
       if (input.profile) args.push("--profile", input.profile);
       if (typeof input.budgetUsd === "number") args.push("--budget-usd", String(input.budgetUsd));
       for (const cmd of input.validationCommands ?? []) args.push("--validation-command", cmd);
+      for (const [role, override] of Object.entries(input.artifactOverrides ?? {})) {
+        if (override.destPath) args.push("--artifact-override", `${role}=${override.destPath}`);
+        if (override.logicalName) args.push("--artifact-name", `${role}=${override.logicalName}`);
+      }
       if (this.mock) args.push("--mock");
       return await this.run(args);
     } finally {
@@ -185,6 +228,13 @@ export class CliPfClient implements PfClient {
 
   materialize(runId: string, input: MaterializeInput): Promise<PfResponse> {
     const args = ["materialize", runId, "--artifact", input.artifact, "--to", input.destPath];
+    if (input.overwrite) args.push("--overwrite");
+    return this.run(args);
+  }
+
+  materializeAll(runId: string, input: MaterializeAllInput = {}): Promise<PfResponse> {
+    const args = ["materialize-all", runId];
+    for (const role of input.roles ?? []) args.push("--role", role);
     if (input.overwrite) args.push("--overwrite");
     return this.run(args);
   }

@@ -38,14 +38,18 @@ Python **3.13** only (`requires-python = ">=3.13,<3.14"`). Dependency management
 ```text
 product_factory/
 ├── cli/              # Typer commands (run, plan, bench, observe, …)
-├── api/              # FastAPI observability server
+├── api/              # FastAPI observability server + HTTP control routes
+├── host/             # HostService + `host` CLI (product-factory.host/v1)
+├── host_mcp/         # stdio MCP server exposing host actions as pf_* tools
 ├── config/           # AppConfig loader (merges repo config/)
 ├── domain/           # Pydantic contracts (tasks, plans, findings, …)
 ├── gateway/          # ModelGateway + OpenRouter + Mock
 ├── planning/         # Planner prompts + plan compiler
 ├── orchestration/    # RunCoordinator, agent loop, repair, LangGraph skeleton
+├── workflows/        # Workflow packs + artifact land map (roles → land names)
 ├── context/          # Prompt package assembly & excerpt selection
 ├── tools/            # Tool registry, broker, path policies
+├── connectors/       # External tool adapters behind ToolBroker (web, MCP)
 ├── repositories/     # Worktrees, patches, snapshots
 ├── validation/       # Deterministic validators
 ├── scheduling/       # Ready-task selection & model profile pick
@@ -58,10 +62,11 @@ product_factory/
 ### Dependency direction (intended)
 
 ```text
-cli / api / evaluation
+cli / api / host / host_mcp / evaluation
         │
         ▼
-orchestration ──▶ planning, context, tools, repositories, validation, scheduling, skills
+orchestration ──▶ planning, workflows, context, tools, connectors,
+│                 repositories, validation, scheduling, skills
         │
         ▼
 gateway, persistence, observability
@@ -70,7 +75,7 @@ gateway, persistence, observability
 domain, config
 ```
 
-Prefer: **domain types have no I/O**; gateway/persistence are leaves; coordinator composes them. Avoid importing `evaluation` from runtime orchestration (bench calls coordinator, not the reverse).
+Prefer: **domain types have no I/O**; gateway/persistence are leaves; coordinator composes them. Connectors are reached only through `ToolBroker` — never imported by host or CLI surfaces. Avoid importing `evaluation` from runtime orchestration (bench calls coordinator, not the reverse).
 
 ---
 
@@ -129,8 +134,35 @@ Most feature work for “how a run behaves” lands in `coordinator.py` + `agent
 | File | Role |
 | --- | --- |
 | `registry.py` | Built-in tool catalogue |
-| `broker.py` | Sole executor (grants, dispatch, audit) |
+| `broker.py` | Sole executor (grants, dispatch, audit); routes connector tools to `ConnectorBroker` |
 | `policies.py` | Path allowlisting / resolve-under-root |
+
+### `connectors/`
+
+External adapters behind `ToolBroker`. Registration is not enablement — operators turn connectors on in `config/connectors.yaml`.
+
+| File | Role |
+| --- | --- |
+| `manifest.py` | `ConnectorManifest`, tool specs, egress / retention policy |
+| `registry.py` | Manifest + handler registration |
+| `broker.py` | Authorize, bound, audit, emit typed errors |
+| `policy.py` | Operator `ConnectorsConfig` (can only narrow) |
+| `tavily.py` | Read-only `web_search` (tool class `web_read`) |
+| `filesystem_mcp.py` | Read-only local filesystem MCP client |
+| `mcp_client.py` | Shell-less stdio JSON-RPC client for local MCP servers |
+| `defaults.py` | Built-in registry (Tavily + filesystem MCP, disabled by default) |
+| `errors.py` | `ConnectorPolicyDenied` / `EgressDenied` / `Unavailable` / `Timeout` |
+
+### `workflows/`
+
+Immutable workflow packs and the artifact land map (role → logical name → dest path).
+
+| File | Role |
+| --- | --- |
+| `base.py` | `WorkflowPack` (+ `artifacts` tuple, content hash) |
+| `artifacts.py` | `ArtifactLandSpec`, `ArtifactLandMap`, role constants, override resolution |
+| `registry.py` | Pack lookup; `land_map_for_request` |
+| `technical_plan.py` / `repository_investigation.py` / `repository_change.py` / `quality_gate.py` | Pack definitions |
 
 ### `repositories/`
 
@@ -150,7 +182,7 @@ Most feature work for “how a run behaves” lands in `coordinator.py` + `agent
 
 | File | Role |
 | --- | --- |
-| `pipeline.py` | Patch apply, path scope, secrets, architecture, behavioral commands |
+| `pipeline.py` | Patch apply, path scope, secrets, architecture, section checks, behavioral commands |
 
 ### `persistence/`
 
@@ -201,7 +233,8 @@ Skill packs keyed by domain (`coding/`, `architecture/`, `quality/`, `security/`
 | --- | --- |
 | `models.yaml` | Change model profiles, providers, pricing metadata |
 | `workflows.yaml` | Add workflow types / baseline validator lists |
-| `policies.yaml` | Register smoke commands, path prohibitions |
+| `policies.yaml` | Budgets, context packing, smoke commands, path prohibitions |
+| `connectors.yaml` | Enable / narrow connectors (egress, timeouts, write allowlist) |
 | `benchmarks.yaml` | Name ablations, default subjects, judge defaults |
 
 ---
@@ -212,7 +245,8 @@ Skill packs keyed by domain (`coding/`, `architecture/`, `quality/`, `security/`
 tests/
 ├── unit/           # Fast, isolated (agent loop, compiler, domain, …)
 ├── graph/          # Cross-package coordinator/broker flows (often git + tmp)
-├── contract/       # Schema / API / gateway contracts
+├── contract/       # Schema / API / gateway / connector audit contracts
+├── connectors/     # Connector policy, injection, Tavily, filesystem MCP
 ├── security/       # Tool authorization / path escape
 ├── integration/    # Opt-in live OpenRouter (PRODUCT_FACTORY_LIVE=1)
 ├── eval_cases/     # YAML cases for bench (not collected as pytest)

@@ -25,9 +25,7 @@ def _gateway_from_config(config: AppConfig, *, force_mock: bool = False) -> Mode
         }
         for name, p in config.models.profiles.items()
     }
-    if os.environ.get("OPENROUTER_API_KEY") and not os.environ.get(
-        "PRODUCT_FACTORY_FORCE_MOCK"
-    ):
+    if os.environ.get("OPENROUTER_API_KEY") and not os.environ.get("PRODUCT_FACTORY_FORCE_MOCK"):
         return OpenRouterGateway(profile_models=profiles)
     return MockGateway()
 
@@ -66,11 +64,8 @@ class ApiState:
                 config=config,
                 gateway=gateway,
                 data_dir=self.data_dir,
-                use_deterministic_planner=force_mock
-                or isinstance(gateway, MockGateway),
-                observe_base_url=observe_base_url
-                or self.observe_base_url
-                or None,
+                use_deterministic_planner=force_mock or isinstance(gateway, MockGateway),
+                observe_base_url=observe_base_url or self.observe_base_url or None,
             )
         service = self._hosts[force_mock]
         base = observe_base_url or self.observe_base_url

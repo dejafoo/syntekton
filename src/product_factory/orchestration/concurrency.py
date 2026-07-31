@@ -16,8 +16,8 @@ rest of the coordinator relies on.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, TypeVar
 
 from product_factory.domain.tasks import TaskSpec
 
@@ -32,8 +32,6 @@ ALWAYS_CONCURRENT_CAPABILITIES: frozenset[str] = frozenset(
 )
 
 _BROAD_PATTERNS: frozenset[str] = frozenset({"**/*", "**", "*"})
-
-T = TypeVar("T")
 
 
 def _patterns_overlap(a: list[str], b: list[str]) -> bool:
@@ -79,7 +77,7 @@ def partition_wave(tasks: list[TaskSpec]) -> tuple[list[TaskSpec], list[TaskSpec
     return concurrent, serial
 
 
-def run_wave(
+def run_wave[T](
     tasks: list[TaskSpec],
     *,
     executor_fn: Callable[[TaskSpec], T],

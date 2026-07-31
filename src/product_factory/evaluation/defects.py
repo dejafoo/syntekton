@@ -38,7 +38,7 @@ def defect_files(case_id: str, kind: DefectKind) -> list[tuple[str, str]]:
                     (
                         '"""Health helper with verbose local name (style-only seed)."""\n\n'
                         "def health() -> dict[str, str]:\n"
-                        "    response_payload = {\"status\": \"ok\"}\n"
+                        '    response_payload = {"status": "ok"}\n'
                         "    return response_payload\n"
                     ),
                 ),

@@ -136,7 +136,9 @@ def extract_lessons(
                 category = "skill_gap"
             if "evidence_quality" in weak:
                 category = "review_quality"
-            theme = derive_theme(weak_dimensions=weak, summary=f"Weak dimensions: {', '.join(weak)}")
+            theme = derive_theme(
+                weak_dimensions=weak, summary=f"Weak dimensions: {', '.join(weak)}"
+            )
             lessons.append(
                 LessonCandidate(
                     id=f"lesson-{uuid.uuid4().hex[:10]}",
@@ -185,7 +187,9 @@ def load_lesson(path: Path) -> LessonCandidate:
     return LessonCandidate.model_validate_json(path.read_text(encoding="utf-8"))
 
 
-def find_lesson(pf_root: Path, lesson_id: str, *, bench_id: str | None = None) -> tuple[Path, LessonCandidate]:
+def find_lesson(
+    pf_root: Path, lesson_id: str, *, bench_id: str | None = None
+) -> tuple[Path, LessonCandidate]:
     roots: list[Path]
     if bench_id:
         roots = [candidates_dir(pf_root, bench_id)]

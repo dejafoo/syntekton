@@ -199,7 +199,7 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, decl: str)
 def _synchronized(method: Any) -> Any:
     """Serialize writes on the shared connection across concurrent wave threads (P1.F)."""
 
-    def wrapper(self: "Database", *args: Any, **kwargs: Any) -> Any:
+    def wrapper(self: Database, *args: Any, **kwargs: Any) -> Any:
         with self._lock:
             return method(self, *args, **kwargs)
 
@@ -570,9 +570,7 @@ class Database:
         return [dict(r) for r in rows]
 
     def get_artifact(self, sha256: str) -> dict[str, Any] | None:
-        row = self.conn.execute(
-            "SELECT * FROM artifacts WHERE sha256 = ?", (sha256,)
-        ).fetchone()
+        row = self.conn.execute("SELECT * FROM artifacts WHERE sha256 = ?", (sha256,)).fetchone()
         return dict(row) if row else None
 
     @_synchronized
@@ -673,7 +671,7 @@ class Database:
         params.append(limit)
         sql = f"""
             SELECT * FROM events
-            WHERE {' AND '.join(clauses)}
+            WHERE {" AND ".join(clauses)}
             ORDER BY seq ASC
             LIMIT ?
         """

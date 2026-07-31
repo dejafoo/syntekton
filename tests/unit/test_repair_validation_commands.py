@@ -137,9 +137,6 @@ def test_broker_still_rejects_unknown_after_normalize(tmp_path: Path) -> None:
 
 
 def test_normalize_validation_command_id_helpers() -> None:
-    assert (
-        ToolBroker.normalize_validation_command_id("behavioral:python_tests")
-        == "python_tests"
-    )
+    assert ToolBroker.normalize_validation_command_id("behavioral:python_tests") == "python_tests"
     assert ToolBroker.normalize_validation_command_id("pytest") == "python_tests"
     assert ToolBroker.normalize_validation_command_id("python_typecheck") == "python_typecheck"

@@ -79,9 +79,7 @@ def test_tool_loop_inspects_then_writes(tmp_path: Path) -> None:
         [
             _response(
                 "tool_calls",
-                calls=[
-                    CanonicalToolCall(id="c1", name="list_files", arguments={"directory": "."})
-                ],
+                calls=[CanonicalToolCall(id="c1", name="list_files", arguments={"directory": "."})],
             ),
             _response(
                 "tool_calls",
@@ -229,9 +227,7 @@ def test_repeated_patch_fingerprint_stops_loop(tmp_path: Path) -> None:
         [
             _response(
                 "tool_calls",
-                calls=[
-                    CanonicalToolCall(id="l", name="list_files", arguments={"directory": "."})
-                ],
+                calls=[CanonicalToolCall(id="l", name="list_files", arguments={"directory": "."})],
             ),
             *writes,
         ]
@@ -270,4 +266,3 @@ def test_repeated_patch_fingerprint_stops_loop(tmp_path: Path) -> None:
     assert result.status == "failed"
     assert result.termination_reason == "no_progress"
     assert "patch fingerprint" in (result.error or "")
-

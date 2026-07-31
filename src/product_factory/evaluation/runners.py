@@ -66,8 +66,7 @@ def _augment_request_text(case: EvalCase) -> str:
     parts = [case.request.strip()]
     if case.acceptance_criteria:
         parts.append(
-            "Acceptance criteria:\n"
-            + "\n".join(f"- {item}" for item in case.acceptance_criteria)
+            "Acceptance criteria:\n" + "\n".join(f"- {item}" for item in case.acceptance_criteria)
         )
     if case.must_cover:
         parts.append(
@@ -125,9 +124,7 @@ class FullOrchestrationRunner:
                 "smoke_commands": ",".join(case.smoke_commands),
                 "disable_review": str(bool(case.metadata.get("disable_review", False))).lower(),
                 "force_review": str(bool(case.metadata.get("force_review", False))).lower(),
-                "disable_analysis": str(
-                    bool(case.metadata.get("disable_analysis", False))
-                ).lower(),
+                "disable_analysis": str(bool(case.metadata.get("disable_analysis", False))).lower(),
                 "context_mode": str(case.metadata.get("context_mode", "targeted")),
                 # Live planner schemas remain unreliable across providers; default to
                 # the deterministic plan unless an ablation explicitly requests live.
@@ -139,9 +136,7 @@ class FullOrchestrationRunner:
                 "force_seeded_impl": str(
                     bool(case.metadata.get("force_seeded_impl", False))
                 ).lower(),
-                "seed_repair_defect": str(
-                    case.metadata.get("seed_repair_defect") or ""
-                ),
+                "seed_repair_defect": str(case.metadata.get("seed_repair_defect") or ""),
                 "seed_review_expect_blocking": str(
                     case.metadata.get("seed_review_expect_blocking") or ""
                 ).lower(),
@@ -325,9 +320,7 @@ class OrchestrationAblationRunner(FullOrchestrationRunner):
         metadata: dict[str, object],
         use_deterministic_planner: bool = False,
     ) -> None:
-        super().__init__(
-            app_config, use_deterministic_planner=use_deterministic_planner
-        )
+        super().__init__(app_config, use_deterministic_planner=use_deterministic_planner)
         self.subject_id = subject_id
         self.metadata = metadata
 
@@ -339,12 +332,8 @@ class OrchestrationAblationRunner(FullOrchestrationRunner):
         gateway: ModelGateway,
         work_dir: Path,
     ) -> SubjectArtifact:
-        configured = case.model_copy(
-            update={"metadata": {**case.metadata, **self.metadata}}
-        )
-        artifact = super().run(
-            configured, config=config, gateway=gateway, work_dir=work_dir
-        )
+        configured = case.model_copy(update={"metadata": {**case.metadata, **self.metadata}})
+        artifact = super().run(configured, config=config, gateway=gateway, work_dir=work_dir)
         return artifact.model_copy(update={"subject_id": self.subject_id})
 
 
@@ -515,9 +504,7 @@ class IsolationAblationRunner(AgentIsolationRunner):
         *,
         use_deterministic_planner: bool = False,
     ) -> None:
-        super().__init__(
-            app_config, use_deterministic_planner=use_deterministic_planner
-        )
+        super().__init__(app_config, use_deterministic_planner=use_deterministic_planner)
         self._impl_runner = OrchestrationAblationRunner(
             app_config,
             subject_id=self.subject_id,
@@ -597,13 +584,7 @@ class SeededRepairRunner(OrchestrationAblationRunner):
         )
         repair_lineage = False
         if artifact.run_id:
-            run_out = (
-                work_dir
-                / ".product-factory"
-                / "runs"
-                / artifact.run_id
-                / "output"
-            )
+            run_out = work_dir / ".product-factory" / "runs" / artifact.run_id / "output"
             repair_lineage = any(run_out.glob("R-*-lineage.json"))
         return artifact.model_copy(
             update={
@@ -725,8 +706,7 @@ def _mock_artifact_for_case(case: EvalCase, repo: Path | None) -> str:
             f"{case.request.strip()}\n\n"
             "This design elaborates concrete components, trust boundaries, failure "
             "modes, and verification for the stated domain rather than a generic "
-            "service shell. "
-            + " ".join(must)
+            "service shell. " + " ".join(must)
         )
         sections = [
             "# ARCHITECTURE.md",
