@@ -1,4 +1,9 @@
 import { EventEmitter } from "node:events";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -6,13 +11,24 @@ import {
   CliPfClient,
   createPfClient,
   HOST_PROTOCOL,
+  landRemoteDelivery,
   landMapFrom,
   parseHostJson,
   parseSseBlock,
   PfProtocolError,
-  REMOTE_MERGE_UNSUPPORTED_CODE,
   RemotePfClient,
 } from "../src/pf-client.js";
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
 
 describe("parseHostJson", () => {
   it("parses the last JSON envelope, ignoring log noise", () => {
@@ -310,7 +326,7 @@ describe("RemotePfClient", () => {
   });
 
   it("GETs host/v1 /tail (not raw /events) for event batches", async () => {
-    const fetchFn = vi.fn(async (url: string | URL | Request) => {
+    const fetchFn = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
       expect(String(url)).toBe("https://pf.example/api/v1/runs/run-1/tail?after_seq=7");
       return jsonResponse(
         hostEnvelope({
@@ -358,14 +374,34 @@ describe("RemotePfClient", () => {
     await expect(client.status("run-1")).rejects.toBeInstanceOf(PfProtocolError);
   });
 
-  it("returns a clear unsupported error for materialize in remote mode", async () => {
+  it("fetches delivery manifests and binary blobs with bearer auth", async () => {
+    const digest = "a".repeat(64);
+    const fetchFn = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
+      if (String(url).endsWith(`/blobs/${digest}`)) {
+        return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+      }
+      return jsonResponse({
+        schema_version: "delivery_manifest.v1",
+        delivery_id: "delivery-1",
+        run_id: "run-1",
+        base_revision: "abc",
+        created_at: "2026-01-01T00:00:00Z",
+        entries: [],
+        manifest_sha256: "b".repeat(64),
+      });
+    });
     const client = new RemotePfClient({
       baseUrl: "https://pf.example",
-      fetchFn: vi.fn() as unknown as typeof fetch,
+      token: "tok",
+      fetchFn: fetchFn as unknown as typeof fetch,
     });
-    const out = await client.materialize("run-1", { artifact: "ARCHITECTURE.md", destPath: "docs/A.md" });
-    expect(out.ok).toBe(false);
-    expect(out.error?.code).toBe(REMOTE_MERGE_UNSUPPORTED_CODE);
+    const manifest = await client.delivery("run-1");
+    const blob = await client.deliveryBlob("run-1", digest);
+    expect(manifest.delivery_id).toBe("delivery-1");
+    expect(Array.from(blob)).toEqual([1, 2, 3]);
+    expect(fetchFn.mock.calls[1]?.[1]?.headers).toMatchObject({
+      Authorization: "Bearer tok",
+    });
   });
 
   it("wait prefers SSE then returns awaiting_approval status", async () => {
@@ -452,6 +488,58 @@ describe("RemotePfClient", () => {
     const init = fetchFn.mock.calls[0]?.[1] as RequestInit | undefined;
     const headers = init?.headers as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer host-tok");
+  });
+});
+
+describe("landRemoteDelivery", () => {
+  it("verifies manifest and blob hashes before writing under the workspace", () => {
+    const root = mkdtempSync(join(tmpdir(), "pf-plugin-land-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: root });
+      execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: root });
+      execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
+      writeFileSync(join(root, "README.md"), "base\n");
+      execFileSync("git", ["add", "."], { cwd: root });
+      execFileSync("git", ["commit", "-qm", "base"], { cwd: root });
+      const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+      const content = Buffer.from("# Delivered\n");
+      const blobDigest = createHash("sha256").update(content).digest("hex");
+      const payload = {
+        schema_version: "delivery_manifest.v1" as const,
+        delivery_id: "delivery-1",
+        run_id: "run-1",
+        base_revision: base,
+        workspace_provenance: null,
+        created_at: "2026-07-31T00:00:00Z",
+        entries: [
+          {
+            role: "architecture_document",
+            logical_name: "PLAN.md",
+            blob_sha256: blobDigest,
+            size_bytes: content.byteLength,
+            media_type: "text/markdown",
+            kind: "file" as const,
+            suggested_dest_path: "docs/PLAN.md",
+            changed_paths: [],
+          },
+        ],
+      };
+      const manifest = {
+        ...payload,
+        manifest_sha256: createHash("sha256").update(canonical(payload)).digest("hex"),
+      };
+
+      const result = landRemoteDelivery(
+        manifest,
+        new Map([[blobDigest, content]]),
+        root,
+      );
+
+      expect(readFileSync(join(root, "docs/PLAN.md"), "utf8")).toBe("# Delivered\n");
+      expect(result.landed_paths).toEqual(["docs/PLAN.md"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

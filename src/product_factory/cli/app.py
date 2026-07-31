@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import uuid
 from decimal import Decimal
@@ -16,6 +17,7 @@ from rich.table import Table
 
 from product_factory import __version__
 from product_factory.config.loader import PoliciesConfig, load_config
+from product_factory.delivery import LandingAdapter, LandingError, LandingReceipt
 from product_factory.domain import export_json_schemas
 from product_factory.domain.budgets import run_budget_from_policy
 from product_factory.domain.errors import ProductFactoryError
@@ -380,6 +382,49 @@ def apply_cmd(run_id: str = typer.Argument(...)) -> None:
     console.print_json(data=result)
 
 
+@app.command("land")
+def land_cmd(
+    run_id: str = typer.Argument(..., help="Approved remote run id"),
+    workspace: Path = typer.Option(Path("."), "--workspace", "-C"),
+    remote_url: str | None = typer.Option(None, "--remote-url"),
+    token: str | None = typer.Option(None, "--token"),
+    overwrite: bool = typer.Option(False, "--overwrite"),
+) -> None:
+    """Fetch and hash-verify a remote delivery, then land it in a local Git workspace."""
+    from product_factory.remote.client import PfRemoteError, RemotePfClient
+
+    try:
+        with RemotePfClient(base_url=remote_url, token=token) as client:
+            manifest = client.delivery(run_id)
+            result = LandingAdapter().land(
+                manifest,
+                workspace_root=workspace,
+                blob_loader=lambda digest: client.delivery_blob(run_id, digest),
+                overwrite=overwrite,
+            )
+            receipt = client.record_landing(
+                run_id,
+                LandingReceipt(
+                    manifest_sha256=result.manifest_sha256,
+                    base_revision=result.base_revision,
+                    status="landed",
+                    landed_paths=list(result.landed_paths),
+                    client="product-factory-cli",
+                ),
+            )
+    except (LandingError, PfRemoteError) as exc:
+        console.print(f"[red]Landing failed:[/red] {exc}")
+        raise typer.Exit(8) from exc
+    console.print_json(
+        data={
+            "run_id": run_id,
+            "landed_paths": list(result.landed_paths),
+            "manifest_sha256": result.manifest_sha256,
+            "receipt": receipt,
+        }
+    )
+
+
 @app.command("eval")
 def eval_cmd(
     cases_dir: Path = typer.Option(Path("tests/eval_cases"), "--cases"),
@@ -638,6 +683,8 @@ def _serve_api(
         raise typer.Exit(2) from exc
 
     root = data_dir
+    if root is None and os.environ.get("PRODUCT_FACTORY_DATA_DIR"):
+        root = Path(os.environ["PRODUCT_FACTORY_DATA_DIR"]).expanduser()
     if root is None:
         try:
             config = load_config()

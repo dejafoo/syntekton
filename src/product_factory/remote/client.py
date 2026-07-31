@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from product_factory.delivery.models import DeliveryManifest, LandingReceipt
 from product_factory.host.protocol import HOST_PROTOCOL, HostResponse
 from product_factory.remote.sse import wait_for_terminal
 
@@ -224,8 +225,47 @@ class RemotePfClient:
         )
         return self._parse(response)
 
+    def delivery(self, run_id: str) -> DeliveryManifest:
+        response = self._client.get(
+            f"/api/v1/runs/{run_id}/delivery",
+            headers=self._headers(),
+        )
+        if response.status_code == 401:
+            raise PfRemoteError("Unauthorized: missing or invalid bearer token")
+        if not response.is_success:
+            raise PfRemoteError(
+                f"Delivery manifest request failed ({response.status_code}): {response.text}"
+            )
+        try:
+            return DeliveryManifest.model_validate(response.json())
+        except Exception as exc:
+            raise PfProtocolError("Invalid delivery manifest", detail=response.text) from exc
 
+    def delivery_blob(self, run_id: str, sha256: str) -> bytes:
+        response = self._client.get(
+            f"/api/v1/runs/{run_id}/delivery/blobs/{sha256}",
+            headers={**self._headers(), "Accept": "application/octet-stream"},
+        )
+        if not response.is_success:
+            raise PfRemoteError(
+                f"Delivery blob request failed ({response.status_code}): {response.text}"
+            )
+        return response.content
 
+    def record_landing(self, run_id: str, receipt: LandingReceipt) -> dict[str, Any]:
+        response = self._client.post(
+            f"/api/v1/runs/{run_id}/delivery/receipts",
+            json=receipt.model_dump(mode="json"),
+            headers=self._headers(),
+        )
+        if not response.is_success:
+            raise PfRemoteError(
+                f"Landing receipt request failed ({response.status_code}): {response.text}"
+            )
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise PfProtocolError("Landing receipt response must be an object", detail=payload)
+        return payload
 
     def reject(self, run_id: str) -> HostResponse:
         response = self._client.post(f"/api/v1/runs/{run_id}/reject", headers=self._headers())

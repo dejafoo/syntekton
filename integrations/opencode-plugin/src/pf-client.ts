@@ -7,18 +7,13 @@
  * and never falls back to the CLI.
  */
 
-import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export const HOST_PROTOCOL = "product-factory.host/v1";
-
-/** Clear failure until remote delivery landing (R3). */
-export const REMOTE_MERGE_UNSUPPORTED_CODE = "remote_merge_unsupported";
-export const REMOTE_MERGE_UNSUPPORTED_MESSAGE =
-  "Remote pf_merge / materialize is not supported until delivery landing (R3). " +
-  "Approve/reject/cancel remain available; land results on a machine with local host access.";
 
 /** Mirror of the Python `HostResponse` envelope. Unknown fields are preserved. */
 export interface PfResponse {
@@ -47,6 +42,12 @@ export interface SubmitInput {
   repositoryPath?: string;
   /** Server-registered repository id (remote mode only; resolves on the host). */
   repositoryId?: string;
+  workspace?: {
+    kind: "git_ref";
+    repository_id: string;
+    ref: string;
+    commit?: string;
+  };
   profile?: string;
   budgetUsd?: number;
   validationCommands?: string[];
@@ -94,6 +95,164 @@ export interface PfWaitOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
+export interface DeliveryEntry {
+  role: string;
+  logical_name: string;
+  blob_sha256: string;
+  size_bytes: number;
+  media_type: string;
+  kind: "file" | "patch";
+  suggested_dest_path?: string | null;
+  changed_paths: string[];
+}
+
+export interface DeliveryManifest {
+  schema_version: "delivery_manifest.v1";
+  delivery_id: string;
+  run_id: string;
+  base_revision: string;
+  workspace_provenance?: Record<string, unknown> | null;
+  created_at: string;
+  entries: DeliveryEntry[];
+  manifest_sha256: string;
+}
+
+export interface LandingReceiptInput {
+  manifest_sha256: string;
+  base_revision: string;
+  status: "landed";
+  landed_paths: string[];
+  client: string;
+}
+
+export interface LocalLandingResult {
+  manifest_sha256: string;
+  base_revision: string;
+  landed_paths: string[];
+}
+
+/** Hash-check and land a fully downloaded delivery without invoking Product Factory CLI. */
+export function landRemoteDelivery(
+  manifest: DeliveryManifest,
+  blobs: Map<string, Uint8Array>,
+  workspaceRoot: string,
+  overwrite = false,
+): LocalLandingResult {
+  const root = realpathSync(workspaceRoot);
+  const manifestPayload = { ...manifest } as Record<string, unknown>;
+  delete manifestPayload.manifest_sha256;
+  const manifestDigest = sha256(Buffer.from(stableJson(manifestPayload)));
+  if (manifestDigest !== manifest.manifest_sha256) {
+    throw new PfProtocolError("Delivery manifest digest mismatch");
+  }
+  const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  if (head !== manifest.base_revision) {
+    throw new PfProtocolError(
+      `Workspace base changed: expected ${manifest.base_revision}, found ${head}`,
+    );
+  }
+  if (manifest.entries.length === 0) throw new PfProtocolError("Delivery has no entries");
+
+  const kinds = new Set(manifest.entries.map((entry) => entry.kind));
+  if (kinds.size !== 1) throw new PfProtocolError("Mixed patch/file delivery is not supported");
+  const verified = new Map<string, Buffer>();
+  const destinations = new Map<string, string>();
+  for (const entry of manifest.entries) {
+    const raw = blobs.get(entry.blob_sha256);
+    if (!raw) throw new PfProtocolError(`Missing delivery blob ${entry.blob_sha256}`);
+    const content = Buffer.from(raw);
+    if (sha256(content) !== entry.blob_sha256 || content.byteLength !== entry.size_bytes) {
+      throw new PfProtocolError(`Delivery blob digest mismatch for ${entry.logical_name}`);
+    }
+    verified.set(entry.blob_sha256, content);
+    if (entry.kind === "file") {
+      if (!entry.suggested_dest_path) {
+        throw new PfProtocolError(`Missing destination for ${entry.logical_name}`);
+      }
+      const destination = safeDestination(root, entry.suggested_dest_path);
+      if (existsSync(destination) && !overwrite) {
+        throw new PfProtocolError(`Destination already exists: ${entry.suggested_dest_path}`);
+      }
+      destinations.set(entry.suggested_dest_path, destination);
+    }
+  }
+
+  if (kinds.has("patch")) {
+    if (manifest.entries.length !== 1) {
+      throw new PfProtocolError("Patch delivery must contain exactly one entry");
+    }
+    const entry = manifest.entries[0]!;
+    const patch = verified.get(entry.blob_sha256)!;
+    execFileSync("git", ["apply", "--check", "-"], { cwd: root, input: patch });
+    execFileSync("git", ["apply", "--index", "-"], { cwd: root, input: patch });
+    return {
+      manifest_sha256: manifest.manifest_sha256,
+      base_revision: manifest.base_revision,
+      landed_paths: entry.changed_paths,
+    };
+  }
+
+  const staged: Array<{ temporary: string; destination: string }> = [];
+  try {
+    for (const entry of manifest.entries) {
+      const relativePath = entry.suggested_dest_path!;
+      const destination = destinations.get(relativePath)!;
+      mkdirSync(dirname(destination), { recursive: true });
+      const temporaryDir = mkdtempSync(join(dirname(destination), ".pf-land-"));
+      const temporary = join(temporaryDir, "content");
+      writeFileSync(temporary, verified.get(entry.blob_sha256)!);
+      staged.push({ temporary, destination });
+    }
+    for (const item of staged) renameSync(item.temporary, item.destination);
+  } finally {
+    for (const item of staged) rmSync(dirname(item.temporary), { recursive: true, force: true });
+  }
+  return {
+    manifest_sha256: manifest.manifest_sha256,
+    base_revision: manifest.base_revision,
+    landed_paths: manifest.entries.map((entry) => entry.suggested_dest_path!),
+  };
+}
+
+function sha256(content: Buffer): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function safeDestination(root: string, suggested: string): string {
+  if (!suggested || isAbsolute(suggested) || suggested.startsWith("~")) {
+    throw new PfProtocolError(`Destination escapes workspace root: ${suggested}`);
+  }
+  const destination = resolve(root, suggested);
+  const rel = relative(root, destination);
+  if (!rel || rel === ".." || rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) {
+    throw new PfProtocolError(`Destination escapes workspace root: ${suggested}`);
+  }
+  let cursor = dirname(destination);
+  while (!existsSync(cursor) && cursor !== root) cursor = dirname(cursor);
+  const realParent = realpathSync(cursor);
+  if (relative(root, realParent).startsWith("..")) {
+    throw new PfProtocolError(`Destination symlink escapes workspace root: ${suggested}`);
+  }
+  if (existsSync(destination) && lstatSync(destination).isSymbolicLink()) {
+    const realTarget = realpathSync(destination);
+    if (relative(root, realTarget).startsWith("..")) {
+      throw new PfProtocolError(`Destination symlink escapes workspace root: ${suggested}`);
+    }
+  }
+  return destination;
+}
+
 /**
  * Transport-neutral client the plugin tools depend on. HTTP (remote) and CLI
  * transports both satisfy this shape.
@@ -109,6 +268,9 @@ export interface PfClient {
   cancel(runId: string): Promise<PfResponse>;
   materialize(runId: string, input: MaterializeInput): Promise<PfResponse>;
   materializeAll(runId: string, input?: MaterializeAllInput): Promise<PfResponse>;
+  delivery?(runId: string): Promise<DeliveryManifest>;
+  deliveryBlob?(runId: string, sha256: string): Promise<Uint8Array>;
+  recordLanding?(runId: string, receipt: LandingReceiptInput): Promise<Record<string, unknown>>;
   /**
    * Optional bounded wait. Remote clients prefer SSE from `subscription.sse_url`
    * with poll fallback; CLI leaves this unset so tools poll `status`.
@@ -373,20 +535,6 @@ export interface RemotePfClientOptions {
   fetchFn?: typeof fetch;
 }
 
-function remoteUnsupported(runId?: string): PfResponse {
-  return {
-    protocol: HOST_PROTOCOL,
-    ok: false,
-    run_id: runId ?? null,
-    artifacts: [],
-    events: [],
-    error: {
-      code: REMOTE_MERGE_UNSUPPORTED_CODE,
-      message: REMOTE_MERGE_UNSUPPORTED_MESSAGE,
-    },
-  };
-}
-
 function isTerminalOrAwaiting(status: string | null | undefined): boolean {
   return status === AWAITING_APPROVAL || (typeof status === "string" && TERMINAL_STATUSES.has(status));
 }
@@ -442,6 +590,9 @@ export class RemotePfClient implements PfClient {
         { repositoryPath: input.repositoryPath },
       );
     }
+    if (input.workspace && input.repositoryId) {
+      throw new PfProtocolError("workspace cannot be combined with repositoryId");
+    }
     const artifact_overrides: Record<string, { logical_name?: string; dest_path?: string }> = {};
     for (const [role, override] of Object.entries(input.artifactOverrides ?? {})) {
       const entry: { logical_name?: string; dest_path?: string } = {};
@@ -461,6 +612,7 @@ export class RemotePfClient implements PfClient {
       mock: this.mock,
     };
     if (input.repositoryId) body.repository_id = input.repositoryId;
+    if (input.workspace) body.workspace = input.workspace;
     return this.request("POST", "/api/v1/runs", { body });
   }
 
@@ -497,11 +649,56 @@ export class RemotePfClient implements PfClient {
   }
 
   async materialize(runId: string, _input: MaterializeInput): Promise<PfResponse> {
-    return remoteUnsupported(runId);
+    throw new PfProtocolError(
+      `Remote materialize is server-local and unavailable for ${runId}; use delivery landing`,
+    );
   }
 
   async materializeAll(runId: string, _input: MaterializeAllInput = {}): Promise<PfResponse> {
-    return remoteUnsupported(runId);
+    throw new PfProtocolError(
+      `Remote materialize-all is server-local and unavailable for ${runId}; use delivery landing`,
+    );
+  }
+
+  async delivery(runId: string): Promise<DeliveryManifest> {
+    const raw = await this.requestRaw(
+      "GET",
+      `/api/v1/runs/${encodeURIComponent(runId)}/delivery`,
+    );
+    if (!raw || typeof raw !== "object") {
+      throw new PfProtocolError("Remote delivery manifest must be an object", raw);
+    }
+    return raw as DeliveryManifest;
+  }
+
+  async deliveryBlob(runId: string, sha256: string): Promise<Uint8Array> {
+    if (!/^[0-9a-f]{64}$/.test(sha256)) {
+      throw new PfProtocolError("Invalid delivery blob digest");
+    }
+    const url = `${this.baseUrl}/api/v1/runs/${encodeURIComponent(runId)}/delivery/blobs/${sha256}`;
+    const res = await this.fetchWithTimeout(url, {
+      method: "GET",
+      headers: { Accept: "application/octet-stream", ...this.authHeaders() },
+    });
+    if (!res.ok) {
+      throw new PfProtocolError(`Remote host HTTP ${res.status} fetching delivery blob`);
+    }
+    return new Uint8Array(await res.arrayBuffer());
+  }
+
+  async recordLanding(
+    runId: string,
+    receipt: LandingReceiptInput,
+  ): Promise<Record<string, unknown>> {
+    const raw = await this.requestRaw(
+      "POST",
+      `/api/v1/runs/${encodeURIComponent(runId)}/delivery/receipts`,
+      { body: receipt },
+    );
+    if (!raw || typeof raw !== "object") {
+      throw new PfProtocolError("Remote landing receipt response must be an object", raw);
+    }
+    return raw as Record<string, unknown>;
   }
 
   /**
@@ -680,23 +877,7 @@ export class RemotePfClient implements PfClient {
       headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(opts.body);
     }
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    init.signal = controller.signal;
-    let res: Response;
-    try {
-      res = await this.fetchFn(url, init);
-    } catch (err) {
-      clearTimeout(timer);
-      const message = err instanceof Error ? err.message : String(err);
-      throw new PfProtocolError(
-        `Remote Product Factory unreachable at ${this.baseUrl}: ${message}. ` +
-          "PRODUCT_FACTORY_REMOTE_URL is set — refusing to fall back to local CLI.",
-        err,
-      );
-    } finally {
-      clearTimeout(timer);
-    }
+    const res = await this.fetchWithTimeout(url, init);
     const text = await res.text();
     let parsed: unknown;
     try {
@@ -722,6 +903,24 @@ export class RemotePfClient implements PfClient {
       );
     }
     return parsed;
+  }
+
+  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    init.signal = controller.signal;
+    try {
+      return await this.fetchFn(url, init);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new PfProtocolError(
+        `Remote Product Factory unreachable at ${this.baseUrl}: ${message}. ` +
+          "PRODUCT_FACTORY_REMOTE_URL is set — refusing to fall back to local CLI.",
+        err,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 
