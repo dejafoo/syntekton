@@ -27,4 +27,9 @@ fi
 # Optional OpenCode plugin smoke (P3.G.D): skips when `opencode` is absent
 # unless OPENCODE_INTEGRATION=1 is set (then missing binary fails).
 bash scripts/opencode_plugin_smoke.sh
+
+# Optional Docker remote HTTP integration (PM3.0): soft-skips unless
+# DOCKER_INTEGRATION=1 (then missing/unhealthy Docker/compose fails).
+uv run pytest -q tests/integration/test_remote_docker.py
+
 echo "verify OK"

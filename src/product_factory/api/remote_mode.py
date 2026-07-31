@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from product_factory.config.loader import find_project_root
 from product_factory.config.repositories import RepositoriesConfig, load_repositories_config
 
 
@@ -34,6 +35,24 @@ def canonical_observe_base(*, request_base: str | None = None) -> str:
     if request_base:
         return request_base.rstrip("/")
     return "http://127.0.0.1:8765"
+
+
+def resolve_project_root(
+    *,
+    data_dir: Path,
+    project_root: Path | None = None,
+) -> Path:
+    """Resolve config/project root for observe + remote registry loading.
+
+    Order: explicit ``project_root`` → ``PRODUCT_FACTORY_ROOT`` → walk from
+    ``data_dir.parent`` (local default: ``<repo>/.product-factory``).
+    """
+    if project_root is not None:
+        return project_root.expanduser().resolve()
+    env = (os.environ.get("PRODUCT_FACTORY_ROOT") or "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    return find_project_root(data_dir.parent)
 
 
 def repositories_for_root(project_root: Path) -> RepositoriesConfig:
