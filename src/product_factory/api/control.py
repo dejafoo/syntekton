@@ -20,9 +20,16 @@ from product_factory.api.remote_mode import (
 )
 from product_factory.domain.artifacts import HandoffRef
 from product_factory.domain.budgets import run_budget_from_policy
-from product_factory.domain.errors import ConfigurationError
-from product_factory.domain.runs import ArtifactOverride, RunRequest, WorkflowType
+from product_factory.domain.errors import ConfigurationError, ProductFactoryError
+from product_factory.domain.runs import (
+    ArtifactOverride,
+    GitRefWorkspace,
+    RunRequest,
+    WorkflowType,
+    WorkspaceProvenance,
+)
 from product_factory.host.protocol import HostResponse
+from product_factory.workspace import WorkspaceManager
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_write_auth)])
 
@@ -32,6 +39,7 @@ class SubmitRunBody(BaseModel):
     workflow_type: WorkflowType = "code_change"
     repository_path: Path | None = None
     repository_id: str | None = None
+    workspace: GitRefWorkspace | None = None
     model_profile_set: str = "local-target"
     validation_commands: list[str] = Field(default_factory=list)
     artifact_overrides: dict[str, ArtifactOverride] = Field(default_factory=dict)
@@ -94,14 +102,28 @@ def _host_json(response: HostResponse, *, success_status: int = 200) -> JSONResp
 
 
 def _resolve_repository(
-    body: SubmitRunBody, *, project_root: Path
-) -> tuple[Path | None, str | None, HostResponse | None]:
+    body: SubmitRunBody, *, project_root: Path, workspace_root: Path
+) -> tuple[Path | None, str | None, WorkspaceProvenance | None, HostResponse | None]:
     """Resolve repository_id / path under remote-mode rules.
 
-    Returns (path, repository_id, error_response).
+    Returns (path, repository_id, workspace provenance, error_response).
     """
+    if body.workspace is not None and (
+        body.repository_path is not None or body.repository_id is not None
+    ):
+        return (
+            None,
+            None,
+            None,
+            HostResponse.failure(
+                code="workspace_conflict",
+                message="workspace cannot be combined with repository_path or repository_id",
+            ),
+        )
+
     if remote_mode_enabled() and body.repository_path is not None:
         return (
+            None,
             None,
             None,
             HostResponse.failure(
@@ -113,18 +135,44 @@ def _resolve_repository(
                 ),
                 details={
                     "repository_path": str(body.repository_path),
-                    "supported_workspace_kinds": ["none", "registered_path"],
+                    "supported_workspace_kinds": ["none", "registered_path", "git_ref"],
                 },
             ),
         )
+
+    if body.workspace is not None:
+        try:
+            repos = repositories_for_root(project_root)
+            prepared = WorkspaceManager(repos, workspace_root).prepare(
+                body.workspace,
+                workspace_id=f"workspace-{uuid.uuid4().hex}",
+            )
+            return (
+                prepared.path,
+                body.workspace.repository_id,
+                prepared.provenance,
+                None,
+            )
+        except ProductFactoryError as exc:
+            return (
+                None,
+                None,
+                None,
+                HostResponse.failure(
+                    code="invalid_workspace",
+                    message=exc.message,
+                    details=exc.details,
+                ),
+            )
 
     repository_id = body.repository_id
     if repository_id:
         try:
             repos = repositories_for_root(project_root)
-            return repos.resolve(repository_id), repository_id, None
+            return repos.resolve(repository_id), repository_id, None, None
         except ConfigurationError as exc:
             return (
+                None,
                 None,
                 None,
                 HostResponse.failure(
@@ -135,7 +183,7 @@ def _resolve_repository(
             )
 
     path = body.repository_path.resolve() if body.repository_path else None
-    return path, None, None
+    return path, None, None, None
 
 
 def _run_request(
@@ -144,13 +192,19 @@ def _run_request(
     budgets: Any = None,
     repository_path: Path | None = None,
     repository_id: str | None = None,
+    workspace_provenance: WorkspaceProvenance | None = None,
 ) -> RunRequest:
+    workspace = None
+    if body.workspace is not None and workspace_provenance is not None:
+        workspace = body.workspace.model_copy(update={"commit": workspace_provenance.commit})
     return RunRequest(
         request_id=body.request_id or f"req-{uuid.uuid4().hex[:8]}",
         workflow_type=body.workflow_type,
         request_text=body.request_text,
         repository_path=repository_path,
         repository_id=repository_id,
+        workspace=workspace,
+        workspace_provenance=workspace_provenance,
         model_profile_set=body.model_profile_set,
         validation_commands=list(body.validation_commands),
         artifact_overrides=dict(body.artifact_overrides),
@@ -168,7 +222,11 @@ def _run_request(
 def submit_run(body: SubmitRunBody, request: Request) -> JSONResponse:
     """Submit a curated request; returns run_id + SSE subscription immediately."""
     host = _state(request).host(mock=body.mock, observe_base_url=_observe_base(request))
-    repo_path, repo_id, err = _resolve_repository(body, project_root=host.config.root)
+    repo_path, repo_id, workspace_provenance, err = _resolve_repository(
+        body,
+        project_root=host.config.root,
+        workspace_root=host.pf_root / "workspaces",
+    )
     if err is not None:
         return _host_json(err)
     response = host.submit(
@@ -177,6 +235,7 @@ def submit_run(body: SubmitRunBody, request: Request) -> JSONResponse:
             budgets=host.config.policies.budgets,
             repository_path=repo_path,
             repository_id=repo_id,
+            workspace_provenance=workspace_provenance,
         ),
         mock=body.mock,
         detach=not body.inline and not body.sync,
@@ -226,6 +285,17 @@ def run_tail(
 
 @router.post("/runs/{run_id}/approve")
 def approve_run(run_id: str, request: Request, body: ApproveBody = ApproveBody()) -> JSONResponse:
+    if remote_mode_enabled() and body.apply:
+        return _host_json(
+            HostResponse.failure(
+                code="remote_apply_rejected",
+                message=(
+                    "Remote approval never applies changes on the server. "
+                    "Approve with apply=false, then fetch and land the delivery locally."
+                ),
+                run_id=run_id,
+            )
+        )
     host = _state(request).host(observe_base_url=_observe_base(request))
     return _host_json(host.approve(run_id, apply=body.apply))
 

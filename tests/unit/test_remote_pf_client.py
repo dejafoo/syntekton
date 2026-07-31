@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -92,7 +94,7 @@ def test_meta_advertises_remote_capabilities(remote_env) -> None:
     assert body["protocol"] == HOST_PROTOCOL
     assert body["api_version"] == "v1"
     assert body["remote_mode"] is False
-    assert body["supported_workspace_kinds"] == ["none", "registered_path"]
+    assert body["supported_workspace_kinds"] == ["none", "registered_path", "git_ref"]
     assert body["delivery_support"] is False
     assert body["repository_ids"] == ["sample_api"]
     assert body["canonical_observe_base"] == "http://pf.test"
@@ -134,6 +136,17 @@ def test_remote_mode_rejects_laptop_repository_path(remote_env, monkeypatch) -> 
     assert body.error.code == "remote_repository_path_rejected"
 
 
+def test_remote_approve_never_maps_apply_to_server_workspace(remote_env, monkeypatch) -> None:
+    client, _, _, _ = remote_env
+    monkeypatch.setenv("PRODUCT_FACTORY_REMOTE_MODE", "true")
+    denied = client.post("/api/v1/runs/run-any/approve", json={"apply": True})
+    assert denied.status_code == 400
+    body = HostResponse.model_validate(denied.json())
+    assert body.ok is False
+    assert body.error is not None
+    assert body.error.code == "remote_apply_rejected"
+
+
 def test_remote_mode_accepts_repository_id(remote_env, monkeypatch) -> None:
     client, _, _, _ = remote_env
     monkeypatch.setenv("PRODUCT_FACTORY_REMOTE_MODE", "true")
@@ -155,6 +168,93 @@ def test_remote_mode_accepts_repository_id(remote_env, monkeypatch) -> None:
     assert body.subscription is not None
     assert body.subscription.sse_url is not None
     assert body.subscription.sse_url.startswith("http://pf.test/")
+
+
+def test_remote_mode_git_ref_records_exact_provenance(remote_env, monkeypatch) -> None:
+    client, fixture, _, project = remote_env
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=fixture,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    (project / "config" / "repositories.yaml").write_text(
+        "repositories:\n"
+        "  sample_api:\n"
+        f"    path: {fixture}\n"
+        f"    fetch_url: {fixture}\n"
+        "    refs:\n"
+        "      - refs/heads/*\n",
+        encoding="utf-8",
+    )
+    branch = subprocess.run(
+        ["git", "symbolic-ref", "--short", "HEAD"],
+        cwd=fixture,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    monkeypatch.setenv("PRODUCT_FACTORY_REMOTE_MODE", "true")
+
+    submitted = client.post(
+        "/api/v1/runs",
+        json={
+            "request_text": "Investigate health-check coverage and propose a plan.",
+            "workflow_type": "technical_plan",
+            "workspace": {
+                "kind": "git_ref",
+                "repository_id": "sample_api",
+                "ref": f"refs/heads/{branch}",
+                "commit": commit,
+            },
+            "mock": True,
+            "sync": True,
+        },
+    )
+    assert submitted.status_code == 202, submitted.text
+    run_id = submitted.json()["run_id"]
+    inspected = client.get(f"/api/v1/runs/{run_id}/inspect")
+    assert inspected.status_code == 200, inspected.text
+    provenance = inspected.json()["data"]["workspace_provenance"]
+    assert provenance == {
+        "kind": "git_ref",
+        "repository_id": "sample_api",
+        "ref": f"refs/heads/{branch}",
+        "commit": commit,
+    }
+    assert inspected.json()["data"]["manifest"]["base_commit"] == commit
+    assert inspected.json()["data"]["manifest"]["workspace_provenance"] == provenance
+
+
+def test_remote_mode_rejects_unpinned_default_git_ref(remote_env, monkeypatch) -> None:
+    client, fixture, _, project = remote_env
+    (project / "config" / "repositories.yaml").write_text(
+        "repositories:\n"
+        "  sample_api:\n"
+        f"    fetch_url: {fixture}\n"
+        "    refs:\n"
+        "      - refs/heads/*\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PRODUCT_FACTORY_REMOTE_MODE", "true")
+    denied = client.post(
+        "/api/v1/runs",
+        json={
+            "request_text": "Plan a health check",
+            "workspace": {
+                "kind": "git_ref",
+                "repository_id": "sample_api",
+                "ref": "HEAD",
+            },
+            "mock": True,
+            "sync": True,
+        },
+    )
+    assert denied.status_code == 400
+    error = HostResponse.model_validate(denied.json()).error
+    assert error is not None
+    assert error.code == "invalid_workspace"
 
 
 def test_repositories_loader_resolves_absolute_paths(tmp_path: Path) -> None:
@@ -199,13 +299,15 @@ def test_remote_client_host_v1_parity(remote_env, monkeypatch) -> None:
         assert isinstance(tailed.events, list)
 
 
+
 def test_remote_client_rejects_repository_path_locally() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise AssertionError("submit must reject repository_path before HTTP")
 
-    with RemotePfClient(
-        base_url="http://test", transport=httpx.MockTransport(handler)
-    ) as remote, pytest.raises(PfRemoteError, match="rejects repository_path"):
+    with (
+        RemotePfClient(base_url="http://test", transport=httpx.MockTransport(handler)) as remote,
+        pytest.raises(PfRemoteError, match="rejects repository_path"),
+    ):
         remote.submit(request_text="x", repository_path="/Users/me/project")
 
 
@@ -260,9 +362,9 @@ def test_assert_protocol_helper() -> None:
 
 def test_sse_chunk_parser_dedupes_by_seq() -> None:
     buffer = (
-        "id: 1\nevent: run.progress\ndata: {\"seq\": 1, \"type\": \"run.progress\"}\n\n"
-        "id: 1\nevent: run.progress\ndata: {\"seq\": 1, \"type\": \"run.progress\"}\n\n"
-        "id: 2\ndata: {\"hello\": true}\n\n"
+        'id: 1\nevent: run.progress\ndata: {"seq": 1, "type": "run.progress"}\n\n'
+        'id: 1\nevent: run.progress\ndata: {"seq": 1, "type": "run.progress"}\n\n'
+        'id: 2\ndata: {"hello": true}\n\n'
         "incomplete"
     )
     events, remainder = _parse_sse_chunk(buffer)
