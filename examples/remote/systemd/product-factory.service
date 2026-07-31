@@ -1,0 +1,22 @@
+[Unit]
+Description=Product Factory observe/host API (private R0)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=product-factory
+Group=product-factory
+WorkingDirectory=/opt/product-factory
+Environment=PRODUCT_FACTORY_DATA_DIR=/var/lib/product-factory
+Environment=PRODUCT_FACTORY_HOST_TOKEN=replace-me
+Environment=PRODUCT_FACTORY_OBSERVE_URL=https://pf.example.internal
+# Adjust to the repo's actual observe/API entrypoint.
+ExecStart=/opt/product-factory/.venv/bin/python -m product_factory.api.app
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
