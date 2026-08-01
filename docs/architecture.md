@@ -2,7 +2,11 @@
 
 This document describes how Product Factory works: goals, control flow, security boundaries, persistence, and evaluation. It is intended for humans and agents working in this repository.
 
-For package layout and “where to edit what,” see [Codebase structure](codebase-structure.md). Decision history lives in [ADRs](architecture/). Performance measurement work is tracked in [orchestration-performance-plan.md](orchestration-performance-plan.md).
+For package layout and “where to edit what,” see [Codebase structure](codebase-structure.md). Decision history lives in [ADRs](architecture/). Pre-PM5 hardening contracts for
+effective task policy and run-scoped artifact instances are proposed in
+[ADR-007](architecture/ADR-007-effective-policy-and-artifact-instances.md).
+Performance measurement work is tracked in
+[orchestration-performance-plan.md](orchestration-performance-plan.md).
 
 ---
 

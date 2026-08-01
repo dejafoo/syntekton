@@ -9,7 +9,13 @@ adding release, deployment, domain/policy, or operations workflows.
 **Companion documents:**
 
 - [Prioritized implementation plan](next-work-packages-post-mvp.md) — PM0–PM5
-  ordering and PM5 scope.
+  ordering, **RF pre-PM5 gate**, and blocked PM5 scope.
+- [R1 isolation implementation plan](next-work-packages-r1-isolation.md) —
+  hotspots, `RunExecutionContext`, race tests.
+- [ADR-007 effective policy + artifact instances](architecture/ADR-007-effective-policy-and-artifact-instances.md)
+  — frozen R2/R3 contracts before coding.
+- [R4 pack extensibility split](next-work-packages-r4-pack-extensibility.md) —
+  inventory vs generic dispatch vs technical-spike product completion.
 - [Workflow portfolio handover](handover_post_mvp_workflows.md) — workflow
   outcomes, authority classes, and handoff contracts.
 - [Capabilities, tools, connectors, and skills handover](handover_post_mvp_skills.md)

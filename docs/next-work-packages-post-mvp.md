@@ -52,6 +52,8 @@ engine contracts (packs, handoffs, provenance, skills)
   → discovery evidence plane + feasibility pack
   → intake / plan / change quality
   → remote control + delivery (can partially parallelize after foundation)
+  → change intelligence + local-gateway stand-in (PM4)
+  → pre-PM5 refactoring gate (RF1–RF6) — mandatory
   → release / ops read plane
   → controlled deployment + domain packs
   → evaluation-driven expansion
@@ -60,6 +62,8 @@ engine contracts (packs, handoffs, provenance, skills)
 Starting with more packs or live cloud connectors before WF0/S0/G0 would grow
 coordinator conditionals and untyped prompt state. Starting with deployment
 before evidence primitives would expand authority without auditability.
+Starting PM5 before the RF gate would magnify shared-run state, grant/prompt
+drift, capture bypasses, and coordinator workflow branching.
 
 ## Phase overview
 
@@ -69,8 +73,9 @@ before evidence primitives would expand authority without auditability.
 | PM1 | Feasibility discovery slice | S1, G1–G2, WF1 | [x] |
 | PM2 | Framing and remote control | WF2, R1 | [x] |
 | PM3 | Understand → decide → deliver remotely | WF3–WF4, S2, R2–R3 | [x] |
-| PM4 | Change intelligence + local models | WF5–WF6, S3, G3, R4 | [ ] |
-| PM5 | Release / ops / deploy / harden | WF7–WF9, S4–S5, G4, R5 | [ ] |
+| PM4 | Change intelligence + local models | WF5–WF6, S3, G3, R4 | [x] |
+| RF | Pre-PM5 refactoring / hardening gate | R1–R6 (refactoring handover) | [ ] |
+| PM5 | Release / ops / deploy / harden | WF7–WF9, S4–S5, G4, R5 | [ ] blocked until RF |
 | Ongoing | Evaluation and promotion | WF10, S6 | [ ] throughout |
 
 ## Workstreams
@@ -90,15 +95,23 @@ before evidence primitives would expand authority without auditability.
 | PM3.A | Investigation v2 + technical plan v2 (WF3–WF4) | [x] |
 | PM3.B | Interface analysis + technical spike (S2, WF1.A) | [x] |
 | PM3.C | Remote workspaces + delivery landing (R2–R3) | [x] |
-| PM4.A | Change-set provenance + verification gate v2 (WF5–WF6) | [ ] |
-| PM4.B | Delivery intelligence / validation evidence (S3) | [ ] |
-| PM4.C | Repository-derived stack profiles (G3) | [ ] |
-| PM4.D | Worker supervision + local-model gateway (R4) | [ ] |
-| PM5.A | `release_readiness` + release/ops read plane (WF7, S4) | [ ] |
-| PM5.B | Controlled deployment execution (WF8, S5) | [ ] |
-| PM5.C | Domain/policy packs + deployment composition (G4) | [ ] |
-| PM5.D | Operational workflows (WF9) | [ ] |
-| PM5.E | Remote hardening / optional remote MCP (R5) | [ ] |
+| PM4.A | Change-set provenance + verification gate v2 (WF5–WF6) | [x] |
+| PM4.B | Delivery intelligence / validation evidence (S3) | [x] |
+| PM4.C | Repository-derived stack profiles (G3) | [x] |
+| PM4.D | Worker supervision + local-model gateway (R4) | [x] |
+| RF1 | Run/task execution isolation | [ ] |
+| RF2 | EffectiveTaskPolicy + truthful grants/routing | [ ] |
+| RF3 | ArtifactInstance + capture-policy unification | [ ] |
+| RF4.INV | Workflow-branch inventory (design) | [ ] |
+| RF4.EXT | Generic pack dispatch / PackExecutionPolicy | [ ] |
+| RF4.SPIKE | Technical spike cites typed interface evidence | [ ] |
+| RF5 | Real local-model proof (AMD OpenAI-compatible) | [ ] |
+| RF6 | Observability, migration, operator hardening | [ ] |
+| PM5.A | `release_readiness` + release/ops read plane (WF7, S4) | [ ] blocked |
+| PM5.B | Controlled deployment execution (WF8, S5) | [ ] blocked |
+| PM5.C | Domain/policy packs + deployment composition (G4) | [ ] blocked |
+| PM5.D | Operational workflows (WF9) | [ ] blocked |
+| PM5.E | Remote hardening / optional remote MCP (R5) | [ ] blocked |
 | PMX | Evaluation, scorecards, controlled expansion (WF10, S6) | [ ] |
 
 ---
@@ -501,7 +514,75 @@ change to the OpenAI-compatible local profile endpoint.
 
 ---
 
+## RF — Pre-PM5 refactoring and hardening gate `[ ]`
+
+**Goal:** make concurrent remote runs, effective grants, capture policy, and
+pack extensibility correct before expanding authority with release/deploy/ops
+workflows.
+
+**Normative gate:** [handover_post_mvp_refactoring.md](handover_post_mvp_refactoring.md)
+(§2 locked rules, §4 packages, §7 PM5 entry checklist).
+
+**Do not start PM5** (`release_readiness`, `deployment_execution`,
+`incident_triage`, `service_health_review`, production-like connectors, or
+additional deployment authority) until every §7 technical and operator outcome
+is demonstrated.
+
+| Step | Plan / contract | Status |
+| --- | --- | --- |
+| RF1 | [next-work-packages-r1-isolation.md](next-work-packages-r1-isolation.md) | [ ] |
+| RF2–RF3 contracts | [ADR-007](architecture/ADR-007-effective-policy-and-artifact-instances.md) | proposed |
+| RF2 | EffectiveTaskPolicy + stack-profile resource + route identity | [ ] |
+| RF3 | ArtifactInstance + content-class × capture matrix | [ ] |
+| RF4.INV / EXT / SPIKE | [next-work-packages-r4-pack-extensibility.md](next-work-packages-r4-pack-extensibility.md) | [ ] |
+| RF5 | Real local OpenAI-compatible proof (opt-in; not unit CI) | [ ] |
+| RF6 | Dashboard/API migration + operator guide | [ ] |
+
+**Sequence:** RF1 → RF2 → (RF3 ∥ RF4.INV) → RF4.EXT after RF2; RF4.SPIKE
+tracked separately; RF5 after route identity from RF2; RF6 last; then PM5.
+
+### RF1 — Run and task execution isolation `[ ]`
+
+See [next-work-packages-r1-isolation.md](next-work-packages-r1-isolation.md).
+Introduce `RunExecutionContext`; stop mutating shared gateway/audit; add
+interleaving race tests.
+
+### RF2 — Resolve policy once `[ ]`
+
+Implement `effective_task_policy.v1` per ADR-007. Grant before
+`assemble_context`; persist prompt reductions; pin rendered stack profile;
+named cloud fallback identity.
+
+### RF3 — Artifact and capture unification `[ ]`
+
+Implement `ArtifactInstance` and the capture matrix per ADR-007. Close the
+artifact-content bypass for raw validation/source captures.
+
+### RF4 — Pack extensibility (split) `[ ]`
+
+- **RF4.INV:** branch inventory design artifact.
+- **RF4.EXT:** generic dispatch + `PackExecutionPolicy` (after RF2).
+- **RF4.SPIKE:** technical spike cites typed interface tools/artifacts
+  (product completion; separate from EXT).
+
+See [next-work-packages-r4-pack-extensibility.md](next-work-packages-r4-pack-extensibility.md).
+
+### RF5 — Local-first model plane proof `[ ]`
+
+Real AMD (or equivalent) OpenAI-compatible endpoint behind existing gateway
+contracts; probes; circuit breaker; opt-in live evaluation. OpenRouter remains
+the stand-in until this exits.
+
+### RF6 — Observability and operator hardening `[ ]`
+
+Projections for policy/visibility/route; additive migrations; package upgrade
+smoke; operator guide for legacy capture and local/cloud labels.
+
+---
+
 ## PM5 — Release, operations, deployment, hardening
+
+**Status:** blocked until RF §7 entry gate passes.
 
 **Goal:** close the lifecycle with evidence-led release/ops and a narrowly
 useful non-production deployment path.
@@ -563,19 +644,25 @@ Run continuously from PM1 onward; do not leave it as a final polish phase.
 | G1 anytime after G0 | S1 / WF1 for discovery skills |
 | WF2 after WF1 dossier contract | S1 evidence plane if intake cites external claims |
 | S5 / WF8 | S4 + WF7 + R2/R3 approval/delivery contracts |
+| RF4.INV beside RF2 | RF4.EXT migration until EffectiveTaskPolicy (RF2) |
+| RF4.SPIKE beside RF4.EXT | PM5 until both EXT and SPIKE exits |
+| RF5 beside RF3/RF4 after RF2 route identity | — |
+| PM5.* | **All** RF1–RF6 + handover §7 checkboxes |
 
 Never parallelize by weakening an earlier package’s approval, capture, or
 artifact-ownership rules.
 
 ## First 90-day recommendation
 
-1. **Ship PM0.A–C** so packs, handoffs, provenance, and skills share one
-   contract.
-2. **Stand up PM0.D** if remote AMD use is an near-term operator need.
-3. **Ship PM1** end-to-end: public feasibility discovery on a non-sensitive
-   fixture domain, measurable against direct-to-`technical_plan` baseline.
-4. **Add PM2.A** so discovery outputs become bounded change briefs.
-5. **Add PM2.B** only when the private server topology is already proven (R0).
+PM0–PM4 are landed. Next:
+
+1. **RF1** — run/task isolation
+   ([next-work-packages-r1-isolation.md](next-work-packages-r1-isolation.md)).
+2. **RF2–RF3** — implement contracts frozen in
+   [ADR-007](architecture/ADR-007-effective-policy-and-artifact-instances.md).
+3. **RF4.INV → RF4.EXT** and **RF4.SPIKE** in parallel tracks
+   ([r4 plan](next-work-packages-r4-pack-extensibility.md)).
+4. **RF5–RF6** then close handover §7 before any PM5 pack.
 
 Stop and reassess before investing in live partner APIs, operations connectors,
 or deployment mutation.
