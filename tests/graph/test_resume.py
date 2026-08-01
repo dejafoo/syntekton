@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from product_factory.config.loader import load_config
+from product_factory.config.loader import AppConfig, load_config
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.errors import ApprovalBlockedError, RuntimeFailureError
 from product_factory.domain.runs import RunRequest
@@ -16,7 +16,7 @@ from product_factory.orchestration.coordinator import RunCoordinator
 from tests.conftest import clone_fixture
 
 
-def _config() -> object:
+def _config() -> AppConfig:
     root = Path(__file__).resolve().parents[2]
     return load_config(root)
 
@@ -66,6 +66,7 @@ def test_resume_skips_completed_tasks_and_retries_crashed_task(tmp_path: Path, m
     # "executing" to faithfully simulate a process that crashed before it
     # could persist any failure status at all.
     row = coord1.db.get_run(run_id)
+    assert row is not None
     import json
 
     coord1.db.upsert_run(
@@ -106,9 +107,9 @@ def test_resume_skips_completed_tasks_and_retries_crashed_task(tmp_path: Path, m
 
     manifest = coord2.resume(run_id)
 
-    # Only the crashed task is re-dispatched; the completed task incurs no
-    # new model/tool spend.
-    assert invoked_task_ids == ["T-004"]
+    # The crashed patch composer and its not-yet-started ChangeSet dependent are
+    # dispatched; the previously completed implementation incurs no new spend.
+    assert invoked_task_ids == ["T-004", "T-005"]
     assert manifest.final_status in {"completed", "awaiting_approval"}
 
     tool_calls_after = coord2.db.conn.execute(
@@ -117,6 +118,7 @@ def test_resume_skips_completed_tasks_and_retries_crashed_task(tmp_path: Path, m
     assert tool_calls_after == tool_calls_before
 
     t004_after = coord2.db.get_task(run_id, "T-004")
+    assert t004_after is not None
     assert t004_after["status"] == "success"
     assert int(t004_after["attempt"]) == 2
 
@@ -169,4 +171,5 @@ def test_approval_path_works_across_restart(tmp_path: Path) -> None:
     result = coord2.approve(manifest.run_id, apply=False)
     assert result["status"] == "approved"
     row = coord2.db.get_run(manifest.run_id)
+    assert row is not None
     assert row["status"] == "completed"

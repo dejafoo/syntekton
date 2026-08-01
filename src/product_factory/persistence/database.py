@@ -7,9 +7,16 @@ import sqlite3
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from product_factory.observability.contracts import ObservabilityEvent
+from product_factory.workers.models import (
+    WorkerLease,
+    WorkerLeaseConflictError,
+    WorkerLeaseLostError,
+)
+
+if TYPE_CHECKING:
+    from product_factory.observability.contracts import ObservabilityEvent
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -43,6 +50,23 @@ CREATE TABLE IF NOT EXISTS tasks (
     PRIMARY KEY (run_id, task_id),
     FOREIGN KEY (run_id) REFERENCES runs(run_id)
 );
+
+CREATE TABLE IF NOT EXISTS worker_leases (
+    run_id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    attempt INTEGER NOT NULL DEFAULT 1,
+    heartbeat_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    worktree_key TEXT NOT NULL,
+    recovery_outcome TEXT,
+    released_at TEXT,
+    FOREIGN KEY (run_id) REFERENCES runs(run_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS worker_leases_active_worktree
+ON worker_leases(worktree_key) WHERE released_at IS NULL;
+CREATE INDEX IF NOT EXISTS worker_leases_expiry
+ON worker_leases(expires_at) WHERE released_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS task_dependencies (
     run_id TEXT NOT NULL,
@@ -328,6 +352,198 @@ class Database:
                 "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
             ).fetchall()
         return [dict(r) for r in rows]
+
+    @_synchronized
+    def acquire_worker_lease(
+        self,
+        *,
+        run_id: str,
+        owner: str,
+        worktree_key: str,
+        ttl_seconds: float,
+        now: datetime | None = None,
+    ) -> WorkerLease:
+        """Atomically acquire or reclaim the exclusive lease for a run worktree."""
+        from datetime import timedelta
+
+        acquired_at = now or datetime.now(UTC)
+        expires_at = acquired_at + timedelta(seconds=ttl_seconds)
+        acquired_text = acquired_at.isoformat()
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            existing = self.conn.execute(
+                "SELECT * FROM worker_leases WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if (
+                existing
+                and existing["released_at"] is None
+                and datetime.fromisoformat(existing["expires_at"]) > acquired_at
+            ):
+                raise WorkerLeaseConflictError(
+                    f"Run {run_id} already has an active worker lease",
+                    details={
+                        "run_id": run_id,
+                        "owner": existing["owner"],
+                        "worktree_key": existing["worktree_key"],
+                    },
+                )
+
+            # An expired lease cannot keep a worktree permanently locked. Its
+            # owning run retains a typed recovery outcome for later inspection.
+            self.conn.execute(
+                """
+                UPDATE worker_leases
+                SET released_at=?, recovery_outcome=COALESCE(recovery_outcome, 'expired_reclaimed')
+                WHERE worktree_key=? AND run_id<>? AND released_at IS NULL AND expires_at<=?
+                """,
+                (acquired_text, worktree_key, run_id, acquired_text),
+            )
+            conflict = self.conn.execute(
+                """
+                SELECT run_id, owner FROM worker_leases
+                WHERE worktree_key=? AND run_id<>? AND released_at IS NULL AND expires_at>?
+                """,
+                (worktree_key, run_id, acquired_text),
+            ).fetchone()
+            if conflict:
+                raise WorkerLeaseConflictError(
+                    f"Worktree {worktree_key} already has an active writer",
+                    details={
+                        "run_id": conflict["run_id"],
+                        "owner": conflict["owner"],
+                        "worktree_key": worktree_key,
+                    },
+                )
+
+            attempt = int(existing["attempt"]) + 1 if existing else 1
+            self.conn.execute(
+                """
+                INSERT INTO worker_leases
+                  (run_id, owner, attempt, heartbeat_at, expires_at, worktree_key,
+                   recovery_outcome, released_at)
+                VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)
+                ON CONFLICT(run_id) DO UPDATE SET
+                  owner=excluded.owner,
+                  attempt=excluded.attempt,
+                  heartbeat_at=excluded.heartbeat_at,
+                  expires_at=excluded.expires_at,
+                  worktree_key=excluded.worktree_key,
+                  recovery_outcome=NULL,
+                  released_at=NULL
+                """,
+                (
+                    run_id,
+                    owner,
+                    attempt,
+                    acquired_text,
+                    expires_at.isoformat(),
+                    worktree_key,
+                ),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        lease = self.get_worker_lease(run_id)
+        if lease is None:  # pragma: no cover - defensive against SQLite corruption
+            raise WorkerLeaseLostError(f"Failed to read acquired lease for {run_id}")
+        return lease
+
+    @_synchronized
+    def heartbeat_worker_lease(
+        self,
+        *,
+        run_id: str,
+        owner: str,
+        ttl_seconds: float,
+        now: datetime | None = None,
+    ) -> WorkerLease:
+        """Extend a lease only while the caller still owns it."""
+        from datetime import timedelta
+
+        heartbeat_at = now or datetime.now(UTC)
+        expires_at = heartbeat_at + timedelta(seconds=ttl_seconds)
+        cur = self.conn.execute(
+            """
+            UPDATE worker_leases SET heartbeat_at=?, expires_at=?
+            WHERE run_id=? AND owner=? AND released_at IS NULL
+            """,
+            (heartbeat_at.isoformat(), expires_at.isoformat(), run_id, owner),
+        )
+        self.conn.commit()
+        if cur.rowcount != 1:
+            raise WorkerLeaseLostError(
+                f"Worker lease for {run_id} is no longer owned by {owner}",
+                details={"run_id": run_id, "owner": owner},
+            )
+        lease = self.get_worker_lease(run_id)
+        if lease is None:  # pragma: no cover - guarded by rowcount
+            raise WorkerLeaseLostError(f"Worker lease for {run_id} disappeared")
+        return lease
+
+    @_synchronized
+    def release_worker_lease(
+        self,
+        *,
+        run_id: str,
+        owner: str,
+        recovery_outcome: str,
+        now: datetime | None = None,
+    ) -> WorkerLease:
+        """Release a lease, retaining its final recovery outcome for audit."""
+        released_at = now or datetime.now(UTC)
+        cur = self.conn.execute(
+            """
+            UPDATE worker_leases SET released_at=?, recovery_outcome=?
+            WHERE run_id=? AND owner=? AND released_at IS NULL
+            """,
+            (released_at.isoformat(), recovery_outcome, run_id, owner),
+        )
+        self.conn.commit()
+        if cur.rowcount != 1:
+            raise WorkerLeaseLostError(
+                f"Cannot release worker lease for {run_id}; ownership changed",
+                details={"run_id": run_id, "owner": owner},
+            )
+        lease = self.get_worker_lease(run_id)
+        if lease is None:  # pragma: no cover - guarded by rowcount
+            raise WorkerLeaseLostError(f"Worker lease for {run_id} disappeared")
+        return lease
+
+    def get_worker_lease(self, run_id: str) -> WorkerLease | None:
+        row = self.conn.execute(
+            "SELECT * FROM worker_leases WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        return WorkerLease.model_validate(dict(row)) if row else None
+
+    def list_expired_worker_leases(
+        self, *, now: datetime | None = None
+    ) -> list[WorkerLease]:
+        expires_before = (now or datetime.now(UTC)).isoformat()
+        rows = self.conn.execute(
+            """
+            SELECT * FROM worker_leases
+            WHERE released_at IS NULL AND expires_at<=?
+            ORDER BY expires_at, run_id
+            """,
+            (expires_before,),
+        ).fetchall()
+        return [WorkerLease.model_validate(dict(row)) for row in rows]
+
+    def list_unleased_worker_runs(self) -> list[dict[str, Any]]:
+        """Return nonterminal service runs with no active lease."""
+        rows = self.conn.execute(
+            """
+            SELECT runs.* FROM runs
+            LEFT JOIN worker_leases ON worker_leases.run_id = runs.run_id
+              AND worker_leases.released_at IS NULL
+            WHERE runs.status IN
+              ('queued', 'initializing', 'planning', 'executing', 'validating', 'repairing')
+              AND worker_leases.run_id IS NULL
+            ORDER BY runs.created_at, runs.run_id
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     @_synchronized
     def upsert_task(

@@ -30,6 +30,7 @@ from product_factory.tools import interface_analysis
 from product_factory.tools.policies import assert_path_allowed, resolve_under_root
 from product_factory.tools.registry import ToolRegistry
 from product_factory.tools.sandbox import run_sandboxed_command
+from product_factory.validation.evidence import write_validation_evidence
 
 ToolObserver = Callable[[str, dict[str, Any]], None]
 
@@ -121,6 +122,7 @@ class ToolBroker:
         source_ledger: SourceLedger | None = None,
         source_policy: SourcePolicyProfile | None = None,
         run_id: str = "",
+        validation_baselines: dict[str, str] | None = None,
     ) -> None:
         self.registry = registry
         self.artifact_store = artifact_store
@@ -139,6 +141,7 @@ class ToolBroker:
         self.source_ledger = source_ledger
         self.source_policy = source_policy
         self.run_id = run_id
+        self.validation_baselines = validation_baselines or {}
 
     def set_grant(self, grant: CapabilityGrant) -> None:
         self.grants[grant.task_id] = grant
@@ -295,7 +298,11 @@ class ToolBroker:
                 arguments.get("schema_name"),
             )
         if tool_name == "run_validation_command":
-            return self._run_command(arguments)
+            return self._run_command(
+                arguments,
+                task_id=grant.task_id,
+                tool_call_id=tool_call_id,
+            )
         if self.connectors is not None and self.connectors.handles(tool_name):
             # The grant, max_calls, and budget checks in `execute` have already
             # passed; connector policy is the additional gate for third parties.
@@ -787,7 +794,13 @@ class ToolBroker:
             )
         return result
 
-    def _run_command(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    def _run_command(
+        self,
+        arguments: dict[str, Any],
+        *,
+        task_id: str,
+        tool_call_id: str,
+    ) -> dict[str, Any]:
         root = self._require_worktree()
         requested = str(arguments.get("command_id") or "")
         command_id = self.normalize_validation_command_id(requested)
@@ -816,10 +829,28 @@ class ToolBroker:
         )
         if self.ledger is not None:
             self.ledger.record_command(duration_seconds=result.duration_seconds)
+        evidence = write_validation_evidence(
+            artifact_store=self.artifact_store,
+            command_id=command_id,
+            registered_command_ids=set(self.registered_commands),
+            stdout=result.stdout,
+            stderr=result.stderr,
+            exit_code=result.returncode,
+            input_revision=self.base_commit or "worktree",
+            created_by_task_id=task_id,
+            created_by_tool_call_id=tool_call_id,
+            sandbox=result.sandbox,
+            duration_seconds=result.duration_seconds,
+            previous_evidence_ref=self.validation_baselines.get(command_id),
+        )
         return {
             "command_id": command_id,
             "exit_code": result.returncode,
             "stdout": result.stdout,
             "stderr": result.stderr,
             "sandbox": result.sandbox,
+            "validation_evidence_ref": evidence.artifact_ref.sha256,
+            "validation_raw_ref": evidence.raw_ref.sha256,
+            "normalized_outcomes": evidence.payload["normalized_outcomes"],
+            "baseline_comparison": evidence.payload["baseline_comparison"],
         }

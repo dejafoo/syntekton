@@ -13,15 +13,15 @@ import typer
 import yaml
 
 from product_factory.config.loader import PoliciesConfig, load_config
+from product_factory.domain.artifacts import HandoffRef
 from product_factory.domain.budgets import run_budget_from_policy
 from product_factory.domain.errors import ProductFactoryError
 from product_factory.domain.runs import ArtifactOverride, RunRequest
+from product_factory.gateway.factory import gateway_from_config
 from product_factory.gateway.mock import MockGateway
-from product_factory.gateway.openrouter import OpenRouterGateway
 from product_factory.host.protocol import HostResponse
 from product_factory.host.service import HostService
 from product_factory.host_mcp.factory import resolve_mcp_config_root
-from product_factory.domain.artifacts import HandoffRef
 from product_factory.workflows.inputs import parse_pack_input_option
 
 host_app = typer.Typer(
@@ -33,19 +33,7 @@ host_app = typer.Typer(
 
 
 def _gateway_from_config(config, *, force_mock: bool = False):
-    if force_mock:
-        return MockGateway()
-    profiles = {
-        name: {
-            "model": p.model,
-            "pricing": p.pricing,
-            "provider": p.provider,
-        }
-        for name, p in config.models.profiles.items()
-    }
-    if os.environ.get("OPENROUTER_API_KEY") and not os.environ.get("PRODUCT_FACTORY_FORCE_MOCK"):
-        return OpenRouterGateway(profile_models=profiles)
-    return MockGateway()
+    return gateway_from_config(config, force_mock=force_mock)
 
 
 def _parse_validation_commands(

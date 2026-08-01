@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,16 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.api_state = state
+        if os.environ.get("PRODUCT_FACTORY_REMOTE_MODE", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            # Construct the service at process startup so its durable lease
+            # scanner can recover interrupted remote workers before a client
+            # happens to issue another control request.
+            state.host(observe_base_url=observe_base_url)
         yield
         state.close()
 

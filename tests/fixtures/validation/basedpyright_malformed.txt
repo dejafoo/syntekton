@@ -1,0 +1,2 @@
+Configuration loaded.
+diagnostic stream unavailable: {not-json

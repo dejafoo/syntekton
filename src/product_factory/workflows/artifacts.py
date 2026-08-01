@@ -27,6 +27,9 @@ ROLE_FEASIBILITY_DOSSIER = "feasibility_dossier"
 ROLE_CHANGE_BRIEF = "change_brief"
 ROLE_CLARIFICATION_REQUEST = "clarification_request"
 ROLE_SPIKE_RESULT = "spike_result"
+ROLE_CHANGE_SET = "change_set"
+ROLE_VERIFICATION_REPORT = "verification_report"
+ROLE_VALIDATION_EVIDENCE = "validation_evidence"
 
 
 @dataclass(frozen=True)

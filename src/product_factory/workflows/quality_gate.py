@@ -17,6 +17,7 @@ from product_factory.workflows.artifacts import (
     ROLE_QUALITY_FINDINGS,
     ROLE_SECURITY_EVIDENCE,
     ROLE_TEST_PLAN,
+    ROLE_VERIFICATION_REPORT,
     ArtifactLandSpec,
 )
 from product_factory.workflows.base import WorkflowPack
@@ -49,11 +50,12 @@ QUALITY_GATE_VALIDATOR_IDS: dict[str, str] = {
     ROLE_TEST_PLAN: "test_plan_sections",
     ROLE_QUALITY_FINDINGS: "quality_findings_sections",
     ROLE_SECURITY_EVIDENCE: "security_evidence_sections",
+    ROLE_VERIFICATION_REPORT: "verification_report_contract",
 }
 
 QUALITY_GATE_PACK = WorkflowPack(
     id="quality_gate",
-    version="1.0.0",
+    version="2.0.0",
     input_schema={
         "type": "object",
         "properties": {
@@ -70,6 +72,7 @@ QUALITY_GATE_PACK = WorkflowPack(
             "test_plan": {"type": "string"},
             "quality_findings": {"type": "string"},
             "security_evidence": {"type": ["string", "null"]},
+            "verification_report": {"type": "object"},
             "validation_results": {"type": "array"},
         },
     },
@@ -90,14 +93,35 @@ QUALITY_GATE_PACK = WorkflowPack(
             "security_evidence_sections",
             "secret_scan",
             "citation_presence",
+            "verification_report_contract",
         ],
+        "accepted_handoff_schemas": [
+            "change_set.v1",
+            "technical_plan.document.v1",
+            "technical_plan.document.v2",
+            "validation_evidence.v1",
+        ],
+        "accepted_handoff_roles": {
+            "change_set.v1": ["change_set"],
+            "technical_plan.document.v1": ["architecture_document"],
+            "technical_plan.document.v2": ["architecture_document"],
+            "validation_evidence.v1": ["validation_evidence"],
+        },
+        "accepted_handoff_states": ["approved", "evidence_complete"],
         "review": "required",
         # Registered validation commands only; the pack never runs arbitrary shell.
         "behavioral_commands": "registered",
         "write_grants": "none",
         "findings_are_deliverable": True,
     },
-    skill_policy={"grant_enforcement": "fail_closed"},
+    skill_policy={
+        "grant_enforcement": "fail_closed",
+        "allow": [
+            "quality.evidence-gate",
+            "quality.patch-review",
+            "security.threat-review",
+        ],
+    },
     routing_defaults={"coding_worker_tier": "mid"},
     artifacts=(
         ArtifactLandSpec(
@@ -121,9 +145,18 @@ QUALITY_GATE_PACK = WorkflowPack(
             required=False,
             description="Security review checks and supporting evidence.",
         ),
+        ArtifactLandSpec(
+            role=ROLE_VERIFICATION_REPORT,
+            default_logical_name="verification-report.json",
+            default_dest_path="verification-report.json",
+            media_type="application/json",
+            landable=False,
+            renamable=False,
+            description="Typed acceptance-to-evidence verification outcome.",
+        ),
     ),
     description=(
-        "Read-only quality gate producing a test plan, evidence-backed quality "
-        "findings, and security evidence — reports defects without repairing them."
+        "Read-only verification gate producing review documents and a typed "
+        "acceptance-to-evidence report — reports defects without repairing them."
     ),
 )

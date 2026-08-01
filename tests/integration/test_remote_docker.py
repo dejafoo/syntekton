@@ -271,3 +271,93 @@ def test_sse_tail_or_stream_available(remote: RemotePfClient) -> None:
     # Best-effort SSE: at least one event or a clean empty iterator is fine.
     events = list(remote.iter_sse(submitted.run_id, after_seq=0, live=False))
     assert isinstance(events, list)
+
+
+def test_mock_worker_lease_recovers_after_container_restart(
+    remote: RemotePfClient, docker_remote_env: dict[str, str]
+) -> None:
+    submitted = remote.submit(
+        request_text="Add a small documented health-check change with tests.",
+        workflow_type="code_change",
+        repository_id="sample_api",
+        mock=True,
+    )
+    assert submitted.ok
+    assert submitted.run_id
+
+    # Restart only after the service has durably acquired the writer lease,
+    # ensuring this exercises expiry/resume rather than an ordinary queued run.
+    deadline = time.time() + 30
+    active_lease = None
+    while time.time() < deadline:
+        status = remote.status(submitted.run_id)
+        lease = (status.data or {}).get("worker_lease")
+        if lease and lease["released_at"] is None:
+            active_lease = lease
+            break
+        if status.status in {"completed", "awaiting_approval", "failed", "cancelled"}:
+            break
+        time.sleep(0.05)
+    assert active_lease is not None, "mock run completed before restart lease could be observed"
+
+    env = {
+        **os.environ,
+        "PRODUCT_FACTORY_OBSERVE_TOKEN": docker_remote_env["token"],
+    }
+    stopped = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(COMPOSE_FILE),
+            "stop",
+            "--timeout",
+            "0",
+            "product-factory",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert stopped.returncode == 0, stopped.stderr
+    restarted = subprocess.run(
+        ["docker", "compose", "-f", str(COMPOSE_FILE), "up", "-d", "product-factory"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert restarted.returncode == 0, restarted.stderr
+
+    # The old heartbeat expires after restart. The new service must reclaim it
+    # and either resume successfully or persist a typed recoverable failure.
+    deadline = time.time() + 180
+    final = None
+    while time.time() < deadline:
+        try:
+            candidate = remote.status(submitted.run_id)
+        except (httpx.HTTPError, PfRemoteError):
+            time.sleep(0.25)
+            continue
+        lease = (candidate.data or {}).get("worker_lease")
+        outcome = lease.get("recovery_outcome") if lease else None
+        if outcome == "resumed" or (
+            isinstance(outcome, str) and outcome.startswith("recoverable_failure:")
+        ):
+            final = candidate
+            break
+        time.sleep(0.25)
+
+    assert final is not None
+    assert final.data is not None
+    final_lease = final.data["worker_lease"]
+    assert final_lease["attempt"] >= 2
+    outcome = final_lease["recovery_outcome"]
+    if outcome == "resumed":
+        assert final.status in {"completed", "awaiting_approval"}
+    else:
+        assert final.status == "failed"
+        assert outcome.startswith("recoverable_failure:")

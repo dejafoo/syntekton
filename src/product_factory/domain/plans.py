@@ -54,6 +54,7 @@ class CompiledPlan(BaseModel):
     validation_strategy: str
     risk_classification: Literal["low", "medium", "high"]
     request_acceptance_criteria: list[AcceptanceCriterion]
+    profile_digests: dict[str, str] = Field(default_factory=dict)
     compiler_notes: list[str] = Field(default_factory=list)
 
 

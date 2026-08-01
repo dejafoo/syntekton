@@ -38,6 +38,11 @@ LEGACY_OUTPUT_SCHEMA_MAP: dict[str, str] = {
     "change_intake.v1": "change_brief.v1",
     "spike_result.document.v1": "spike_result.v1",
     "technical_spike.v1": "spike_result.v1",
+    # PM4 change-intelligence outputs — canonical bare ids are preferred, while
+    # document-style spellings remain accepted at planner boundaries.
+    "change_set.document.v1": "change_set.v1",
+    "verification_report.document.v1": "verification_report.v1",
+    "validation_evidence.document.v1": "validation_evidence.v1",
 }
 
 ROLE_TO_SCHEMA: dict[str, str] = {
@@ -51,6 +56,9 @@ ROLE_TO_SCHEMA: dict[str, str] = {
     "change_brief": "change_brief.v1",
     "clarification_request": "clarification_request.v1",
     "spike_result": "spike_result.v1",
+    "change_set": "change_set.v1",
+    "verification_report": "verification_report.v1",
+    "validation_evidence": "validation_evidence.v1",
 }
 
 
@@ -150,6 +158,140 @@ def seed_builtin_schemas(registry: SchemaRegistry) -> None:
             kind="task_output",
             json_schema={"type": "object", "properties": {"patch": {"type": "string"}}},
             description="Unified diff / proposed patch",
+        )
+    )
+    registry.register(
+        SchemaSpec(
+            id="change_set.v1",
+            version="1",
+            kind="task_output",
+            json_schema={
+                "type": "object",
+                "required": [
+                    "base_revision",
+                    "patch_sha256",
+                    "artifact_hashes",
+                    "changed_paths",
+                    "acceptance_refs",
+                    "validation_evidence_refs",
+                    "producer_run_id",
+                ],
+                "properties": {
+                    "base_revision": {"type": "string", "minLength": 1},
+                    "patch_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$",
+                    },
+                    "artifact_hashes": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$",
+                        },
+                    },
+                    "changed_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "uniqueItems": True,
+                    },
+                    "acceptance_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "validation_evidence_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "producer_run_id": {"type": "string", "minLength": 1},
+                },
+                "additionalProperties": True,
+            },
+            description=(
+                "Content-addressed repository change summary linking the patch, "
+                "changed paths, acceptance criteria, and validation evidence"
+            ),
+        )
+    )
+    registry.register(
+        SchemaSpec(
+            id="verification_report.v1",
+            version="1",
+            kind="task_output",
+            json_schema={
+                "type": "object",
+                "required": [
+                    "outcome",
+                    "acceptance_results",
+                    "validator_profile_id",
+                    "evidence_refs",
+                    "residual_risk",
+                ],
+                "properties": {
+                    "outcome": {
+                        "type": "string",
+                        "enum": [
+                            "passes",
+                            "passes_with_risk",
+                            "blocked",
+                            "insufficient_evidence",
+                        ],
+                    },
+                    "acceptance_results": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                    },
+                    "validator_profile_id": {"type": "string", "minLength": 1},
+                    "evidence_refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "residual_risk": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "additionalProperties": True,
+            },
+            description=(
+                "Typed verification outcome with acceptance-level results, "
+                "evidence references, validator profile, and residual risk"
+            ),
+        )
+    )
+    registry.register(
+        SchemaSpec(
+            id="validation_evidence.v1",
+            version="1",
+            kind="task_output",
+            json_schema={
+                "type": "object",
+                "required": [
+                    "profile_version",
+                    "command_id",
+                    "receipt",
+                    "input_revision",
+                    "normalized_outcomes",
+                    "raw_ref",
+                    "baseline_comparison",
+                ],
+                "properties": {
+                    "profile_version": {"type": "string", "minLength": 1},
+                    "command_id": {"type": "string", "minLength": 1},
+                    "receipt": {"type": "object"},
+                    "input_revision": {"type": "string", "minLength": 1},
+                    "normalized_outcomes": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                    },
+                    "raw_ref": {"type": "string", "minLength": 1},
+                    "baseline_comparison": {"type": "object"},
+                },
+                "additionalProperties": True,
+            },
+            description=(
+                "Normalized result of one registered validation command with "
+                "receipt, raw evidence reference, and baseline comparison"
+            ),
         )
     )
     registry.register(
@@ -326,7 +468,6 @@ def seed_builtin_schemas(registry: SchemaRegistry) -> None:
     )
 
     for schema_id in (
-        "verification_report.v1",
         "release_plan.v1",
         "deployment_record.v1",
         "operational_record.v1",

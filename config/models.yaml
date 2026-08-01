@@ -46,7 +46,17 @@ profiles:
       sort: price
 
   coding_worker:
-    provider_adapter: openrouter
+    provider_adapter: openai_compatible
+    route_class: local
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    cloud_fallback:
+      enabled: true
+      adapter: openrouter
+      allowed_reasons:
+        - capability_miss
+        - local_unhealthy
+        - provider_error
     model: qwen/qwen3-coder-next
     capabilities:
       - implementation
@@ -66,7 +76,17 @@ profiles:
       sort: price
 
   local_target_reviewer:
-    provider_adapter: openrouter
+    provider_adapter: openai_compatible
+    route_class: local
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    cloud_fallback:
+      enabled: true
+      adapter: openrouter
+      allowed_reasons:
+        - capability_miss
+        - local_unhealthy
+        - provider_error
     # OpenRouter retired mistralai/devstral-small-2505 (no endpoints).
     # qwen3-coder-30b is a cheap coding-sized stand-in for a future local reviewer.
     model: qwen/qwen3-coder-30b-a3b-instruct
@@ -139,6 +159,7 @@ profiles:
 
   mock_local:
     provider_adapter: mock
+    route_class: local
     model: mock/local-model
     capabilities:
       - planning

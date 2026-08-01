@@ -1,0 +1,5 @@
+============================= test session starts ==============================
+collected 3 items
+
+tests/test_widget.py .F
+FAILED tests/test_widget.py::test_rejects_empty - AssertionError: expected 400

@@ -8,27 +8,15 @@ from pathlib import Path
 from product_factory.api.remote_mode import resolve_project_root
 from product_factory.config.loader import AppConfig, load_config
 from product_factory.gateway.base import ModelGateway
+from product_factory.gateway.factory import gateway_from_config
 from product_factory.gateway.mock import MockGateway
-from product_factory.gateway.openrouter import OpenRouterGateway
 from product_factory.host.service import HostService
 from product_factory.observability.query import ObservabilityQueryService
 from product_factory.persistence.database import Database
 
 
 def _gateway_from_config(config: AppConfig, *, force_mock: bool = False) -> ModelGateway:
-    if force_mock:
-        return MockGateway()
-    profiles = {
-        name: {
-            "model": p.model,
-            "pricing": p.pricing,
-            "provider": p.provider,
-        }
-        for name, p in config.models.profiles.items()
-    }
-    if os.environ.get("OPENROUTER_API_KEY") and not os.environ.get("PRODUCT_FACTORY_FORCE_MOCK"):
-        return OpenRouterGateway(profile_models=profiles)
-    return MockGateway()
+    return gateway_from_config(config, force_mock=force_mock)
 
 
 class ApiState:
@@ -76,6 +64,6 @@ class ApiState:
 
     def close(self) -> None:
         for service in self._hosts.values():
-            service.coord.db.close()
+            service.close()
         self._hosts.clear()
         self.db.close()

@@ -61,6 +61,7 @@ class PromptPackageManifest(BaseModel):
     component_hashes: dict[str, str]
     selected_skill_versions: dict[str, str] = Field(default_factory=dict)
     selected_skill_digests: dict[str, str] = Field(default_factory=dict)
+    selected_profile_digests: dict[str, str] = Field(default_factory=dict)
     tool_contract_versions: dict[str, str] = Field(default_factory=dict)
     input_resource_refs: list[ResourceRef] = Field(default_factory=list)
     estimated_tokens: int
@@ -242,6 +243,7 @@ def assemble_context(
     model_context_soft_limit: int | None = None,
     skill_budget_ceiling: int | None = None,
     enforce_skill_budget: bool = True,
+    profile_digests: dict[str, str] | None = None,
 ) -> AssembledContext:
     if isinstance(packing, ResolvedContextLimits):
         limits = packing
@@ -259,6 +261,7 @@ def assemble_context(
             skills=skills,
             tool_names=[str(t.get("name") or "") for t in tool_definitions],
             expected_output_schema=task.expected_output_schema,
+            profile_digests=profile_digests,
             policy_ceiling=skill_budget_ceiling,
         )
 
@@ -293,6 +296,8 @@ def assemble_context(
         )
     layer7 = "\n".join(runtime_directives or []) or "(none)"
     layer8 = f"Return JSON matching schema id: {task.expected_output_schema}"
+    resolved_profile_digests = dict(sorted((profile_digests or {}).items()))
+    layer9 = json.dumps(resolved_profile_digests, sort_keys=True)
 
     system = "\n\n".join(
         [
@@ -323,6 +328,7 @@ def assemble_context(
         "context": _hash_text(layer6),
         "directives": _hash_text(layer7),
         "output": _hash_text(layer8),
+        "stack_profiles": _hash_text(layer9),
     }
     manifest = PromptPackageManifest(
         package_id=package_id,
@@ -331,6 +337,7 @@ def assemble_context(
         component_hashes=component_hashes,
         selected_skill_versions={s.manifest.id: s.manifest.version for s in skills},
         selected_skill_digests={s.manifest.id: s.package_digest for s in skills},
+        selected_profile_digests=resolved_profile_digests,
         tool_contract_versions={t.get("name", ""): "1" for t in tool_definitions},
         estimated_tokens=estimate_tokens(system + user),
         omitted_context=omitted,

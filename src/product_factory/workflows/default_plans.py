@@ -7,6 +7,7 @@ from product_factory.domain.tasks import AcceptanceCriterion, TaskSpec
 from product_factory.workflows.artifacts import (
     ROLE_ARCHITECTURE_DOCUMENT,
     ROLE_CHANGE_BRIEF,
+    ROLE_CHANGE_SET,
     ROLE_CLARIFICATION_REQUEST,
     ROLE_EVIDENCE_REPORT,
     ROLE_FEASIBILITY_DOSSIER,
@@ -15,6 +16,7 @@ from product_factory.workflows.artifacts import (
     ROLE_SECURITY_EVIDENCE,
     ROLE_SPIKE_RESULT,
     ROLE_TEST_PLAN,
+    ROLE_VERIFICATION_REPORT,
 )
 
 
@@ -96,13 +98,34 @@ def default_code_change_plan(request_text: str) -> PlannerOutput:
                     )
                 ],
             ),
+            TaskSpec(
+                id="T-005",
+                title="Compose ChangeSet",
+                capability="composition",
+                objective="Produce the content-addressed change-set.json contract",
+                dependencies=["T-004"],
+                expected_output_schema="change_set.v1",
+                required_tool_classes={"artifact_write"},
+                acceptance_criteria=[
+                    AcceptanceCriterion(
+                        id="AC-005",
+                        description="ChangeSet links the patch, paths, acceptance, and evidence",
+                        verification="artifact_check",
+                    )
+                ],
+            ),
         ],
         final_artifacts=[
             FinalArtifactSpec(
                 logical_name="proposed.patch",
                 composer_task_id="T-004",
                 role=ROLE_PROPOSED_PATCH,
-            )
+            ),
+            FinalArtifactSpec(
+                logical_name="change-set.json",
+                composer_task_id="T-005",
+                role=ROLE_CHANGE_SET,
+            ),
         ],
         validation_strategy="deterministic then independent review",
         risk_classification="low",
@@ -122,9 +145,10 @@ def default_code_change_plan(request_text: str) -> PlannerOutput:
     if not high_risk:
         implementation = proposal.tasks[1].model_copy(update={"dependencies": []})
         composition = proposal.tasks[3].model_copy(update={"dependencies": [implementation.id]})
+        change_set = proposal.tasks[4]
         proposal = proposal.model_copy(
             update={
-                "tasks": [implementation, composition],
+                "tasks": [implementation, composition, change_set],
                 "validation_strategy": "deterministic behavioral validation",
                 "risk_classification": "low",
             }
@@ -422,6 +446,26 @@ def default_quality_gate_plan(request_text: str) -> PlannerOutput:
                     )
                 ],
             ),
+            TaskSpec(
+                id="T-008",
+                title="Compose verification report",
+                capability="composition",
+                objective=(
+                    "Map every required acceptance criterion to evidence and emit "
+                    "a typed verification outcome"
+                ),
+                dependencies=["T-002", "T-004", "T-007"],
+                expected_output_schema="verification_report.v1",
+                required_tool_classes={"repository_read", "artifact_write"},
+                prohibited_actions=read_only,
+                acceptance_criteria=[
+                    AcceptanceCriterion(
+                        id="AC-008",
+                        description="Verification outcome and acceptance mapping are complete",
+                        verification="artifact_check",
+                    )
+                ],
+            ),
         ],
         final_artifacts=[
             FinalArtifactSpec(
@@ -439,8 +483,16 @@ def default_quality_gate_plan(request_text: str) -> PlannerOutput:
                 composer_task_id="T-007",
                 role=ROLE_QUALITY_FINDINGS,
             ),
+            FinalArtifactSpec(
+                logical_name="verification-report.json",
+                composer_task_id="T-008",
+                role=ROLE_VERIFICATION_REPORT,
+            ),
         ],
-        validation_strategy="section checks, citation presence, secret scan",
+        validation_strategy=(
+            "section checks, citation presence, acceptance-to-evidence mapping, "
+            "typed verification outcome, secret scan"
+        ),
         risk_classification="low",
     )
 

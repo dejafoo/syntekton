@@ -47,6 +47,9 @@ class ComposeContext:
     ctx_messages: list[dict[str, str]] | None = None
     run_id: str = ""
     profile: str = ""
+    base_revision: str = ""
+    validation_evidence_refs: list[str] = field(default_factory=list)
+    validator_results: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def pack_input(self) -> dict[str, Any]:

@@ -45,7 +45,7 @@ from product_factory.domain.errors import (
     ValidationFailureError,
 )
 from product_factory.domain.findings import Finding, ValidatorResult
-from product_factory.domain.plans import CompiledPlan, FinalArtifactSpec, PlannerOutput
+from product_factory.domain.plans import CompiledPlan, PlannerOutput
 from product_factory.domain.runs import RunManifest, RunRequest
 from product_factory.domain.tasks import AcceptanceCriterion, TaskResult, TaskSpec
 from product_factory.domain.tools import CapabilityGrant
@@ -90,6 +90,7 @@ from product_factory.repositories.patches import (
 )
 from product_factory.repositories.snapshot import snapshot_repository
 from product_factory.repositories.worktrees import WorktreeManager
+from product_factory.repository.stack_profile import discover_stack_profile
 from product_factory.scheduling.scheduler import resolve_task_model_profile, runnable_tasks
 from product_factory.schemas.builtin import ROLE_TO_SCHEMA
 from product_factory.skills.profiles import ProfileRegistry
@@ -108,6 +109,7 @@ from product_factory.validation.pipeline import (
     validate_intake_no_invention,
     validate_intake_sections,
     validate_investigation_document,
+    validate_json_contract,
     validate_option_comparison,
     validate_patch_applies,
     validate_path_scope,
@@ -115,11 +117,13 @@ from product_factory.validation.pipeline import (
     validate_regulated_claims,
     validate_research_provenance,
     validate_secrets,
+    validate_verification_report,
     validate_web_search_used,
 )
 from product_factory.workflows.artifacts import (
     ROLE_ARCHITECTURE_DOCUMENT,
     ROLE_CHANGE_BRIEF,
+    ROLE_CHANGE_SET,
     ROLE_CLARIFICATION_REQUEST,
     ROLE_EVIDENCE_REPORT,
     ROLE_FEASIBILITY_DOSSIER,
@@ -127,11 +131,13 @@ from product_factory.workflows.artifacts import (
     ROLE_QUALITY_FINDINGS,
     ROLE_SECURITY_EVIDENCE,
     ROLE_TEST_PLAN,
+    ROLE_VERIFICATION_REPORT,
     ArtifactLandMap,
 )
 from product_factory.workflows.base import WorkflowPack
 from product_factory.workflows.handlers import handler_for
 from product_factory.workflows.handlers.base import ComposeContext
+from product_factory.workflows.handoffs import validate_pack_handoffs
 from product_factory.workflows.inputs import persist_pack_input, validate_pack_input
 from product_factory.workflows.registry import land_map_for_request, resolve_workflow_pack
 
@@ -558,6 +564,7 @@ class RunCoordinator:
         land_map = ArtifactLandMap()
         if request.workflow_type in _PACK_BACKED_WORKFLOW_TYPES:
             workflow_pack = resolve_workflow_pack(request.workflow_type)
+            validate_pack_handoffs(request, workflow_pack)
             # Bad artifact overrides or typed pack input fail here, before any
             # planning spend.
             validate_pack_input(workflow_pack, request.pack_input)
@@ -641,6 +648,7 @@ class RunCoordinator:
                 max_parallel_tasks=request.budget.max_parallel_tasks,
                 workflow_pack=workflow_pack,
                 skill_registry=self.skills,
+                profile_digests=self._profile_digests(request),
             )
             plan_attempt = 1
             if not compile_result.ok:
@@ -664,6 +672,7 @@ class RunCoordinator:
                         max_parallel_tasks=request.budget.max_parallel_tasks,
                         workflow_pack=workflow_pack,
                         skill_registry=self.skills,
+                        profile_digests=self._profile_digests(request),
                     )
                     plan_attempt += 1
                 if not compile_result.ok:
@@ -873,6 +882,7 @@ class RunCoordinator:
         land_map = ArtifactLandMap()
         if request.workflow_type in _PACK_BACKED_WORKFLOW_TYPES:
             workflow_pack = resolve_workflow_pack(request.workflow_type)
+            validate_pack_handoffs(request, workflow_pack)
             validate_pack_input(workflow_pack, request.pack_input)
             land_map = land_map_for_request(request)
         source_policy = resolve_request_source_policy(
@@ -896,6 +906,7 @@ class RunCoordinator:
             max_parallel_tasks=request.budget.max_parallel_tasks,
             workflow_pack=workflow_pack,
             skill_registry=self.skills,
+            profile_digests=self._profile_digests(request),
         )
         if not compile_result.ok or compile_result.plan is None:
             raise PlanRejectedError(
@@ -1276,9 +1287,6 @@ class RunCoordinator:
         architecture_name = land_map.logical_name_for(
             ROLE_ARCHITECTURE_DOCUMENT, default="ARCHITECTURE.md"
         )
-        evidence_name = land_map.logical_name_for(
-            ROLE_EVIDENCE_REPORT, default="EVIDENCE_REPORT.md"
-        )
         patch_name = land_map.logical_name_for(ROLE_PROPOSED_PATCH, default="proposed.patch")
         # A composer task owns exactly one deliverable role, so a pack can declare
         # several documents without the coordinator branching on workflow type to
@@ -1309,6 +1317,12 @@ class RunCoordinator:
         architecture_md = initial_architecture_md
         evidence_report_md = initial_evidence_report_md
         validation_results: list[ValidatorResult] = []
+        validation_evidence_refs = [
+            str(value)
+            for value in (request.pack_input.get("validation_evidence_refs") or [])
+            if str(value).strip()
+        ]
+        collected_validator_results: list[dict[str, Any]] = []
 
         self.db.upsert_run(
             run_id=run_id,
@@ -1423,6 +1437,10 @@ class RunCoordinator:
                 dependency_outputs_by_task: dict[
                     str, list[dict[str, Any]]
                 ] = dependency_outputs_by_task,
+                validation_evidence_refs: list[str] = validation_evidence_refs,
+                collected_validator_results: list[
+                    dict[str, Any]
+                ] = collected_validator_results,
             ) -> TaskResult:
                 return self._execute_task(
                     run_id=run_id,
@@ -1438,6 +1456,8 @@ class RunCoordinator:
                     dependency_outputs=dependency_outputs_by_task[task.id],
                     land_map=land_map,
                     composer_role=composer_roles.get(task.id),
+                    validation_evidence_refs=validation_evidence_refs,
+                    validator_results=collected_validator_results,
                 )
 
             wave_results: list[TaskResult] = run_wave(
@@ -1495,7 +1515,7 @@ class RunCoordinator:
                     role = land_map.role_for_logical_name(art.logical_name)
                     if role is None:
                         continue
-                    if art.media_type == "text/markdown":
+                    if art.media_type in {"text/markdown", "application/json"}:
                         documents_by_role[role] = artifacts.get_text(art.sha256)
                     if role == ROLE_ARCHITECTURE_DOCUMENT:
                         architecture_md = artifacts.get_text(art.sha256)
@@ -1519,7 +1539,18 @@ class RunCoordinator:
                         task=live_plan.tasks[result.task_id],
                         findings=result.findings,
                         ledger=ledger,
+                        artifact_store=artifacts,
+                        input_revision=base_commit or "worktree",
                     )
+                    collected_validator_results.extend(
+                        value.model_dump(mode="json") for value in validation_results
+                    )
+                    validation_evidence_refs.extend(
+                        str(value.details["validation_evidence_ref"])
+                        for value in validation_results
+                        if value.details.get("validation_evidence_ref")
+                    )
+                    validation_evidence_refs = list(dict.fromkeys(validation_evidence_refs))
                     (run_dir / "output" / "validation-report.json").write_text(
                         json.dumps(
                             [v.model_dump(mode="json") for v in validation_results], indent=2
@@ -1714,6 +1745,29 @@ class RunCoordinator:
                     logical_name=patch_name,
                     created_by_task_id="compose",
                 )
+            change_set_entry = land_map.by_role(ROLE_CHANGE_SET)
+            change_set = documents_by_role.get(ROLE_CHANGE_SET, "")
+            if change_set_entry is not None and change_set.strip():
+                (run_dir / "output" / change_set_entry.logical_name).write_text(
+                    change_set,
+                    encoding="utf-8",
+                )
+                validation_results.append(
+                    validate_json_contract(
+                        change_set,
+                        schema_id="change_set.v1",
+                        validator_id="change_set_contract",
+                    )
+                )
+            elif change_set_entry is not None and change_set_entry.required:
+                validation_results.append(
+                    ValidatorResult(
+                        validator_id="change_set_contract",
+                        status="fail",
+                        message="Required deliverable change_set was not produced",
+                        details={"logical_name": change_set_entry.logical_name},
+                    )
+                )
         elif request.workflow_type in _TECHNICAL_PLAN_WORKFLOW_TYPES:
             if not architecture_md:
                 architecture_md = self._compose_architecture(
@@ -1785,6 +1839,8 @@ class RunCoordinator:
                                         ),
                                         compose_change_intake=self._compose_change_intake,
                                         compose_quality_document=self._compose_quality_document,
+                                        validation_evidence_refs=validation_evidence_refs,
+                                        validator_results=collected_validator_results,
                                     ),
                                 )
                                 documents_by_role[entry.role] = document
@@ -1817,14 +1873,17 @@ class RunCoordinator:
                     else:
                         continue
                 (run_dir / "output" / entry.logical_name).write_text(document, encoding="utf-8")
-                validation_results.append(
-                    validate_document_sections(
-                        document,
-                        validator_id=pack_handler.validator_id(entry.role),
-                        required_sections=pack_handler.required_sections(entry.role),
+                if entry.role == ROLE_VERIFICATION_REPORT:
+                    validation_results.append(validate_verification_report(document))
+                else:
+                    validation_results.append(
+                        validate_document_sections(
+                            document,
+                            validator_id=pack_handler.validator_id(entry.role),
+                            required_sections=pack_handler.required_sections(entry.role),
+                        )
                     )
-                )
-                validation_results.append(validate_secrets(document))
+                    validation_results.append(validate_secrets(document))
                 if (
                     request.workflow_type in _INVESTIGATION_WORKFLOW_TYPES
                     and entry.role == ROLE_EVIDENCE_REPORT
@@ -2016,6 +2075,15 @@ class RunCoordinator:
 
     def _profile_digests(self, request: RunRequest) -> dict[str, str]:
         digests = ProfileRegistry.load(self.config.root / "profiles").digests()
+        if request.repository_path is not None:
+            stack_profile = discover_stack_profile(
+                request.repository_path,
+                registered_command_ids=(
+                    self._resolve_validation_command_ids(request)
+                    or self.config.policies.registered_commands
+                ),
+            )
+            digests.update(stack_profile.as_manifest_entry())
         source_policy = resolve_request_source_policy(
             request, profiles_root=self.config.root / "profiles"
         )
@@ -2039,8 +2107,12 @@ class RunCoordinator:
         ledger: BudgetLedger | None = None,
         land_map: ArtifactLandMap | None = None,
         composer_role: str | None = None,
+        validation_evidence_refs: list[str] | None = None,
+        validator_results: list[dict[str, Any]] | None = None,
     ) -> TaskResult:
         land_map = land_map or ArtifactLandMap()
+        validation_evidence_refs = validation_evidence_refs or []
+        validator_results = validator_results or []
         profile = resolve_task_model_profile(task, metadata=request.metadata)
         agent_profile = {
             "repository_analysis": "repository_explorer",
@@ -2129,6 +2201,7 @@ class RunCoordinator:
                 "(1 + random())))). Do not sleep the base delay and only mutate "
                 "delay afterward — tests assert observed sleep values vary."
             )
+        profile_digests = self._profile_digests(request)
         ctx = assemble_context(
             task=task,
             model_profile=profile,
@@ -2141,13 +2214,14 @@ class RunCoordinator:
             runtime_directives=runtime_directives or None,
             package_id=f"pkg-{task.id}",
             packing=packing_limits,
+            profile_digests=profile_digests,
         )
         task_context = build_task_context(
             task_id=task.id,
             skills=skills,
             tool_names=[str(t.get("name") or "") for t in tool_defs],
             expected_output_schema=task.expected_output_schema,
-            profile_digests=self._profile_digests(request),
+            profile_digests=profile_digests,
         )
         persist_task_context(task_context, run_dir / "prompts")
         (run_dir / "prompts" / f"{task.id}.manifest.json").write_text(
@@ -2942,14 +3016,22 @@ class RunCoordinator:
                     ctx_messages=ctx.messages,
                     run_id=run_id,
                     profile=profile,
+                    base_revision=base_commit,
+                    validation_evidence_refs=validation_evidence_refs,
+                    validator_results=validator_results,
                 )
                 document = handler.compose(composer_role, compose_ctx)
                 if gen_usage_box:
                     model_usage = model_usage.merge(gen_usage_box[0])
                 schema_id = ROLE_TO_SCHEMA.get(composer_role)
+                media_type = (
+                    "application/json"
+                    if composer_role in {ROLE_CHANGE_SET, ROLE_VERIFICATION_REPORT}
+                    else "text/markdown"
+                )
                 art = artifacts.put_text(
                     document,
-                    media_type="text/markdown",
+                    media_type=media_type,
                     logical_name=document_name,
                     created_by_task_id=task.id,
                     schema_id=schema_id,
@@ -3200,6 +3282,8 @@ class RunCoordinator:
         findings: list[Finding] | None = None,
         ledger: BudgetLedger | None = None,
         evidence_report_md: str = "",
+        artifact_store: ArtifactStore | None = None,
+        input_revision: str = "worktree",
     ) -> list[ValidatorResult]:
         results: list[ValidatorResult] = []
         if request.workflow_type in _CODE_CHANGE_WORKFLOW_TYPES and patch_text and original_repo:
@@ -3208,15 +3292,21 @@ class RunCoordinator:
             results.append(validate_path_scope(changed, task.allowed_path_patterns))
             results.append(validate_secrets(patch_text))
             command_ids = self._resolve_validation_command_ids(request)
-            results.extend(
-                validate_behavioral_commands(
-                    repository=original_repo,
-                    patch=patch_text,
-                    command_ids=command_ids,
-                    registered_commands=self.config.policies.registered_commands,
-                    ledger=ledger,
+            if task.expected_output_schema != "change_set.v1":
+                baselines = request.pack_input.get("validation_baselines") or {}
+                results.extend(
+                    validate_behavioral_commands(
+                        repository=original_repo,
+                        patch=patch_text,
+                        command_ids=command_ids,
+                        registered_commands=self.config.policies.registered_commands,
+                        ledger=ledger,
+                        artifact_store=artifact_store,
+                        created_by_task_id=task.id,
+                        input_revision=input_revision,
+                        validation_baselines=baselines if isinstance(baselines, dict) else {},
+                    )
                 )
-            )
         if request.workflow_type in _TECHNICAL_PLAN_WORKFLOW_TYPES and architecture_md:
             results.append(validate_architecture_document(architecture_md))
             must_cover = [

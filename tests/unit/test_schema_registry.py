@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
+
 import pytest
 
 from product_factory.domain.artifacts import ArtifactRef, HandoffRef
-from product_factory.domain.errors import SchemaValidationError
+from product_factory.domain.errors import ConfigurationError, SchemaValidationError
 from product_factory.schemas import (
     ROLE_TO_SCHEMA,
     SchemaRegistry,
@@ -22,7 +24,7 @@ from product_factory.schemas import (
 
 
 @pytest.fixture(autouse=True)
-def _fresh_registry() -> None:
+def _fresh_registry() -> Generator[None]:
     reset_default_schema_registry()
     yield
     reset_default_schema_registry()
@@ -55,7 +57,7 @@ def test_unknown_schema_write_fails() -> None:
 
 def test_reserved_schema_write_fails() -> None:
     with pytest.raises(SchemaValidationError, match="reserved"):
-        assert_schema_writable("verification_report.v1")
+        assert_schema_writable("release_plan.v1")
 
 
 def test_feasibility_dossier_is_writable_after_pm1() -> None:
@@ -160,10 +162,77 @@ def test_spike_result_is_writable_after_pm3b() -> None:
     assert assert_schema_writable("spike_result.v1") == "spike_result.v1"
 
 
+def test_pm4_change_intelligence_contracts_are_writable() -> None:
+    reg = default_schema_registry()
+    for schema_id, role in (
+        ("change_set.v1", "change_set"),
+        ("verification_report.v1", "verification_report"),
+        ("validation_evidence.v1", "validation_evidence"),
+    ):
+        spec = reg.require(schema_id, for_write=True)
+        assert spec.kind == "task_output"
+        assert spec.reserved is False
+        assert ROLE_TO_SCHEMA[role] == schema_id
+
+    verification = reg.require("verification_report.v1", for_write=True)
+    assert verification.json_schema["properties"]["outcome"]["enum"] == [
+        "passes",
+        "passes_with_risk",
+        "blocked",
+        "insufficient_evidence",
+    ]
+
+    validate_write_payload(
+        "change_set.v1",
+        {
+            "base_revision": "abc123",
+            "patch_sha256": "a" * 64,
+            "artifact_hashes": {"proposed.patch": "a" * 64},
+            "changed_paths": ["src/example.py"],
+            "acceptance_refs": ["AC-1"],
+            "validation_evidence_refs": ["evidence-1"],
+            "producer_run_id": "run-1",
+        },
+    )
+    validate_write_payload(
+        "verification_report.v1",
+        {
+            "outcome": "passes_with_risk",
+            "acceptance_results": [{"acceptance_ref": "AC-1", "outcome": "passes"}],
+            "validator_profile_id": "python.v1",
+            "evidence_refs": ["evidence-1"],
+            "residual_risk": ["Integration environment not exercised"],
+        },
+    )
+    validate_write_payload(
+        "validation_evidence.v1",
+        {
+            "profile_version": "1",
+            "command_id": "pytest",
+            "receipt": {"exit_code": 0},
+            "input_revision": "abc123",
+            "normalized_outcomes": [{"status": "passed"}],
+            "raw_ref": "artifact-1",
+            "baseline_comparison": {"status": "unchanged"},
+        },
+    )
+
+
+def test_pm4_document_style_aliases_resolve_to_canonical_ids() -> None:
+    assert resolve_output_schema_id("change_set.document.v1") == "change_set.v1"
+    assert (
+        resolve_output_schema_id("verification_report.document.v1")
+        == "verification_report.v1"
+    )
+    assert (
+        resolve_output_schema_id("validation_evidence.document.v1")
+        == "validation_evidence.v1"
+    )
+
+
 def test_remaining_reserved_ids_still_block_writes() -> None:
     reg = default_schema_registry()
     for schema_id in (
-        "verification_report.v1",
         "release_plan.v1",
         "deployment_record.v1",
         "operational_record.v1",
@@ -239,5 +308,5 @@ def test_handoff_ref_validation() -> None:
 def test_custom_registry_register() -> None:
     reg = SchemaRegistry()
     seed_builtin_schemas(reg)
-    with pytest.raises(Exception):
+    with pytest.raises(ConfigurationError):
         reg.register(SchemaSpec(id="evidence_report.document.v1", version="1", kind="task_output"))

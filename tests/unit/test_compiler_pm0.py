@@ -75,8 +75,8 @@ def test_reserved_schema_rejected() -> None:
                 title="brief",
                 capability="architecture",
                 objective="x",
-                # PM3.B un-reserves spike_result.v1; verification_report.v1 stays reserved.
-                expected_output_schema="verification_report.v1",
+                # PM4.0 un-reserves verification_report.v1; release_plan.v1 stays reserved.
+                expected_output_schema="release_plan.v1",
                 required_tool_classes={"artifact_write"},
                 acceptance_criteria=[
                     AcceptanceCriterion(id="ac", description="d", verification="artifact_check")

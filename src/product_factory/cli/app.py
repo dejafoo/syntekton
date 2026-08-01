@@ -22,8 +22,8 @@ from product_factory.domain import export_json_schemas
 from product_factory.domain.budgets import run_budget_from_policy
 from product_factory.domain.errors import ProductFactoryError
 from product_factory.domain.runs import RunRequest
+from product_factory.gateway.factory import gateway_from_config
 from product_factory.gateway.mock import MockGateway
-from product_factory.gateway.openrouter import OpenRouterGateway
 from product_factory.host.cli import host_app
 from product_factory.observability.logging import setup_logging
 from product_factory.orchestration.coordinator import RunCoordinator
@@ -51,22 +51,7 @@ console = Console()
 
 
 def _gateway_from_config(config, *, force_mock: bool = False):
-    if force_mock:
-        return MockGateway()
-    profiles = {
-        name: {
-            "model": p.model,
-            "pricing": p.pricing,
-            "provider": p.provider,
-        }
-        for name, p in config.models.profiles.items()
-    }
-    # Prefer OpenRouter when key present; else mock.
-    import os
-
-    if os.environ.get("OPENROUTER_API_KEY") and not os.environ.get("PRODUCT_FACTORY_FORCE_MOCK"):
-        return OpenRouterGateway(profile_models=profiles)
-    return MockGateway()
+    return gateway_from_config(config, force_mock=force_mock)
 
 
 @app.callback()
