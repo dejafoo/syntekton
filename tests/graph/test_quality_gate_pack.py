@@ -8,6 +8,7 @@ planted correctness defect instead of quietly passing.
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from product_factory.validation.pipeline import (
     validate_citations,
     validate_document_sections,
     validate_secrets,
+    validate_verification_report,
 )
 from product_factory.workflows.quality_gate import (
     QUALITY_GATE_REQUIRED_SECTIONS,
@@ -86,7 +88,7 @@ def test_mock_quality_gate_produces_every_declared_deliverable(tmp_path: Path) -
 
     assert manifest.final_status == "completed"
     assert manifest.metadata.get("workflow_pack_id") == "quality_gate"
-    assert manifest.metadata.get("workflow_pack_version") == "1.0.0"
+    assert manifest.metadata.get("workflow_pack_version") == "2.0.0"
 
     output = tmp_path / ".product-factory" / "runs" / manifest.run_id / "output"
     for role, logical_name in (
@@ -105,6 +107,9 @@ def test_mock_quality_gate_produces_every_declared_deliverable(tmp_path: Path) -
 
     findings_doc = (output / "QUALITY_FINDINGS.md").read_text(encoding="utf-8")
     assert validate_citations(findings_doc).status == "pass"
+    verification = (output / "verification-report.json").read_text(encoding="utf-8")
+    assert validate_verification_report(verification).status == "pass"
+    assert json.loads(verification)["outcome"] == "insufficient_evidence"
 
     # The plan must rank paths the run actually inspected, not a generic default.
     test_plan = (output / "TEST_PLAN.md").read_text(encoding="utf-8")

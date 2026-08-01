@@ -1,0 +1,27 @@
+id: quality.evidence-gate
+version: 1.0.0
+title: Registered Validation Evidence Gate
+capabilities:
+- test_execution
+languages:
+- python
+frameworks:
+- pytest
+- basedpyright
+trigger:
+  description: Use only while executing or evaluating registered pytest or basedpyright validation commands.
+negative_triggers:
+- Do not invent, alter, or execute command IDs outside the registered policy allowlist.
+- Do not repair defects or write repository files.
+required_tools:
+- repository_read
+- validation_command
+prohibited_tools:
+- repository_write
+- network_access
+content_ref: SKILL.md
+status: active
+owner: product-factory
+input_schema_id: change_set.v1
+output_schema_id: validation_evidence.v1
+max_prompt_chars: 4000

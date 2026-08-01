@@ -3,18 +3,39 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from product_factory.connectors.policy import ConnectorsConfig, load_connectors_config
 from product_factory.domain.budgets import BudgetsConfig
 from product_factory.domain.errors import ConfigurationError
 
 
+class CloudFallbackConfig(BaseModel):
+    enabled: bool = False
+    profile: str | None = None
+    adapter: Literal["openai_compatible", "openrouter", "mock"] | None = None
+    allowed_reasons: list[
+        Literal["capability_miss", "local_unhealthy", "provider_error"]
+    ] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_target(self) -> CloudFallbackConfig:
+        if self.enabled and (self.profile is None) == (self.adapter is None):
+            raise ValueError(
+                "enabled cloud_fallback requires exactly one of profile or adapter"
+            )
+        return self
+
+
 class ModelProfileConfig(BaseModel):
-    provider_adapter: str = "openrouter"
+    provider_adapter: Literal["openai_compatible", "openrouter", "mock"] = "openrouter"
+    route_class: Literal["local", "cloud"] = "cloud"
+    base_url: str | None = None
+    api_key_env: str | None = None
+    cloud_fallback: CloudFallbackConfig = Field(default_factory=CloudFallbackConfig)
     model: str
     capabilities: list[str] = Field(default_factory=list)
     structured_outputs: bool = True
@@ -26,6 +47,12 @@ class ModelProfileConfig(BaseModel):
     provider: dict[str, Any] = Field(default_factory=dict)
     pricing: dict[str, str] = Field(default_factory=dict)
     run_policy: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_adapter_settings(self) -> ModelProfileConfig:
+        if self.provider_adapter == "openai_compatible" and not self.base_url:
+            raise ValueError("openai_compatible profiles require base_url")
+        return self
 
 
 class ModelsConfig(BaseModel):

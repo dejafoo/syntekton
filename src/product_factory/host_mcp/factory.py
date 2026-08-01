@@ -6,25 +6,13 @@ import os
 from pathlib import Path
 
 from product_factory.config.loader import find_project_root, load_config
+from product_factory.gateway.factory import gateway_from_config
 from product_factory.gateway.mock import MockGateway
-from product_factory.gateway.openrouter import OpenRouterGateway
 from product_factory.host.service import HostService
 
 
 def _gateway_from_config(config, *, force_mock: bool = False):
-    if force_mock:
-        return MockGateway()
-    profiles = {
-        name: {
-            "model": p.model,
-            "pricing": p.pricing,
-            "provider": p.provider,
-        }
-        for name, p in config.models.profiles.items()
-    }
-    if os.environ.get("OPENROUTER_API_KEY") and not os.environ.get("PRODUCT_FACTORY_FORCE_MOCK"):
-        return OpenRouterGateway(profile_models=profiles)
-    return MockGateway()
+    return gateway_from_config(config, force_mock=force_mock)
 
 
 def _package_config_root() -> Path | None:

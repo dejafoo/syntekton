@@ -1,0 +1,2 @@
+/workspace/src/widget.py:10:5 - error: Argument of type "str" cannot be assigned (reportArgumentType)
+/workspace/src/widget.py:22:9 - warning: Type of "item" is unknown (reportUnknownVariableType)

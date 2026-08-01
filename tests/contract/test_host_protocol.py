@@ -13,7 +13,7 @@ from typer.testing import CliRunner
 from product_factory.cli.app import app
 from product_factory.config.loader import load_config
 from product_factory.domain.budgets import RunBudget
-from product_factory.domain.runs import RunRequest
+from product_factory.domain.runs import ArtifactOverride, RunRequest
 from product_factory.gateway.mock import MockGateway
 from product_factory.host.protocol import HOST_PROTOCOL, HostResponse
 from product_factory.host.service import HostService
@@ -677,7 +677,9 @@ def test_host_submit_rejects_unsafe_artifact_override(tmp_path: Path) -> None:
             request_id="req-bad-override",
             workflow_type="technical_plan",
             request_text="Design something.",
-            artifact_overrides={"architecture_document": {"dest_path": "../../escape.md"}},
+            artifact_overrides={
+                "architecture_document": ArtifactOverride(dest_path="../../escape.md")
+            },
             budget=RunBudget(max_cost_usd=Decimal("1.00")),
         ),
         mock=True,
@@ -789,7 +791,11 @@ def test_host_quality_gate_submit_inspect_and_materialize_all(tmp_path: Path) ->
             repository_path=fixture,
             budget=RunBudget(max_cost_usd=Decimal("3.00")),
             approval_policy="none",
-            artifact_overrides={"quality_findings": {"dest_path": "docs/qa/release_readiness.md"}},
+            artifact_overrides={
+                "quality_findings": ArtifactOverride(
+                    dest_path="docs/qa/release_readiness.md"
+                )
+            },
         ),
         mock=True,
         detach=False,
@@ -802,10 +808,16 @@ def test_host_quality_gate_submit_inspect_and_materialize_all(tmp_path: Path) ->
     assert inspected.ok, inspected.model_dump()
     assert inspected.data is not None
     land_map = {entry["role"]: entry for entry in inspected.data["artifact_land_map"]}
-    assert set(land_map) == {"test_plan", "quality_findings", "security_evidence"}
+    assert set(land_map) == {
+        "test_plan",
+        "quality_findings",
+        "security_evidence",
+        "verification_report",
+    }
     assert land_map["quality_findings"]["logical_name"] == "release_readiness.md"
     assert land_map["quality_findings"]["suggested_dest_path"] == "docs/qa/release_readiness.md"
     assert land_map["test_plan"]["suggested_dest_path"] == "docs/TEST_PLAN.md"
+    assert land_map["verification_report"]["landable"] is False
 
     result = service.materialize_all(run_id)
     assert result.ok, result.model_dump()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -11,8 +12,11 @@ from typing import Any
 
 from product_factory.domain.findings import ValidatorResult
 from product_factory.orchestration.budget_ledger import BudgetLedger
+from product_factory.persistence.artifacts import ArtifactStore
 from product_factory.repositories.patches import apply_patch_check
+from product_factory.schemas.validate import validate_write_payload
 from product_factory.tools.sandbox import run_sandboxed_command
+from product_factory.validation.evidence import write_validation_evidence
 
 SECRET_PATTERNS = [
     re.compile(r"AKIA[0-9A-Z]{16}"),
@@ -995,6 +999,71 @@ def validate_document_sections(
     return ValidatorResult(validator_id=validator_id, status="pass", message="ok")
 
 
+def validate_json_contract(
+    document: str,
+    *,
+    schema_id: str,
+    validator_id: str,
+) -> ValidatorResult:
+    """Parse and machine-validate a JSON task-output contract."""
+    try:
+        payload = json.loads(document)
+        validate_write_payload(schema_id, payload)
+    except Exception as exc:
+        return ValidatorResult(
+            validator_id=validator_id,
+            status="fail",
+            message=f"Invalid {schema_id} payload",
+            details={"error": str(exc)},
+        )
+    return ValidatorResult(
+        validator_id=validator_id,
+        status="pass",
+        message="ok",
+        details={"schema_id": schema_id},
+    )
+
+
+def validate_verification_report(document: str) -> ValidatorResult:
+    """Require typed, unique pass/fail/gap mappings consistent with the outcome."""
+    contract = validate_json_contract(
+        document,
+        schema_id="verification_report.v1",
+        validator_id="verification_report_contract",
+    )
+    if contract.status != "pass":
+        return contract
+    payload = json.loads(document)
+    results = payload.get("acceptance_results") or []
+    refs = [str(item.get("acceptance_ref") or "") for item in results]
+    statuses = [str(item.get("status") or "") for item in results]
+    errors: list[str] = []
+    if any(not ref for ref in refs):
+        errors.append("acceptance_result missing acceptance_ref")
+    if len(refs) != len(set(refs)):
+        errors.append("acceptance_ref entries must be unique")
+    invalid = sorted(set(statuses) - {"pass", "fail", "gap"})
+    if invalid:
+        errors.append(f"invalid acceptance statuses: {invalid}")
+    outcome = payload.get("outcome")
+    if "fail" in statuses and outcome != "blocked":
+        errors.append("failed acceptance criteria require blocked outcome")
+    if "gap" in statuses and outcome != "insufficient_evidence":
+        errors.append("acceptance gaps require insufficient_evidence outcome")
+    if not results and outcome not in {"blocked", "insufficient_evidence"}:
+        errors.append("empty acceptance mapping cannot produce a passing outcome")
+    if outcome in {"passes", "passes_with_risk"} and any(status != "pass" for status in statuses):
+        errors.append("passing outcomes require all acceptance criteria to pass")
+    if errors:
+        return ValidatorResult(
+            validator_id="verification_report_contract",
+            status="fail",
+            message="VerificationReport acceptance mapping is inconsistent",
+            details={"errors": errors},
+        )
+    return contract
+
+
 def validate_citations(markdown: str) -> ValidatorResult:
     """Require at least one path-like citation in backtick form."""
     citations = sorted({match.group(1) for match in CITATION_PATH_RE.finditer(markdown or "")})
@@ -1147,6 +1216,11 @@ def validate_behavioral_commands(
     command_ids: list[str],
     registered_commands: dict[str, Any],
     ledger: BudgetLedger | None = None,
+    artifact_store: ArtifactStore | None = None,
+    created_by_task_id: str = "behavioral-validation",
+    input_revision: str = "worktree",
+    profile_version: str = "registered-commands.v1",
+    validation_baselines: dict[str, str] | None = None,
 ) -> list[ValidatorResult]:
     """Apply a patch in isolation and execute registered behavioral checks.
 
@@ -1202,6 +1276,28 @@ def validate_behavioral_commands(
             if ledger is not None:
                 ledger.record_command(duration_seconds=sandbox_result.duration_seconds)
             timed_out = sandbox_result.returncode == 124
+            evidence_details: dict[str, Any] = {}
+            if artifact_store is not None:
+                evidence = write_validation_evidence(
+                    artifact_store=artifact_store,
+                    command_id=command_id,
+                    registered_command_ids=set(registered_commands),
+                    stdout=sandbox_result.stdout,
+                    stderr=sandbox_result.stderr,
+                    exit_code=sandbox_result.returncode,
+                    input_revision=input_revision,
+                    created_by_task_id=created_by_task_id,
+                    sandbox=sandbox_result.sandbox,
+                    duration_seconds=sandbox_result.duration_seconds,
+                    profile_version=profile_version,
+                    previous_evidence_ref=(validation_baselines or {}).get(command_id),
+                )
+                evidence_details = {
+                    "validation_evidence_ref": evidence.artifact_ref.sha256,
+                    "validation_raw_ref": evidence.raw_ref.sha256,
+                    "normalized_outcomes": evidence.payload["normalized_outcomes"],
+                    "baseline_comparison": evidence.payload["baseline_comparison"],
+                }
             results.append(
                 ValidatorResult(
                     validator_id=f"behavioral:{command_id}",
@@ -1218,6 +1314,7 @@ def validate_behavioral_commands(
                         "stdout": sandbox_result.stdout[-4000:],
                         "stderr": sandbox_result.stderr[-4000:],
                         "sandbox": sandbox_result.sandbox,
+                        **evidence_details,
                     },
                 )
             )

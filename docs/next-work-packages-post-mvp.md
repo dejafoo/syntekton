@@ -410,30 +410,58 @@ a MagicMock/`run_budget_from_policy` artifact that also fails at the PM2 base),
 
 ---
 
-## PM4 — Change intelligence and local-first execution
+## PM4 — Change intelligence and local-first execution `[x]`
 
 **Goal:** make change/verify workflows cite structured evidence, and let the AMD
-runtime become the default model plane.
+runtime become the default model plane later through configuration-only cutover.
 
-### PM4.A — Change-set provenance and verification gate v2 (WF5–WF6)
+### PM4.A — Change-set provenance and verification gate v2 (WF5–WF6) `[x]`
 
 Strengthen repository-change (and migration specialization only when justified)
 with content-addressed `ChangeSet` provenance. Evolve `quality_gate` into a
 verification gate that maps acceptance criteria to durable evidence without
 gaining write/repair authority.
 
-### PM4.B — Delivery intelligence (S3)
+**Done evidence:** `tests/unit/test_pm4a_changeset.py`
+(`test_repository_change_v2_emits_content_addressed_change_set`,
+`test_repository_change_fails_closed_on_bad_plan_pin`);
+`tests/unit/test_pm4a_verification_gate.py`
+(`test_verification_report_maps_acceptance_to_evidence`,
+`test_runtime_validation_evidence_is_consumed`,
+`test_skipped_registered_validator_is_insufficient_evidence`,
+`test_quality_gate_v2_keeps_no_repair_authority`);
+`tests/graph/test_quality_gate_pack.py`, `tests/graph/test_vertical_slice.py`.
+
+### PM4.B — Delivery intelligence (S3) `[x]`
 
 Language-aware repository intelligence where it pays off, versioned validation
 profiles/parsers, baseline comparison, and quality-evidence skill. Start from
 evaluation fixture languages only.
 
-### PM4.C — Repository-derived stack profiles (G3)
+**Done evidence:** `tests/unit/test_pm4b_validation_evidence.py`
+(`test_pytest_parser_normalizes_failures_and_summary`,
+`test_basedpyright_parser_normalizes_diagnostics`,
+`test_parsers_fail_closed_on_malformed_output`,
+`test_parsers_preserve_partial_outcomes_when_truncated`,
+`test_behavioral_validation_can_persist_evidence`,
+`test_baseline_comparison_uses_previous_evidence`,
+`test_artifact_cannot_introduce_unregistered_command`,
+`test_skill_cannot_introduce_unregistered_command`);
+`skills/quality/evidence-gate/`.
+
+### PM4.C — Repository-derived stack profiles (G3) `[x]`
 
 Deterministic stack profiles from manifests, lockfiles, and registered
 validation commands — never unbounded model inference of the whole tree.
 
-### PM4.D — Worker supervision and local models (R4)
+**Done evidence:** `tests/unit/test_pm4c_stack_profiles.py`
+(`test_sample_api_profile_is_stable_and_compact`,
+`test_javascript_fixture_uses_declared_runtime_and_dependencies`,
+`test_unknown_and_ambiguous_trees_fail_closed`,
+`test_profile_registry_round_trips_yaml_and_digest`,
+`test_profile_digest_slots_are_stable_in_context_and_compiler`).
+
+### PM4.D — Worker supervision and local models (R4) `[x]`
 
 Leased supervised workers with restart recovery; OpenAI-compatible local
 gateway; health/capability probes; explicit local→cloud fallback policy and
@@ -441,6 +469,35 @@ cost observability.
 
 **Exit (summary):** interrupted leased runs recover cleanly; cloud escalation
 records allowed reason and respects budget; local/cloud routes are observable.
+
+**Done evidence:** `tests/unit/test_pm4d_gateway_router.py`
+(`test_local_route_success`, `test_capability_miss_allows_cloud_fallback`,
+`test_capability_miss_denies_unapproved_fallback`,
+`test_routing_budget_guard_rejects_before_probe_or_fallback`,
+`test_forced_mock_construction_is_unchanged`,
+`test_openai_compatible_completion_and_probe`,
+`test_instrumentation_emits_route_dimensions`);
+`tests/unit/test_worker_leases.py`
+(`test_one_active_writer_per_worktree`,
+`test_expired_lease_is_reclaimed_with_incremented_attempt`,
+`test_expiry_scan_resumes_and_records_outcome`,
+`test_recovery_failure_is_typed_and_retained`);
+`tests/integration/test_remote_docker.py::test_mock_worker_lease_recovers_after_container_restart`;
+`docs/remote/local-model-gateway.md`.
+
+**Gate evidence:** focused PM4 contract/A/B/C/D unit + graph gate (93 passed);
+`uv run pytest -m "not integration"` (760 passed, 3 skipped; only the known
+pre-existing `tests/unit/test_host_mcp.py::test_pf_submit_builds_request_and_returns_host_response`
+MagicMock/`run_budget_from_policy` budget failure remains); OpenCode plugin
+`npm test` (52 passed); `DOCKER_INTEGRATION=1 uv run pytest
+tests/integration/test_remote_docker.py` (7 passed, including restart recovery);
+changed-file Ruff and Basedpyright checks plus `git diff --check` pass.
+OpenRouter routing smoke was skipped because `OPENROUTER_API_KEY` was unavailable.
+
+PM4 ships the gateway/router/probe/fallback/observability plane and supervised
+workers with OpenRouter as the local-route stand-in. A local-model runtime and
+AMD hardware are **not shipped**; hardware cutover remains a configuration-only
+change to the OpenAI-compatible local profile endpoint.
 
 ---
 

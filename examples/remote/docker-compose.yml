@@ -19,6 +19,9 @@ services:
       PRODUCT_FACTORY_ROOT: /app
       PRODUCT_FACTORY_FORCE_MOCK: "1"
       PRODUCT_FACTORY_REMOTE_MODE: "true"
+      PRODUCT_FACTORY_WORKER_LEASE_TTL: "3"
+      PRODUCT_FACTORY_WORKER_HEARTBEAT_SECONDS: "0.5"
+      PRODUCT_FACTORY_WORKER_SCAN_SECONDS: "0.25"
       # Required; never bake a real secret into the image or this file.
       PRODUCT_FACTORY_OBSERVE_TOKEN: ${PRODUCT_FACTORY_OBSERVE_TOKEN:?set PRODUCT_FACTORY_OBSERVE_TOKEN}
       # Alias also accepted by the server/client:

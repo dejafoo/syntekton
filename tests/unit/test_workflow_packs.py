@@ -48,7 +48,7 @@ def test_registry_lists_all_packs() -> None:
 def test_resolve_repository_change_directly() -> None:
     pack = resolve_workflow_pack("repository_change")
     assert pack is REPOSITORY_CHANGE_PACK
-    assert pack.version == "1.0.0"
+    assert pack.version == "2.0.0"
 
 
 def test_code_change_aliases_to_repository_change() -> None:
@@ -94,7 +94,7 @@ def test_pack_hash_is_stable_and_present_in_manifest_metadata() -> None:
     pack = resolve_workflow_pack("repository_change")
     meta = pack.manifest_metadata()
     assert meta["workflow_pack_id"] == "repository_change"
-    assert meta["workflow_pack_version"] == "1.0.0"
+    assert meta["workflow_pack_version"] == "2.0.0"
     assert meta["workflow_pack_hash"] == pack.content_hash()
     # Deterministic across calls.
     assert pack.content_hash() == pack.content_hash()
@@ -199,7 +199,7 @@ def test_citation_validator_requires_path_like_backticks() -> None:
 def test_resolve_quality_gate_pack() -> None:
     pack = resolve_workflow_pack("quality_gate")
     assert pack is QUALITY_GATE_PACK
-    assert pack.version == "1.0.0"
+    assert pack.version == "2.0.0"
     assert "implementation" not in pack.allowed_capabilities
     assert "repair" not in pack.allowed_capabilities
     assert pack.validation_policy.get("write_grants") == "none"
@@ -207,16 +207,27 @@ def test_resolve_quality_gate_pack() -> None:
     assert pack.validation_policy.get("findings_are_deliverable") is True
 
 
-def test_quality_gate_declares_three_deliverable_roles() -> None:
+def test_quality_gate_declares_verification_and_document_roles() -> None:
     pack = resolve_workflow_pack("quality_gate")
     roles = [spec.role for spec in pack.artifacts]
-    assert roles == ["test_plan", "quality_findings", "security_evidence"]
+    assert roles == [
+        "test_plan",
+        "quality_findings",
+        "security_evidence",
+        "verification_report",
+    ]
     by_role = {spec.role: spec for spec in pack.artifacts}
     assert by_role["test_plan"].default_dest_path == "docs/TEST_PLAN.md"
     assert by_role["quality_findings"].default_dest_path == "docs/QUALITY_FINDINGS.md"
     assert by_role["security_evidence"].default_dest_path == "docs/SECURITY_EVIDENCE.md"
-    # Every quality deliverable can be renamed and landed by a host.
-    assert all(spec.landable and spec.renamable for spec in pack.artifacts)
+    # Markdown documents are landable; the typed report remains a fixed run output.
+    assert all(
+        spec.landable and spec.renamable
+        for spec in pack.artifacts
+        if spec.role != "verification_report"
+    )
+    assert not by_role["verification_report"].landable
+    assert not by_role["verification_report"].renamable
     # Security evidence is omitted rather than landed empty when no security task ran.
     assert by_role["security_evidence"].required is False
     assert by_role["test_plan"].required is True
@@ -244,8 +255,13 @@ def test_quality_gate_fixed_plan_is_read_only_with_one_composer_per_role() -> No
         assert not (task.required_tool_classes & write_classes)
         assert "repository_write" in task.prohibited_actions
 
-    roles = [spec.role for spec in proposal.final_artifacts]
-    assert sorted(roles) == ["quality_findings", "security_evidence", "test_plan"]
+    roles = [spec.role for spec in proposal.final_artifacts if spec.role is not None]
+    assert sorted(roles) == [
+        "quality_findings",
+        "security_evidence",
+        "test_plan",
+        "verification_report",
+    ]
     composers = [spec.composer_task_id for spec in proposal.final_artifacts]
     assert len(set(composers)) == len(composers), "each role needs its own composer task"
     task_ids = {task.id for task in proposal.tasks}

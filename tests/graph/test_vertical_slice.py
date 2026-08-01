@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from pathlib import Path
 
@@ -59,6 +60,10 @@ def test_code_change_vertical_slice(tmp_path: Path) -> None:
     assert (run_dir / "output" / "proposed.patch").exists() or (
         run_dir / "output" / "implementation.patch"
     ).exists()
+    change_set = json.loads((run_dir / "output" / "change-set.json").read_text())
+    assert change_set["base_revision"] == manifest.base_commit
+    assert change_set["changed_paths"]
+    assert len(change_set["patch_sha256"]) == 64
     assert (run_dir / "run-manifest.json").exists()
 
 

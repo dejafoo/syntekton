@@ -100,6 +100,7 @@ class InstrumentedModelGateway(ModelGateway):
                 latency_ms=resp.latency_ms,
             )
         if self.recorder is not None:
+            routing = resp.routing
             self.recorder.emit(
                 run_id=request.run_id,
                 event_type="model.request.completed",
@@ -108,11 +109,15 @@ class InstrumentedModelGateway(ModelGateway):
                 summary=f"Model {resp.status}",
                 payload={
                     "model_profile": request.model_profile,
-                    "provider": resp.provider,
-                    "resolved_model_id": resp.resolved_model_id,
+                    "route": routing.get("route"),
+                    "provider": routing.get("provider", resp.provider),
+                    "model": routing.get("model", resp.resolved_model_id),
+                    "fallback_reason": routing.get("fallback_reason"),
                     "status": resp.status,
                     "usage": resp.usage.model_dump(mode="json"),
-                    "latency_ms": resp.latency_ms,
+                    "latency_ms": routing.get("latency_ms", resp.latency_ms),
+                    "cost_basis": routing.get("cost_basis"),
+                    "cost_usd": routing.get("cost_usd"),
                     "response_hash": resp.response_hash,
                 },
                 content={

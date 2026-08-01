@@ -35,6 +35,8 @@ from product_factory.observability.query import ObservabilityQueryService
 from product_factory.observability.recorder import TelemetryRecorder
 from product_factory.orchestration.coordinator import RunCoordinator
 from product_factory.policy.source_policy import resolve_request_source_policy
+from product_factory.workers.models import WorkerLeaseConflictError
+from product_factory.workers.supervisor import WorkerSupervisor
 from product_factory.workflows.artifacts import ArtifactLandMap
 from product_factory.workflows.inputs import validate_request_pack_input
 from product_factory.workflows.registry import land_map_for_request
@@ -66,6 +68,10 @@ KNOWN_MATERIALIZE_OUTPUTS = (
 _SHA256_RE = re.compile(r"^[a-fA-F0-9]{64}$")
 
 
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 class HostService:
     """Orchestration facade for machine hosts (no duplicated coordinator logic)."""
 
@@ -95,6 +101,25 @@ class HostService:
         )
         self.pf_root = self.coord.pf_root
         self.query = ObservabilityQueryService(self.coord.db, data_dir=self.pf_root)
+        self.supervisor = WorkerSupervisor(
+            db=self.coord.db,
+            execute=self._execute_worker,
+            resume=self.coord.resume,
+            worktree_key=self._worktree_key,
+            on_error=self._supervisor_error,
+            lease_ttl_seconds=float(os.environ.get("PRODUCT_FACTORY_WORKER_LEASE_TTL", "30")),
+            heartbeat_seconds=float(
+                os.environ.get("PRODUCT_FACTORY_WORKER_HEARTBEAT_SECONDS", "10")
+            ),
+            scan_seconds=float(os.environ.get("PRODUCT_FACTORY_WORKER_SCAN_SECONDS", "5")),
+        )
+        if _env_truthy("PRODUCT_FACTORY_REMOTE_MODE"):
+            self.supervisor.start()
+
+    def close(self) -> None:
+        """Stop service background activity and close its coordinator database."""
+        self.supervisor.stop()
+        self.coord.db.close()
 
     def subscription_for(self, run_id: str, *, after_seq: int = 0) -> HostSubscription:
         return HostSubscription(
@@ -135,9 +160,10 @@ class HostService:
                 details=exc.details,
             )
         try:
-            from product_factory.workflows.handoffs import validate_request_handoffs
+            from product_factory.workflows.handoffs import validate_pack_handoffs
+            from product_factory.workflows.registry import resolve_workflow_pack
 
-            validate_request_handoffs(request)
+            validate_pack_handoffs(request, resolve_workflow_pack(request.workflow_type))
         except Exception as exc:  # SchemaValidationError / ValidationError
             from product_factory.domain.errors import SchemaValidationError
 
@@ -186,7 +212,11 @@ class HostService:
             active_operation="queued",
         )
 
-        if inline_thread:
+        if self.supervisor.running:
+            self.supervisor.spawn(run_id)
+            if not detach and not inline_thread:
+                self.supervisor.wait(run_id)
+        elif inline_thread:
             thread = threading.Thread(
                 target=self._safe_worker,
                 kwargs={"run_id": run_id},
@@ -214,36 +244,18 @@ class HostService:
     def _safe_worker(self, *, run_id: str) -> None:
         try:
             self.run_worker(run_id)
+        except WorkerLeaseConflictError:
+            return
         except RunCancelledError:
             # Coordinator already persisted typed `cancelled` status.
             return
         except Exception as exc:  # noqa: BLE001 — persist failure for hosts polling status
-            row = self.coord.db.get_run(run_id)
-            if row and row["status"] == "cancelled":
-                return
-            self.coord.db.upsert_run(
-                run_id=run_id,
-                workflow_type=self._workflow_type(run_id) or "code_change",
-                status="failed",
-                request=self._request_dict(run_id) or {},
-                active_operation="failed",
-            )
-            fail_path = self.pf_root / "runs" / run_id / "output" / "host_worker_error.json"
-            fail_path.parent.mkdir(parents=True, exist_ok=True)
-            fail_path.write_text(
-                json.dumps(
-                    {
-                        "error": exc.__class__.__name__,
-                        "message": str(exc),
-                        "at": datetime.now(UTC).isoformat(),
-                    },
-                    indent=2,
-                )
-                + "\n",
-                encoding="utf-8",
-            )
+            self._record_worker_failure(run_id, exc, recovery=False)
 
     def _spawn_worker(self, run_id: str, *, mock: bool) -> None:
+        if self.supervisor.running:
+            self.supervisor.spawn(run_id)
+            return
         cmd = [
             sys.executable,
             "-m",
@@ -274,6 +286,12 @@ class HostService:
 
     def run_worker(self, run_id: str) -> RunManifest:
         """Execute a previously submitted run (blocking)."""
+        if self.supervisor.running:
+            return self.supervisor.run_blocking(run_id)
+        return self._execute_worker(run_id)
+
+    def _execute_worker(self, run_id: str) -> RunManifest:
+        """Execute a submitted run after the caller has arranged supervision."""
         run_dir = self.pf_root / "runs" / run_id
         request_path = run_dir / "input" / "request.json"
         if not request_path.exists():
@@ -303,6 +321,45 @@ class HostService:
             )
         return self.coord.run(request, run_id=run_id)
 
+    def _worktree_key(self, run_id: str) -> str:
+        """Stable key for the run's writable worktree collection."""
+        return str((self.pf_root / "runs" / run_id / "worktrees").resolve())
+
+    def _supervisor_error(self, run_id: str, exc: Exception, recovery: bool) -> None:
+        if isinstance(exc, RunCancelledError):
+            return
+        self._record_worker_failure(run_id, exc, recovery=recovery)
+
+    def _record_worker_failure(self, run_id: str, exc: Exception, *, recovery: bool) -> None:
+        row = self.coord.db.get_run(run_id)
+        if row and row["status"] == "cancelled":
+            return
+        self.coord.db.upsert_run(
+            run_id=run_id,
+            workflow_type=self._workflow_type(run_id) or "code_change",
+            status="failed",
+            request=self._request_dict(run_id) or {},
+            active_operation="recovery_failed" if recovery else "failed",
+        )
+        fail_path = self.pf_root / "runs" / run_id / "output" / "host_worker_error.json"
+        fail_path.parent.mkdir(parents=True, exist_ok=True)
+        fail_path.write_text(
+            json.dumps(
+                {
+                    "error": exc.__class__.__name__,
+                    "message": str(exc),
+                    "recoverable": recovery,
+                    "recovery_outcome": (
+                        f"recoverable_failure:{exc.__class__.__name__}" if recovery else None
+                    ),
+                    "at": datetime.now(UTC).isoformat(),
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
     def status(self, run_id: str) -> HostResponse:
         row = self.coord.db.get_run(run_id)
         if not row:
@@ -311,6 +368,7 @@ class HostService:
             )
         summary = self.query.get_run(run_id)
         plan_summary = self._plan_summary(run_id)
+        lease = self.coord.db.get_worker_lease(run_id)
         return HostResponse.success(
             run_id=run_id,
             status=row["status"],
@@ -324,6 +382,7 @@ class HostService:
                 "liveness": summary.liveness.value if summary else None,
                 "latest_seq": summary.latest_seq if summary else 0,
                 "task_counts": summary.task_counts if summary else {},
+                "worker_lease": lease.model_dump(mode="json") if lease else None,
             },
         )
 

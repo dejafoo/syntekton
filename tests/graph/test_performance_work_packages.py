@@ -285,7 +285,11 @@ def test_repair_inherits_failed_patch_and_composition_uses_repaired_lineage(
 def test_planner_removes_low_value_roles_but_keeps_high_risk_review() -> None:
     low = default_code_change_plan("Add a cache helper")
     high = default_code_change_plan("Change authentication and database permissions")
-    assert [task.capability for task in low.tasks] == ["implementation", "composition"]
+    assert [task.capability for task in low.tasks] == [
+        "implementation",
+        "composition",
+        "composition",
+    ]
     assert "independent_review" in [task.capability for task in high.tasks]
 
 

@@ -70,6 +70,7 @@ def compile_plan(
     skill_registry: SkillRegistry | None = None,
     schema_registry: SchemaRegistry | None = None,
     enforce_output_schemas: bool | None = None,
+    profile_digests: dict[str, str] | None = None,
 ) -> CompileResult:
     errors: list[CompilerError] = []
     notes_pending: list[str] = []
@@ -381,6 +382,7 @@ def compile_plan(
         validation_strategy=proposal.validation_strategy,
         risk_classification=proposal.risk_classification,
         request_acceptance_criteria=proposal.request_acceptance_criteria,
+        profile_digests=dict(sorted((profile_digests or {}).items())),
         compiler_notes=notes,
     )
     return CompileResult(ok=True, plan=plan, errors=[])

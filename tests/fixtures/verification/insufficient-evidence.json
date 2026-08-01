@@ -1,0 +1,13 @@
+{
+  "acceptance_results": [
+    {
+      "acceptance_ref": "plan:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#AC-001",
+      "evidence_refs": [],
+      "status": "gap"
+    }
+  ],
+  "evidence_refs": [],
+  "outcome": "insufficient_evidence",
+  "residual_risk": [],
+  "validator_profile_id": "quality_gate.v2"
+}

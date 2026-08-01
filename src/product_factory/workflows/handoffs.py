@@ -7,6 +7,7 @@ from typing import Any
 from product_factory.domain.artifacts import HandoffRef
 from product_factory.domain.errors import SchemaValidationError
 from product_factory.schemas.validate import validate_handoff_ref_shape
+from product_factory.workflows.base import WorkflowPack
 
 
 def extract_handoff_refs(request_like: Any) -> list[dict[str, Any]]:
@@ -48,4 +49,52 @@ def validate_request_handoffs(request_like: Any) -> list[HandoffRef]:
             # Allow shape validation; packs that consume these land in PM1+.
             pass
         refs.append(ref)
+    return refs
+
+
+def validate_pack_handoffs(
+    request_like: Any,
+    pack: WorkflowPack,
+) -> list[HandoffRef]:
+    """Validate supplied pins against a pack's declared consumer contract."""
+    refs = validate_request_handoffs(request_like)
+    accepted = set(pack.validation_policy.get("accepted_handoff_schemas") or [])
+    if not accepted:
+        return refs
+    accepted_states = set(
+        pack.validation_policy.get("accepted_handoff_states")
+        or ["approved", "evidence_complete"]
+    )
+    accepted_roles = pack.validation_policy.get("accepted_handoff_roles") or {}
+    for ref in refs:
+        if ref.schema_id not in accepted:
+            raise SchemaValidationError(
+                f"{pack.id} does not accept handoff schema {ref.schema_id!r}",
+                details={
+                    "pack_id": pack.id,
+                    "schema_id": ref.schema_id,
+                    "accepted_schemas": sorted(accepted),
+                },
+            )
+        if ref.state not in accepted_states:
+            raise SchemaValidationError(
+                f"{pack.id} cannot consume a {ref.state!r} handoff",
+                details={
+                    "pack_id": pack.id,
+                    "schema_id": ref.schema_id,
+                    "state": ref.state,
+                    "accepted_states": sorted(accepted_states),
+                },
+            )
+        roles = set(accepted_roles.get(ref.schema_id) or [])
+        if roles and ref.role not in roles:
+            raise SchemaValidationError(
+                f"Handoff role {ref.role!r} does not match schema {ref.schema_id!r}",
+                details={
+                    "pack_id": pack.id,
+                    "schema_id": ref.schema_id,
+                    "role": ref.role,
+                    "accepted_roles": sorted(roles),
+                },
+            )
     return refs

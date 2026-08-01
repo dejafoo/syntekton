@@ -1,0 +1,2 @@
+pytest started but the terminal formatter emitted no recognizable records
+<<< invalid summary >>>

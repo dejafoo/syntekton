@@ -80,3 +80,4 @@ class ModelResponse(BaseModel):
     finish_reason: str | None = None
     response_hash: str = ""
     raw_response_ref: str = ""
+    routing: dict[str, Any] = Field(default_factory=dict)
