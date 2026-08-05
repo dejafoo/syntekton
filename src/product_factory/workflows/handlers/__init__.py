@@ -12,15 +12,18 @@ from product_factory.workflows.handlers.base import (
     validate_handler_authority,
 )
 from product_factory.workflows.handlers.change_intake import ChangeIntakeHandler
+from product_factory.workflows.handlers.deployment_execution import DeploymentExecutionHandler
 from product_factory.workflows.handlers.feasibility_discovery import (
     FeasibilityDiscoveryHandler,
 )
+from product_factory.workflows.handlers.incident_triage import IncidentTriageHandler
 from product_factory.workflows.handlers.quality_gate import QualityGateHandler
 from product_factory.workflows.handlers.release_readiness import ReleaseReadinessHandler
 from product_factory.workflows.handlers.repository_change import RepositoryChangeHandler
 from product_factory.workflows.handlers.repository_investigation import (
     RepositoryInvestigationHandler,
 )
+from product_factory.workflows.handlers.service_health_review import ServiceHealthReviewHandler
 from product_factory.workflows.handlers.technical_plan import TechnicalPlanHandler
 from product_factory.workflows.handlers.technical_spike import TechnicalSpikeHandler
 from product_factory.workflows.registry import (
@@ -30,11 +33,14 @@ from product_factory.workflows.registry import (
 
 _HANDLERS: dict[str, PackHandler] = {
     ChangeIntakeHandler().pack_id: ChangeIntakeHandler(),
+    DeploymentExecutionHandler().pack_id: DeploymentExecutionHandler(),
     FeasibilityDiscoveryHandler().pack_id: FeasibilityDiscoveryHandler(),
+    IncidentTriageHandler().pack_id: IncidentTriageHandler(),
     QualityGateHandler().pack_id: QualityGateHandler(),
     ReleaseReadinessHandler().pack_id: ReleaseReadinessHandler(),
     RepositoryChangeHandler().pack_id: RepositoryChangeHandler(),
     RepositoryInvestigationHandler().pack_id: RepositoryInvestigationHandler(),
+    ServiceHealthReviewHandler().pack_id: ServiceHealthReviewHandler(),
     TechnicalPlanHandler().pack_id: TechnicalPlanHandler(),
     TechnicalSpikeHandler().pack_id: TechnicalSpikeHandler(),
 }

@@ -1,0 +1,26 @@
+id: deployment.change-control
+version: 1.0.0
+title: Deployment Change Control
+capabilities:
+- deployment_execution
+languages:
+- "*"
+frameworks:
+- "*"
+trigger:
+  description: Execute an approved immutable release against an allowlisted staging target.
+negative_triggers:
+- Never deploy to production.
+- Never infer, forge, or bypass approval.
+- Never substitute a mutable tag for an artifact digest.
+- Never start a second rollout while the target lock is held.
+required_tools: []
+prohibited_tools:
+- repository_write
+- git_write
+- web_read
+content_ref: SKILL.md
+status: active
+owner: product-factory
+output_schema_id: deployment_record.v1
+max_prompt_chars: 5000
