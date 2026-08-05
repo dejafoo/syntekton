@@ -18,7 +18,7 @@ import time
 from decimal import Decimal
 from pathlib import Path
 
-from product_factory.config.loader import load_config
+from product_factory.config.loader import AppConfig, load_config
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.plans import FinalArtifactSpec, PlannerOutput
 from product_factory.domain.runs import RunRequest
@@ -28,7 +28,7 @@ from product_factory.orchestration.coordinator import RunCoordinator
 from tests.conftest import clone_fixture
 
 
-def _config() -> object:
+def _config() -> AppConfig:
     root = Path(__file__).resolve().parents[2]
     return load_config(root)
 
@@ -124,7 +124,7 @@ def test_two_read_only_tasks_overlap_in_the_same_wave(tmp_path: Path, monkeypatc
     monkeypatch.setattr(
         RunCoordinator,
         "_plan",
-        lambda self, run_id, request, repo_summary=None, repair_errors=None: (
+        lambda self, run_id, request, repo_summary=None, repair_errors=None, **kwargs: (
             _read_only_overlap_plan(request.request_text)
         ),
     )
@@ -253,8 +253,8 @@ def test_conflicting_writers_yield_typed_composition_conflict(tmp_path: Path, mo
     monkeypatch.setattr(
         RunCoordinator,
         "_plan",
-        lambda self, run_id, request, repo_summary=None, repair_errors=None: _writer_conflict_plan(
-            request.request_text
+        lambda self, run_id, request, repo_summary=None, repair_errors=None, **kwargs: (
+            _writer_conflict_plan(request.request_text)
         ),
     )
     monkeypatch.setattr(
@@ -275,6 +275,8 @@ def test_conflicting_writers_yield_typed_composition_conflict(tmp_path: Path, mo
     # the collision is only observable — and must be caught — at composition.
     impl_a = coord.db.get_task(manifest.run_id, "IMPL-A")
     impl_b = coord.db.get_task(manifest.run_id, "IMPL-B")
+    assert impl_a is not None
+    assert impl_b is not None
     assert impl_a["status"] == "success"
     assert impl_b["status"] == "success"
 

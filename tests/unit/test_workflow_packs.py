@@ -112,6 +112,7 @@ def test_pack_hash_changes_when_content_changes() -> None:
         validation_policy={**base.validation_policy, "extra": True},
         skill_policy=base.skill_policy,
         routing_defaults=base.routing_defaults,
+        execution_policy=base.execution_policy,
     )
     assert mutated.content_hash() != base.content_hash()
 

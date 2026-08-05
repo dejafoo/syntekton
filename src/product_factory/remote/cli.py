@@ -78,9 +78,7 @@ def remote_submit_cmd(
     remote_url: str | None = typer.Option(
         None, "--remote-url", help="Override PRODUCT_FACTORY_REMOTE_URL"
     ),
-    token: str | None = typer.Option(
-        None, "--token", help="Override OBSERVE_TOKEN / HOST_TOKEN"
-    ),
+    token: str | None = typer.Option(None, "--token", help="Override OBSERVE_TOKEN / HOST_TOKEN"),
 ) -> None:
     """Submit a curated request to a remote Product Factory host."""
     try:

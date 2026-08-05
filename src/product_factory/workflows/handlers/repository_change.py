@@ -34,10 +34,9 @@ class RepositoryChangeHandler:
         patch = ""
         for output in ctx.dependency_outputs:
             for excerpt in output.get("artifact_excerpts") or []:
-                if (
-                    excerpt.get("logical_name") == "proposed.patch"
-                    or str(excerpt.get("logical_name") or "").endswith(".patch")
-                ):
+                if excerpt.get("logical_name") == "proposed.patch" or str(
+                    excerpt.get("logical_name") or ""
+                ).endswith(".patch"):
                     patch = str(excerpt.get("content") or "")
         if not patch:
             raise RuntimeError("ChangeSet composition requires the proposed patch")
@@ -52,9 +51,7 @@ class RepositoryChangeHandler:
                 changed_paths.add(deleted.group(1))
 
         acceptance_refs = [
-            str(item)
-            for item in (ctx.pack_input.get("acceptance_refs") or [])
-            if str(item).strip()
+            str(item) for item in (ctx.pack_input.get("acceptance_refs") or []) if str(item).strip()
         ]
         if not acceptance_refs:
             acceptance_refs = [

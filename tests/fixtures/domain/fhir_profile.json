@@ -1,0 +1,13 @@
+{
+  "profile_id": "fhir-r4-public",
+  "version": "1.0.0",
+  "domain": "health-interoperability",
+  "source_policy": "regulated-domain",
+  "composition_policy": "regulated-data",
+  "data_classification": "synthetic",
+  "required_review": "domain_expert",
+  "grants": {
+    "additional_tool_classes": [],
+    "additional_authority": []
+  }
+}

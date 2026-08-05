@@ -96,9 +96,7 @@ def test_unknown_and_ambiguous_trees_fail_closed(tmp_path: Path) -> None:
         "python",
         "javascript",
     ]
-    assert "Multiple fixture-language stacks require explicit selection" in (
-        ambiguous.limitations
-    )
+    assert "Multiple fixture-language stacks require explicit selection" in (ambiguous.limitations)
 
 
 def test_profile_registry_round_trips_yaml_and_digest(tmp_path: Path) -> None:
@@ -129,9 +127,7 @@ def test_profile_digest_slots_are_stable_in_context_and_compiler() -> None:
     proposal = PlannerOutput(
         objective="profile-aware compile",
         tasks=[task],
-        final_artifacts=[
-            FinalArtifactSpec(logical_name="result.json", composer_task_id=task.id)
-        ],
+        final_artifacts=[FinalArtifactSpec(logical_name="result.json", composer_task_id=task.id)],
     )
     compiled = compile_plan(proposal, profile_digests=digests)
 

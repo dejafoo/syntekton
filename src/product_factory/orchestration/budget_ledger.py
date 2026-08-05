@@ -6,7 +6,7 @@ import time
 from decimal import Decimal
 from typing import Literal
 
-from product_factory.domain.budgets import RunBudget, parse_decimal
+from product_factory.domain.budgets import RunBudget
 from product_factory.domain.errors import BudgetExhaustedError
 from product_factory.domain.usage import UsageMetrics
 

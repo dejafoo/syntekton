@@ -58,14 +58,13 @@ def validate_pack_handoffs(
 ) -> list[HandoffRef]:
     """Validate supplied pins against a pack's declared consumer contract."""
     refs = validate_request_handoffs(request_like)
-    accepted = set(pack.validation_policy.get("accepted_handoff_schemas") or [])
+    accepted = set(pack.execution_policy.accepted_handoff_schemas)
     if not accepted:
         return refs
     accepted_states = set(
-        pack.validation_policy.get("accepted_handoff_states")
-        or ["approved", "evidence_complete"]
+        pack.execution_policy.accepted_handoff_states or {"approved", "evidence_complete"}
     )
-    accepted_roles = pack.validation_policy.get("accepted_handoff_roles") or {}
+    accepted_roles = pack.execution_policy.accepted_handoff_roles
     for ref in refs:
         if ref.schema_id not in accepted:
             raise SchemaValidationError(

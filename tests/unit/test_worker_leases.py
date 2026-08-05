@@ -45,6 +45,29 @@ def test_one_active_writer_per_worktree(tmp_path: Path) -> None:
         )
 
 
+def test_independent_worktree_runs_may_proceed_concurrently(tmp_path: Path) -> None:
+    db = Database(tmp_path / "db.sqlite")
+    _run(db, "run-1")
+    _run(db, "run-2")
+
+    first = db.acquire_worker_lease(
+        run_id="run-1",
+        owner="host-a",
+        worktree_key="/worktrees/run-1",
+        ttl_seconds=30,
+    )
+    second = db.acquire_worker_lease(
+        run_id="run-2",
+        owner="host-b",
+        worktree_key="/worktrees/run-2",
+        ttl_seconds=30,
+    )
+
+    assert first.released_at is None
+    assert second.released_at is None
+    assert first.worktree_key != second.worktree_key
+
+
 def test_expired_lease_is_reclaimed_with_incremented_attempt(tmp_path: Path) -> None:
     db = Database(tmp_path / "db.sqlite")
     _run(db, "run-1")

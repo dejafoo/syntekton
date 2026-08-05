@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
+from product_factory.domain.errors import ConfigurationError
 from product_factory.domain.plans import PlannerOutput
 from product_factory.domain.runs import RunRequest
 
@@ -13,7 +14,33 @@ AuthorityClass = Literal[
     "isolated_write",
     "approval_gated_write",
     "external_read",
+    "external_write",
 ]
+
+# External mutation is intentionally a single-pack authority. Keeping this
+# allowlist beside the authority type prevents future read-oriented handlers
+# from acquiring it by convention or through skill composition.
+EXTERNAL_WRITE_PACK_IDS: frozenset[str] = frozenset({"deployment_execution"})
+
+
+def validate_handler_authority(
+    pack_id: str,
+    authority: AuthorityClass,
+    *,
+    approval_required: bool = False,
+) -> None:
+    """Fail closed when external-write authority appears outside deployment."""
+
+    if authority == "external_write":
+        if pack_id not in EXTERNAL_WRITE_PACK_IDS:
+            raise ConfigurationError(
+                f"external_write authority is reserved for {sorted(EXTERNAL_WRITE_PACK_IDS)}, "
+                f"not {pack_id!r}"
+            )
+        if not approval_required:
+            raise ConfigurationError(
+                f"external_write authority for {pack_id!r} requires an approval-gated pack"
+            )
 
 
 @dataclass(frozen=True)

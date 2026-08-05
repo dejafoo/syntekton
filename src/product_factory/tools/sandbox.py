@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,23 @@ _ENV_ALLOWLIST = {
     "VIRTUAL_ENV",
     "PYTHONPATH",
 }
+
+# Bare interpreter names are not portable across macOS / CI images that only
+# ship ``python3`` or a venv entrypoint. Resolve them to the active runtime.
+_PYTHON_ALIASES = frozenset({"python", "python3"})
+
+
+def resolve_executable(executable: str) -> str:
+    """Resolve a registered command executable for the current process.
+
+    ``python`` / ``python3`` always map to ``sys.executable`` so hermetic tests
+    and workers use the same interpreter that loaded Product Factory, instead of
+    assuming a bare ``python`` exists on ``PATH``.
+    """
+    name = Path(executable).name
+    if name in _PYTHON_ALIASES:
+        return sys.executable
+    return executable
 
 
 @dataclass
@@ -72,7 +90,7 @@ def run_sandboxed_command(
     prefer_bwrap: bool = True,
 ) -> SandboxResult:
     """Run a registered command under restricted env; use bwrap when available."""
-    cmd = [executable, *args]
+    cmd = [resolve_executable(executable), *args]
     env = _scrubbed_env(pythonpath=pythonpath)
     sandbox_name = "restricted"
     if prefer_bwrap and _has_bwrap():

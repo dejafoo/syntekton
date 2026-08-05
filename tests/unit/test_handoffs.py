@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from product_factory.domain.errors import SchemaValidationError
 from product_factory.domain.runs import RunRequest
@@ -31,7 +32,9 @@ def test_valid_handoff_accepted() -> None:
 
 
 def test_malformed_handoff_fails() -> None:
-    with pytest.raises(Exception):
+    # A handoff missing digest/producer/role fails pydantic construction itself,
+    # before any workflow validation runs.
+    with pytest.raises(ValidationError):
         RunRequest(
             request_id="r1",
             workflow_type="repository_change",

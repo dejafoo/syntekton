@@ -192,5 +192,22 @@ def test_technical_spike_pack_compiles_and_schema_is_writable() -> None:
             "method": {"mode": "local_synthetic"},
             "measurements": {"validation_error_count": 0},
             "limits": ["No live endpoint tested"],
+            "artifact_refs": [
+                {
+                    "role": "contract_inventory",
+                    "sha256": "a" * 64,
+                    "schema_id": "contract_inventory.v1",
+                },
+                {
+                    "role": "contract_simulation",
+                    "sha256": "b" * 64,
+                    "schema_id": "contract_simulation.v1",
+                },
+                {
+                    "role": "contract_compatibility",
+                    "sha256": "c" * 64,
+                    "schema_id": "contract_compatibility.v1",
+                },
+            ],
         },
     )

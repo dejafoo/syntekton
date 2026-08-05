@@ -1,0 +1,7 @@
+{
+  "observed_at": "2026-01-01T00:30:00+00:00",
+  "signals": [
+    {"name": "error_rate", "value": 0.002, "unit": "ratio"},
+    {"name": "p95_latency_ms", "value": 145, "unit": "ms"}
+  ]
+}

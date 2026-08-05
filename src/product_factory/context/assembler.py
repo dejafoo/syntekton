@@ -124,9 +124,7 @@ def resolve_context_limits(
         and model_context_soft_limit is not None
         and model_context_soft_limit > 0
     ):
-        usable_tokens = int(
-            model_context_soft_limit * (1.0 - policy.model_window_reserve_ratio)
-        )
+        usable_tokens = int(model_context_soft_limit * (1.0 - policy.model_window_reserve_ratio))
         window_chars = max(policy.min_excerpt_chars, usable_tokens * policy.chars_per_token)
         excerpt_chars = min(excerpt_chars, window_chars)
         manifest_chars = min(manifest_chars, max(policy.min_manifest_chars, window_chars * 2))

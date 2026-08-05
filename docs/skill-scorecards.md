@@ -3,6 +3,21 @@
 Operator recipe for comparing orchestration **with skills** vs **without skills**
 (G1 / PM1.A). Live numbers are recorded here by operators; CI stays mock-mode green.
 
+## Corpus identity (PMX)
+
+Hermetic fixture identity is computed by
+`product_factory.evaluation.corpus.build_corpus_snapshot` over `tests/eval_cases`,
+PM5 fixture slices, pack/skill manifests, and `config/connectors.yaml`. Experiment
+registration and regression gates live under
+`.product-factory/experiments/` and `.product-factory/scorecards/` via
+`ExperimentRegistry` / `evaluate_regression_gate`.
+
+```bash
+uv run pytest -q tests/unit/test_pmx_corpus_gates.py
+```
+
+Live scorecard numbers below remain an operator action; CI stays mock-mode green.
+
 ## Metric columns
 
 Record one row per **skill version × model profile** (and the matched no-skill baseline):

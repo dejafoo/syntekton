@@ -1,0 +1,11 @@
+{
+  "request_text": "Assess release 1.2.3",
+  "version": "1.2.3",
+  "input_digests": {
+    "change_set": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "verification_evidence": ["validation-evidence:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"],
+  "migration_preconditions": ["not required: no schema changes"],
+  "rollback_criteria": [{"criterion": "error rate exceeds 1%"}],
+  "unresolved_decisions": ["Approve the compatibility exception"]
+}

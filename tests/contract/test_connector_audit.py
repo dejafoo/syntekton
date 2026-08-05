@@ -82,7 +82,11 @@ def _broker_with_recorder(
     config: ConnectorsConfig,
     environ: dict[str, str] | None = None,
 ) -> ConnectorBroker:
-    """Wire the audit sink the way `RunCoordinator` does."""
+    """Wire a dedicated broker audit sink for direct contract tests.
+
+    Production task execution supplies the same callback per invocation through
+    ToolBroker so a shared ConnectorBroker never carries run/task attribution.
+    """
     from product_factory.connectors.registry import ConnectorRegistry
 
     registry = ConnectorRegistry()

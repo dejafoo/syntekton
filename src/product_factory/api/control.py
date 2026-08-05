@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from product_factory.api.auth import require_write_auth
+from product_factory.api.auth import enforce_submit_rate_limit, require_write_auth
 from product_factory.api.deps import ApiState
 from product_factory.api.remote_mode import (
     canonical_observe_base,
@@ -222,6 +222,7 @@ def _run_request(
 @router.post("/runs")
 def submit_run(body: SubmitRunBody, request: Request) -> JSONResponse:
     """Submit a curated request; returns run_id + SSE subscription immediately."""
+    enforce_submit_rate_limit(request)
     host = _state(request).host(mock=body.mock, observe_base_url=_observe_base(request))
     repo_path, repo_id, workspace_provenance, err = _resolve_repository(
         body,

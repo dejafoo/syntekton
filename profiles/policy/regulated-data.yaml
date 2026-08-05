@@ -1,0 +1,27 @@
+id: regulated-data
+version: 1.0.0
+kind: composition_policy
+description: >-
+  Composition policy for regulated discovery. Forces human review for clinical,
+  legal, privacy, and compliance conclusions and forbids mutation authority
+  from skills or domain reference packs.
+require_human_review_for:
+  - clinical
+  - legal
+  - privacy
+  - compliance
+deny_authority_widening: true
+deny_additional_tool_classes: true
+forbid_live_sensitive_systems: true
+allowed_data_classifications:
+  - synthetic
+  - public
+  - mixed
+prohibited_conclusions:
+  - compliance_verdict
+  - clinical_safety_verdict
+  - legal_compliance_verdict
+permitted_workflows:
+  - feasibility_discovery
+  - change_intake
+  - technical_plan

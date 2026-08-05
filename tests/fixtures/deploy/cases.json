@@ -1,0 +1,23 @@
+{
+  "staging_target": {
+    "target_id": "staging-us",
+    "environment": "staging",
+    "production": false
+  },
+  "successful_rollout": {
+    "deployment_id": "dep-100",
+    "status": "healthy",
+    "health": {"error_rate": 0.001}
+  },
+  "failed_health": {
+    "deployment_id": "dep-101",
+    "status": "halted",
+    "health": {"error_rate": 0.08},
+    "expected_action": "rollback"
+  },
+  "timeout": {
+    "deployment_id": "dep-102",
+    "status": "unknown",
+    "durable_receipt_required": true
+  }
+}

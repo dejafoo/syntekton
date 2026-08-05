@@ -69,3 +69,40 @@ connectors:
       args:
         - "-y"
         - "@modelcontextprotocol/server-filesystem"
+
+  # Read-only release evidence planes. Both are disabled until an operator
+  # supplies an allowlist and credentials; mock runs use deterministic fixtures.
+  git_ci_read:
+    enabled: false
+    allowed_domains:
+      - api.github.com
+    max_timeout_seconds: 20
+    max_result_bytes: 64000
+    options:
+      allowed_repositories: []
+
+  ops_read:
+    enabled: false
+    allowed_domains:
+      - observability.example.invalid
+    max_timeout_seconds: 20
+    max_result_bytes: 64000
+    options:
+      allowed_services: []
+      allowed_environments: []
+      max_window_seconds: 86400
+      max_rows: 200
+      stale_after_seconds: 900
+      query_templates:
+        - release_health
+        - error_budget
+        - incident_context
+
+  # Controlled in-process staging deployment. Enabling requires both this entry
+  # and allow_write_connectors=true; effects additionally require approval.
+  staging_deploy:
+    enabled: false
+    require_approval: false
+    max_timeout_seconds: 30
+    max_result_bytes: 128000
+    options: {}

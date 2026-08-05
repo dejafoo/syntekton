@@ -79,6 +79,7 @@ class RunSummary(BaseModel):
     liveness: Liveness = Liveness.HEALTHY
     active_operation: str | None = None
     error_count: int = 0
+    next_action: str | None = None
 
 
 class TaskSummary(BaseModel):
@@ -97,6 +98,15 @@ class TaskSummary(BaseModel):
     usage: dict[str, Any] = Field(default_factory=dict)
     liveness: Liveness = Liveness.HEALTHY
     active_operation: str | None = None
+    # RF6 additive projections (absent/null on legacy rows).
+    effective_policy: dict[str, Any] | None = None
+    route_class: str | None = None
+    primary_model_profile: str | None = None
+    fallback_model_profile: str | None = None
+    fallback_eligible: bool | None = None
+    stack_profile_digest: str | None = None
+    legacy_policy: bool = False
+    next_action: str | None = None
 
 
 class ModelInvocationView(BaseModel):
@@ -114,6 +124,13 @@ class ModelInvocationView(BaseModel):
     ended_at: str | None = None
     latency_ms: int | None = None
     content_refs: list[ContentRef] = Field(default_factory=list)
+    route: str | None = None
+    primary_profile: str | None = None
+    fallback_profile: str | None = None
+    fallback_reason: str | None = None
+    cost_basis: str | None = None
+    cost_usd: str | None = None
+    routing: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolCallView(BaseModel):
@@ -140,6 +157,12 @@ class ArtifactView(BaseModel):
     created_by_task_id: str | None = None
     trust_level: str = "generated"
     metadata: dict[str, Any] = Field(default_factory=dict)
+    content_class: str | None = None
+    visibility: str | None = None
+    capture_level: str | None = None
+    producer_role: str | None = None
+    producer_tool: str | None = None
+    legacy: bool = False
 
 
 class PromptPackageView(BaseModel):
@@ -160,6 +183,11 @@ class ContentView(BaseModel):
     byte_count: int | None = None
     truncated: bool = False
     payload: Any | None = None
+    redacted: bool = False
+    reason: str | None = None
+    visibility: str | None = None
+    content_class: str | None = None
+    legacy: bool = False
 
 
 class PlanView(BaseModel):
@@ -183,6 +211,7 @@ class CostView(BaseModel):
     ledger: dict[str, Any] = Field(default_factory=dict)
     by_task: list[dict[str, Any]] = Field(default_factory=list)
     by_model: list[dict[str, Any]] = Field(default_factory=list)
+    by_route: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class HealthView(BaseModel):

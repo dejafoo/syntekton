@@ -8,7 +8,16 @@ and a workflow pack still has to request the tool class.
 
 from __future__ import annotations
 
-from product_factory.connectors import filesystem_mcp, source_fetch, tavily
+from pathlib import Path
+
+from product_factory.connectors import (
+    deploy,
+    filesystem_mcp,
+    git_ci,
+    ops_read,
+    source_fetch,
+    tavily,
+)
 from product_factory.connectors.policy import ConnectorsConfig
 from product_factory.connectors.registry import ConnectorRegistry
 
@@ -31,7 +40,12 @@ def _source_domains(config: ConnectorsConfig) -> tuple[str, ...]:
     return domains or ("*",)
 
 
-def default_connector_registry(config: ConnectorsConfig | None = None) -> ConnectorRegistry:
+def default_connector_registry(
+    config: ConnectorsConfig | None = None,
+    *,
+    config_root: Path | None = None,
+    deployment_state_path: Path | None = None,
+) -> ConnectorRegistry:
     """Every connector Product Factory ships with."""
     settings = config or ConnectorsConfig()
     registry = ConnectorRegistry()
@@ -46,6 +60,17 @@ def default_connector_registry(config: ConnectorsConfig | None = None) -> Connec
     registry.register(
         filesystem_mcp.filesystem_mcp_manifest(),
         filesystem_mcp.FilesystemMcpHandler(),
+    )
+    registry.register(git_ci.git_ci_manifest(), git_ci.git_ci_read)
+    registry.register(ops_read.ops_read_manifest(), ops_read.ops_read)
+    registry.register(
+        deploy.staging_deploy_manifest(),
+        deploy.StagingDeployHandler(
+            deploy.default_staging_adapter(
+                config_root=config_root,
+                state_path=deployment_state_path,
+            )
+        ),
     )
     return registry
 

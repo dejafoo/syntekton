@@ -1,0 +1,22 @@
+{
+  "incident_known": {
+    "incident_id": "inc-100",
+    "service_id": "checkout",
+    "environment": "staging",
+    "diagnosis": "error-rate increase follows deployment dep-100"
+  },
+  "incident_unknown": {
+    "incident_id": "inc-101",
+    "service_id": "checkout",
+    "environment": "staging",
+    "diagnosis": null,
+    "follow_up": "human_escalation"
+  },
+  "health_slo_breach": {
+    "service_id": "checkout",
+    "environment": "staging",
+    "signal": "availability",
+    "objective": 0.999,
+    "observed": 0.992
+  }
+}

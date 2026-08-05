@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from product_factory.orchestration.skill_grants import enforce_skill_grants
 from product_factory.domain.errors import SkillGrantViolation
+from product_factory.orchestration.skill_grants import enforce_skill_grants
 from product_factory.skills.registry import SkillRegistry
 
 ROOT = Path(__file__).resolve().parents[2]

@@ -1,0 +1,23 @@
+{
+  "service_id": "checkout",
+  "environment": "production",
+  "start": "2026-01-01T00:00:00Z",
+  "end": "2026-01-01T01:00:00Z",
+  "incident_id": "INC-42",
+  "impact": "Elevated checkout errors for 12 minutes",
+  "evidence": [
+    {
+      "observation": "error_rate reached 0.08",
+      "evidence_ref": "ops://checkout/error-rate",
+      "query_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "hypotheses": [
+    {
+      "hypothesis": "The latest application change may correlate with the increase",
+      "confidence": "medium"
+    }
+  ],
+  "rollback_candidate": true,
+  "follow_up": "rollback_decision"
+}

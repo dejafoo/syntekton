@@ -48,9 +48,7 @@ def _profiles(*, fallback_enabled: bool = True) -> dict[str, dict[str, object]]:
 
 
 def test_local_route_success() -> None:
-    local = MockGateway(
-        catalog=[{"id": "local/model", "capabilities": ["implementation"]}]
-    )
+    local = MockGateway(catalog=[{"id": "local/model", "capabilities": ["implementation"]}])
     cloud = MockGateway(catalog=[{"id": "local/model"}])
     gateway = RoutingGateway(
         profiles=_profiles(),
@@ -69,9 +67,7 @@ def test_local_route_success() -> None:
 
 def test_capability_miss_allows_cloud_fallback() -> None:
     local = MockGateway(catalog=[{"id": "different/model"}])
-    cloud = MockGateway(
-        catalog=[{"id": "local/model", "capabilities": ["implementation"]}]
-    )
+    cloud = MockGateway(catalog=[{"id": "local/model", "capabilities": ["implementation"]}])
     gateway = RoutingGateway(
         profiles=_profiles(),
         profile_gateways={"local": local},
@@ -127,7 +123,8 @@ def test_forced_mock_construction_is_unchanged() -> None:
     assert coding.provider_adapter == "openai_compatible"
     assert coding.base_url == "https://openrouter.ai/api/v1"
     assert coding.api_key_env == "OPENROUTER_API_KEY"
-    assert coding.cloud_fallback.adapter == "openrouter"
+    assert coding.cloud_fallback.profile == "coding_worker_cloud"
+    assert coding.cloud_fallback.adapter is None
     assert set(coding.cloud_fallback.allowed_reasons) == {
         "capability_miss",
         "local_unhealthy",
@@ -171,9 +168,7 @@ def test_openai_compatible_completion_and_probe() -> None:
             200,
             json={
                 "model": "local/model",
-                "choices": [
-                    {"message": {"content": "ok"}, "finish_reason": "stop"}
-                ],
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 2, "completion_tokens": 1},
             },
         )
@@ -216,9 +211,7 @@ def test_instrumentation_emits_route_dimensions() -> None:
         def emit(self, **event: Any) -> None:
             self.events.append(event)
 
-    local = MockGateway(
-        catalog=[{"id": "local/model", "capabilities": ["implementation"]}]
-    )
+    local = MockGateway(catalog=[{"id": "local/model", "capabilities": ["implementation"]}])
     router = RoutingGateway(
         profiles=_profiles(),
         profile_gateways={"local": local},
@@ -233,14 +226,16 @@ def test_instrumentation_emits_route_dimensions() -> None:
     gateway.complete(_request())
 
     completed = next(
-        event
-        for event in recorder.events
-        if event["event_type"] == "model.request.completed"
+        event for event in recorder.events if event["event_type"] == "model.request.completed"
     )
-    assert completed["payload"] | {
-        "route": "local",
-        "provider": "mock",
-        "model": "mock/local-model",
-        "fallback_reason": None,
-        "cost_basis": "estimated",
-    } == completed["payload"]
+    assert (
+        completed["payload"]
+        | {
+            "route": "local",
+            "provider": "mock",
+            "model": "mock/local-model",
+            "fallback_reason": None,
+            "cost_basis": "estimated",
+        }
+        == completed["payload"]
+    )

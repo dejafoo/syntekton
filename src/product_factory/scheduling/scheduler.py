@@ -27,8 +27,12 @@ def select_model(task: TaskSpec, *, originating_profile: str | None = None) -> s
         "domain_research",
         "decision_analysis",
         "interface_analysis",
+        "release_analysis",
+        "operations_analysis",
     }:
         return "fast_worker"
+    if task.capability == "deployment_execution":
+        return "supervisor"
     if task.capability == "repair":
         return originating_profile or "coding_worker"
     raise ValueError(f"Unsupported capability: {task.capability}")

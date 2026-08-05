@@ -6,6 +6,7 @@ import json
 import uuid
 from typing import Any
 
+from product_factory.domain.capabilities import CAPABILITIES
 from product_factory.domain.plans import PlannerOutput
 from product_factory.gateway.base import ModelGateway
 from product_factory.gateway.canonical_messages import CanonicalMessage, ModelRequest
@@ -25,27 +26,14 @@ def build_planner_messages(
     workflow_type: str,
     repository_summary: dict[str, Any] | None,
     budget: dict[str, Any],
+    allowed_capabilities: frozenset[str] | None = None,
 ) -> list[CanonicalMessage]:
     payload = {
         "workflow_type": workflow_type,
         "request": request_text,
         "repository_summary": repository_summary or {},
         "budget": budget,
-        "capabilities": [
-            "requirements",
-            "architecture",
-            "repository_analysis",
-            "implementation",
-            "security_review",
-            "test_design",
-            "test_execution",
-            "documentation",
-            "composition",
-            "independent_review",
-            "repair",
-            "domain_research",
-            "decision_analysis",
-        ],
+        "capabilities": sorted(allowed_capabilities or CAPABILITIES),
     }
     return [
         CanonicalMessage(role="system", content=PLANNER_SYSTEM),
@@ -64,12 +52,14 @@ def plan_with_gateway(
     model_profile: str = "supervisor",
     repair_errors: list[dict[str, Any]] | None = None,
     seed: int | None = None,
+    allowed_capabilities: frozenset[str] | None = None,
 ) -> PlannerOutput:
     messages = build_planner_messages(
         request_text=request_text,
         workflow_type=workflow_type,
         repository_summary=repository_summary,
         budget=budget,
+        allowed_capabilities=allowed_capabilities,
     )
     if repair_errors:
         messages.append(

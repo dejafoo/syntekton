@@ -49,9 +49,7 @@ class QualityGateHandler:
         acceptance_refs = [
             str(value)
             for value in (
-                ctx.pack_input.get("acceptance_refs")
-                or change_set.get("acceptance_refs")
-                or []
+                ctx.pack_input.get("acceptance_refs") or change_set.get("acceptance_refs") or []
             )
             if str(value).strip()
         ]
@@ -116,7 +114,11 @@ class QualityGateHandler:
         if supplied_results:
             acceptance_results = [dict(item) for item in supplied_results]
         else:
-            status = "fail" if blocking or failed else ("pass" if evidence_refs and not skipped else "gap")
+            status = (
+                "fail"
+                if blocking or failed
+                else ("pass" if evidence_refs and not skipped else "gap")
+            )
             acceptance_results = [
                 {
                     "acceptance_ref": acceptance_ref,
@@ -163,6 +165,10 @@ class QualityGateHandler:
 
     def eligible_next_actions(self) -> list[EligibleNextAction]:
         return [
+            EligibleNextAction(
+                pack_id="release_readiness",
+                reason="Verified change evidence can be assessed for release readiness",
+            ),
             EligibleNextAction(
                 pack_id="repository_change",
                 reason="Quality findings can inform a bounded repository change",

@@ -19,6 +19,9 @@ Capability = Literal[
     "domain_research",
     "decision_analysis",
     "interface_analysis",
+    "release_analysis",
+    "operations_analysis",
+    "deployment_execution",
 ]
 
 CAPABILITIES: frozenset[str] = frozenset(
@@ -37,6 +40,9 @@ CAPABILITIES: frozenset[str] = frozenset(
         "domain_research",
         "decision_analysis",
         "interface_analysis",
+        "release_analysis",
+        "operations_analysis",
+        "deployment_execution",
     }
 )
 
@@ -49,7 +55,15 @@ CAPABILITIES: frozenset[str] = frozenset(
 # comparison) are deliberately absent: they reach a task only through an explicit
 # `required_tool_classes` declaration, so existing architecture/repository_analysis/
 # security_review tasks do not silently gain retrieval when a discovery pack ships.
-EXTERNAL_READ_TOOL_CLASSES: frozenset[str] = frozenset({"web_read", "mcp_filesystem_read"})
+EXTERNAL_READ_TOOL_CLASSES: frozenset[str] = frozenset(
+    {"web_read", "mcp_filesystem_read", "ci_read", "ops_read"}
+)
+
+# Deployment connectors are deliberately isolated from every analysis
+# capability. A pack must opt into ``deployment_execution`` and explicitly
+# request one of these classes before an operator-enabled connector is
+# grantable.
+DEPLOYMENT_TOOL_CLASSES: frozenset[str] = frozenset({"deployment_read", "deployment_write"})
 
 # Tools permitted per capability (MVP defaults).
 CAPABILITY_TOOL_CLASSES: dict[str, frozenset[str]] = {
@@ -76,4 +90,9 @@ CAPABILITY_TOOL_CLASSES: dict[str, frozenset[str]] = {
     "interface_analysis": frozenset(
         {"repository_read", "artifact_write", "interface_analysis", "synthetic_write"}
     ),
+    "release_analysis": frozenset(
+        {"repository_read", "git_read", "artifact_write", "ci_read", "ops_read"}
+    ),
+    "operations_analysis": frozenset({"artifact_write", "ops_read"}),
+    "deployment_execution": frozenset({"artifact_write"}) | DEPLOYMENT_TOOL_CLASSES,
 }

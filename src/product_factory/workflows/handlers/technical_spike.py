@@ -26,6 +26,53 @@ class TechnicalSpikeHandler:
     def compose(self, role: str, ctx: ComposeContext) -> str:
         if role != ROLE_SPIKE_RESULT:
             raise RuntimeError(f"technical_spike does not compose role {role!r}")
+        typed_refs: list[dict[str, str]] = []
+        measurements: dict[str, object] = {}
+        for dependency in ctx.dependency_outputs:
+            for ref in dependency.get("artifact_refs") or []:
+                schema_id = str(ref.get("schema_id") or "")
+                if schema_id not in {
+                    "contract_inventory.v1",
+                    "contract_compatibility.v1",
+                    "contract_simulation.v1",
+                }:
+                    continue
+                typed_refs.append(
+                    {
+                        "role": str(ref.get("role") or ref.get("logical_name") or ""),
+                        "sha256": str(ref.get("sha256") or ""),
+                        "schema_id": schema_id,
+                    }
+                )
+            for excerpt in dependency.get("artifact_excerpts") or []:
+                schema_id = str(excerpt.get("schema_id") or "")
+                if schema_id not in {
+                    "contract_inventory.v1",
+                    "contract_compatibility.v1",
+                    "contract_simulation.v1",
+                }:
+                    continue
+                try:
+                    body = json.loads(str(excerpt.get("content") or "{}"))
+                except json.JSONDecodeError:
+                    continue
+                result = body.get("result") or {}
+                if schema_id == "contract_inventory.v1":
+                    measurements["address_count"] = result.get("address_count", 0)
+                    measurements["schema_count"] = result.get("schema_count", 0)
+                elif schema_id == "contract_compatibility.v1":
+                    measurements["compatibility"] = result.get("classification", "unknown")
+                    measurements["change_count"] = len(result.get("changes") or [])
+                elif schema_id == "contract_simulation.v1":
+                    measurements["simulation_status"] = result.get("status", "unknown")
+                    measurements.update(result.get("measurements") or {})
+        roles = {ref["schema_id"] for ref in typed_refs}
+        if "contract_inventory.v1" not in roles:
+            raise RuntimeError("technical_spike requires a typed contract inventory")
+        if "contract_compatibility.v1" not in roles:
+            raise RuntimeError("technical_spike requires compatibility evidence")
+        if "contract_simulation.v1" not in roles:
+            raise RuntimeError("technical_spike requires simulation evidence")
         payload = {
             "schema_id": "spike_result.v1",
             "hypothesis": str(ctx.pack_input.get("hypothesis") or ctx.request.request_text),
@@ -33,14 +80,13 @@ class TechnicalSpikeHandler:
                 "contract_paths": list(ctx.pack_input.get("contract_paths") or []),
                 "mode": "local_synthetic",
             },
-            "measurements": {
-                "dependency_output_count": len(ctx.dependency_outputs),
-            },
+            "measurements": measurements,
             "limits": [
                 "Synthetic fixtures only",
                 "No live authenticated partner endpoint was contacted",
             ],
             "findings": [str(getattr(finding, "message", finding)) for finding in ctx.findings],
+            "artifact_refs": typed_refs,
         }
         validate_write_payload("spike_result.v1", payload)
         return json.dumps(payload, indent=2, sort_keys=True)

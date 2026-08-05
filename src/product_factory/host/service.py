@@ -404,7 +404,19 @@ class HostService:
         from product_factory.workflows.handlers import eligible_next_actions_for_workflow
 
         foundation = collect_foundation_projections(run_dir)
-        eligible = eligible_next_actions_for_workflow(row.get("workflow_type") or "")
+        workflow_type = row.get("workflow_type") or ""
+        release_outcome: str | None = None
+        if workflow_type == "release_readiness":
+            release_plan_path = run_dir / "output" / "RELEASE_PLAN.json"
+            if release_plan_path.exists():
+                try:
+                    release_outcome = str(
+                        json.loads(release_plan_path.read_text(encoding="utf-8")).get("outcome")
+                        or ""
+                    )
+                except (OSError, json.JSONDecodeError):
+                    release_outcome = None
+        eligible = eligible_next_actions_for_workflow(workflow_type, outcome=release_outcome)
         request_payload = self._request_dict(run_id) or {}
         workspace_provenance = (manifest or {}).get("workspace_provenance") or request_payload.get(
             "workspace_provenance"

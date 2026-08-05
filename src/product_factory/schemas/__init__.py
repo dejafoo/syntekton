@@ -2,6 +2,7 @@
 
 from product_factory.schemas.builtin import (
     LEGACY_OUTPUT_SCHEMA_MAP,
+    OUTPUT_SCHEMA_VALIDATOR_IDS,
     ROLE_TO_SCHEMA,
     resolve_output_schema_id,
     seed_builtin_schemas,
@@ -23,6 +24,7 @@ from product_factory.schemas.validate import (
 __all__ = [
     "HANDOFF_STATE",
     "LEGACY_OUTPUT_SCHEMA_MAP",
+    "OUTPUT_SCHEMA_VALIDATOR_IDS",
     "ROLE_TO_SCHEMA",
     "SchemaKind",
     "SchemaRegistry",

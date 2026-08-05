@@ -1,0 +1,21 @@
+{
+  "service_id": "checkout",
+  "environment": "production",
+  "start": "2026-01-01T00:00:00Z",
+  "end": "2026-01-01T06:00:00Z",
+  "impact": "Availability objective breached during the review window",
+  "evidence": [
+    {
+      "observation": "availability was 99.1% against a 99.9% objective",
+      "evidence_ref": "ops://checkout/error-budget"
+    }
+  ],
+  "hypotheses": [
+    {
+      "hypothesis": "Repeated dependency timeouts may explain part of the breach",
+      "confidence": "low"
+    }
+  ],
+  "slo_breach": true,
+  "follow_up": "change_intake"
+}

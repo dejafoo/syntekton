@@ -13,7 +13,7 @@ from product_factory.workflows.artifacts import (
     ROLE_PROPOSED_PATCH,
     ArtifactLandSpec,
 )
-from product_factory.workflows.base import WorkflowPack
+from product_factory.workflows.base import WorkflowPack, execution_policy
 
 REPOSITORY_CHANGE_PACK = WorkflowPack(
     id="repository_change",
@@ -56,6 +56,29 @@ REPOSITORY_CHANGE_PACK = WorkflowPack(
     },
     skill_policy={"grant_enforcement": "fail_closed"},
     routing_defaults={"coding_worker_tier": "mid"},
+    execution_policy=execution_policy(
+        capabilities=frozenset(CAPABILITIES),
+        validators=["patch_applies", "path_scope", "secret_scan"],
+        output_roles=(ROLE_PROPOSED_PATCH, ROLE_CHANGE_SET),
+        accepted_handoff_schemas=frozenset(
+            {
+                "technical_plan.document.v1",
+                "technical_plan.document.v2",
+                "change_brief.v1",
+            }
+        ),
+        accepted_handoff_states=frozenset({"approved"}),
+        accepted_handoff_roles={
+            "technical_plan.document.v1": frozenset({"architecture_document"}),
+            "technical_plan.document.v2": frozenset({"architecture_document"}),
+            "change_brief.v1": frozenset({"change_brief"}),
+        },
+        repair_eligible_capabilities=frozenset(
+            {"implementation", "repair", "composition", "independent_review"}
+        ),
+        approval_required=True,
+        evaluation_fixture_id="repository_change.v2",
+    ),
     artifacts=(
         ArtifactLandSpec(
             role=ROLE_PROPOSED_PATCH,

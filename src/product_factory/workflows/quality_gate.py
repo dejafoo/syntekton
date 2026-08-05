@@ -20,7 +20,7 @@ from product_factory.workflows.artifacts import (
     ROLE_VERIFICATION_REPORT,
     ArtifactLandSpec,
 )
-from product_factory.workflows.base import WorkflowPack
+from product_factory.workflows.base import WorkflowPack, execution_policy
 
 # Required headings per deliverable role. Declared next to the land specs so a
 # pack owns the shape of its own documents; the validator itself is generic.
@@ -123,6 +123,52 @@ QUALITY_GATE_PACK = WorkflowPack(
         ],
     },
     routing_defaults={"coding_worker_tier": "mid"},
+    execution_policy=execution_policy(
+        capabilities=frozenset(
+            {
+                "test_design",
+                "test_execution",
+                "security_review",
+                "independent_review",
+                "composition",
+            }
+        ),
+        validators=[
+            "test_plan_sections",
+            "quality_findings_sections",
+            "security_evidence_sections",
+            "secret_scan",
+            "citation_presence",
+            "verification_report_contract",
+        ],
+        output_roles=(
+            ROLE_TEST_PLAN,
+            ROLE_QUALITY_FINDINGS,
+            ROLE_SECURITY_EVIDENCE,
+            ROLE_VERIFICATION_REPORT,
+        ),
+        denied_tool_names=frozenset({"create_file", "apply_patch"}),
+        required_output_roles=frozenset(
+            {ROLE_TEST_PLAN, ROLE_QUALITY_FINDINGS, ROLE_VERIFICATION_REPORT}
+        ),
+        accepted_handoff_schemas=frozenset(
+            {
+                "change_set.v1",
+                "technical_plan.document.v1",
+                "technical_plan.document.v2",
+                "validation_evidence.v1",
+            }
+        ),
+        accepted_handoff_states=frozenset({"approved", "evidence_complete"}),
+        accepted_handoff_roles={
+            "change_set.v1": frozenset({"change_set"}),
+            "technical_plan.document.v1": frozenset({"architecture_document"}),
+            "technical_plan.document.v2": frozenset({"architecture_document"}),
+            "validation_evidence.v1": frozenset({"validation_evidence"}),
+        },
+        findings_are_deliverable=True,
+        evaluation_fixture_id="quality_gate.v2",
+    ),
     artifacts=(
         ArtifactLandSpec(
             role=ROLE_TEST_PLAN,

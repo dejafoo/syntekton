@@ -148,6 +148,61 @@ def test_control_plan_preview(control_env) -> None:
     assert client.get("/api/v1/runs").json() == []
 
 
+def test_control_plan_preview_accepts_release_readiness_without_deploy(tmp_path: Path) -> None:
+    project = Path(__file__).resolve().parents[2]
+    data_dir = tmp_path / ".product-factory"
+    app = create_app(data_dir, project_root=project)
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/v1/plan",
+                json={
+                    "request_text": "Assess immutable release evidence.",
+                    "workflow_type": "release_readiness",
+                    "mock": True,
+                },
+            )
+            assert response.status_code == 200, response.text
+            payload = HostResponse.model_validate(response.json())
+            assert payload.ok
+            assert (payload.data or {})["compiler"]["ok"] is True
+            assert "deployment_execution" not in response.text
+    finally:
+        shutil.rmtree(data_dir, ignore_errors=True)
+
+
+@pytest.mark.parametrize("workflow_type", ["incident_triage", "service_health_review"])
+def test_control_plan_preview_accepts_read_only_operational_packs(
+    tmp_path: Path, workflow_type: str
+) -> None:
+    project = Path(__file__).resolve().parents[2]
+    data_dir = tmp_path / ".product-factory"
+    app = create_app(data_dir, project_root=project)
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/v1/plan",
+                json={
+                    "request_text": "Review bounded checkout operational evidence.",
+                    "workflow_type": workflow_type,
+                    "pack_input": {
+                        "service_id": "checkout",
+                        "environment": "production",
+                        "start": "2026-01-01T00:00:00Z",
+                        "end": "2026-01-01T01:00:00Z",
+                    },
+                    "mock": True,
+                },
+            )
+            assert response.status_code == 200, response.text
+            payload = HostResponse.model_validate(response.json())
+            assert payload.ok
+            assert (payload.data or {})["compiler"]["ok"] is True
+            assert "deployment_execution" not in response.text
+    finally:
+        shutil.rmtree(data_dir, ignore_errors=True)
+
+
 def test_control_cancel_via_host_service(control_env) -> None:
     """Cancel goes through HostService (live when P3.E is present)."""
     client, fixture, _ = control_env

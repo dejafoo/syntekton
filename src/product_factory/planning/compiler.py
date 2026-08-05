@@ -5,13 +5,17 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from product_factory.domain.capabilities import CAPABILITIES, CAPABILITY_TOOL_CLASSES
+from product_factory.domain.errors import ConfigurationError
 from product_factory.domain.plans import (
     CompiledPlan,
     CompilerError,
     CompileResult,
     PlannerOutput,
 )
-from product_factory.schemas.builtin import resolve_output_schema_id
+from product_factory.schemas.builtin import (
+    OUTPUT_SCHEMA_VALIDATOR_IDS,
+    resolve_output_schema_id,
+)
 from product_factory.schemas.registry import SchemaRegistry, default_schema_registry
 
 if TYPE_CHECKING:
@@ -78,9 +82,7 @@ def compile_plan(
     schemas = schema_registry or default_schema_registry()
     # Pack-backed compiles always enforce registry membership; bare unit tests may skip.
     check_schemas = (
-        enforce_output_schemas
-        if enforce_output_schemas is not None
-        else workflow_pack is not None
+        enforce_output_schemas if enforce_output_schemas is not None else workflow_pack is not None
     )
     pack_roles = (
         {spec.role for spec in workflow_pack.artifacts} if workflow_pack is not None else set()
@@ -88,6 +90,14 @@ def compile_plan(
     skill_policy = dict(workflow_pack.skill_policy) if workflow_pack is not None else {}
     allow_skills = set(skill_policy.get("allow") or skill_policy.get("allowlist") or [])
     deny_skills = set(skill_policy.get("deny") or skill_policy.get("denylist") or [])
+    if workflow_pack is not None:
+        try:
+            workflow_pack.execution_policy.validate(
+                pack_id=workflow_pack.id,
+                capabilities=workflow_pack.allowed_capabilities,
+            )
+        except ConfigurationError as exc:
+            errors.append(CompilerError(code="invalid_pack_execution_policy", message=str(exc)))
 
     if len(task_ids) != len(set(task_ids)):
         errors.append(CompilerError(code="duplicate_task_id", message="Task IDs must be unique"))
@@ -116,8 +126,7 @@ def compile_plan(
                 CompilerError(
                     code="capability_not_allowed",
                     message=(
-                        f"Capability {task.capability} not allowed by pack "
-                        f"{workflow_pack.id}"
+                        f"Capability {task.capability} not allowed by pack {workflow_pack.id}"
                     ),
                     task_id=task.id,
                 )
@@ -149,6 +158,22 @@ def compile_plan(
                         task_id=task.id,
                     )
                 )
+            elif workflow_pack is not None:
+                required_validator = OUTPUT_SCHEMA_VALIDATOR_IDS.get(resolved)
+                if (
+                    required_validator
+                    and required_validator not in workflow_pack.execution_policy.validators
+                ):
+                    errors.append(
+                        CompilerError(
+                            code="missing_output_validator",
+                            message=(
+                                f"Schema {resolved!r} requires pack validator "
+                                f"{required_validator!r}"
+                            ),
+                            task_id=task.id,
+                        )
+                    )
         if not task.acceptance_criteria:
             errors.append(
                 CompilerError(
@@ -173,6 +198,17 @@ def compile_plan(
                     CompilerError(
                         code="tool_not_permitted",
                         message=f"Tool class {tool_class} not permitted for {task.capability}",
+                        task_id=task.id,
+                    )
+                )
+            if (
+                workflow_pack is not None
+                and tool_class not in workflow_pack.execution_policy.allowed_tool_classes
+            ):
+                errors.append(
+                    CompilerError(
+                        code="tool_not_allowed_by_pack",
+                        message=(f"Tool class {tool_class} not allowed by pack {workflow_pack.id}"),
                         task_id=task.id,
                     )
                 )
@@ -240,22 +276,10 @@ def compile_plan(
                         task_id=task.id,
                     )
                 )
-            elif skill_registry is not None:
-                for skill in skill_registry.skills:
-                    if skill.manifest.id == skill_id or skill.manifest.title == skill_id:
-                        caps = set(skill.manifest.capabilities or [])
-                        if caps and task.capability not in caps:
-                            errors.append(
-                                CompilerError(
-                                    code="skill_capability_mismatch",
-                                    message=(
-                                        f"Skill {skill_id!r} does not declare "
-                                        f"capability {task.capability}"
-                                    ),
-                                    task_id=task.id,
-                                )
-                            )
-                        break
+            # Explicit required_skills may pin a specialized checklist into a
+            # composition task. Auto-matching still uses manifest.capabilities
+            # only, so skills like deployment.change-control do not inflate
+            # generic composition budgets.
 
         tasks_by_id[task.id] = task
         dep_map[task.id] = list(task.dependencies)

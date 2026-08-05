@@ -7,6 +7,7 @@ profiles:
       - architecture
       - composition
       - difficult_reasoning
+      - deployment_execution
     structured_outputs: true
     tool_calling: true
     context_soft_limit: 64000
@@ -31,6 +32,8 @@ profiles:
       - security_review
       - testing
       - documentation
+      - release_analysis
+      - operations_analysis
     structured_outputs: true
     tool_calling: true
     context_soft_limit: 32000
@@ -48,15 +51,46 @@ profiles:
   coding_worker:
     provider_adapter: openai_compatible
     route_class: local
+    # OpenRouter stands in until PRODUCT_FACTORY_LOCAL_BASE_URL (or base_url)
+    # points at a real AMD/OpenAI-compatible runtime. See docs/remote/local-model-gateway.md.
     base_url: https://openrouter.ai/api/v1
     api_key_env: OPENROUTER_API_KEY
     cloud_fallback:
       enabled: true
-      adapter: openrouter
+      profile: coding_worker_cloud
       allowed_reasons:
         - capability_miss
         - local_unhealthy
         - provider_error
+    probe:
+      deep: true
+      light_ttl_s: 30
+      deep_interval_s: 300
+      max_latency_ms: 30000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_s: 60
+    model: qwen/qwen3-coder-next
+    capabilities:
+      - implementation
+      - repair
+    structured_outputs: true
+    tool_calling: true
+    context_soft_limit: 64000
+    max_output_tokens: 16000
+    temperature: 0.1
+    pricing:
+      input: "0.11"
+      output: "0.80"
+    provider:
+      allow_fallbacks: true
+      require_parameters: true
+      data_collection: deny
+      sort: price
+
+  coding_worker_cloud:
+    provider_adapter: openrouter
+    route_class: cloud
     model: qwen/qwen3-coder-next
     capabilities:
       - implementation
@@ -82,11 +116,19 @@ profiles:
     api_key_env: OPENROUTER_API_KEY
     cloud_fallback:
       enabled: true
-      adapter: openrouter
+      profile: strong_reviewer
       allowed_reasons:
         - capability_miss
         - local_unhealthy
         - provider_error
+    probe:
+      deep: true
+      light_ttl_s: 30
+      deep_interval_s: 300
+      max_latency_ms: 30000
+    circuit_breaker:
+      failure_threshold: 3
+      recovery_timeout_s: 60
     # OpenRouter retired mistralai/devstral-small-2505 (no endpoints).
     # qwen3-coder-30b is a cheap coding-sized stand-in for a future local reviewer.
     model: qwen/qwen3-coder-30b-a3b-instruct
@@ -103,6 +145,7 @@ profiles:
 
   strong_reviewer:
     provider_adapter: openrouter
+    route_class: cloud
     model: mistralai/devstral-2512
     capabilities:
       - independent_review

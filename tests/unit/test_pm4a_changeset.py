@@ -48,11 +48,7 @@ def test_repository_change_v2_emits_content_addressed_change_set() -> None:
             role="change_set",
             document_name="change-set.json",
             dependency_outputs=[
-                {
-                    "artifact_excerpts": [
-                        {"logical_name": "proposed.patch", "content": patch}
-                    ]
-                }
+                {"artifact_excerpts": [{"logical_name": "proposed.patch", "content": patch}]}
             ],
             run_id="run-change",
             base_revision="deadbeef",
@@ -75,8 +71,6 @@ def test_repository_change_v2_emits_content_addressed_change_set() -> None:
     ("role", "state"),
     [("change_brief", "approved"), ("architecture_document", "draft")],
 )
-def test_repository_change_fails_closed_on_bad_plan_pin(
-    role: str, state: HandoffState
-) -> None:
+def test_repository_change_fails_closed_on_bad_plan_pin(role: str, state: HandoffState) -> None:
     with pytest.raises(SchemaValidationError):
         validate_pack_handoffs(_request(role=role, state=state), REPOSITORY_CHANGE_PACK)

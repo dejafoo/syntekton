@@ -15,7 +15,6 @@ from product_factory.orchestration.concurrency import (
     partition_wave,
 )
 from product_factory.orchestration.coordinator import (
-    _DECISION_ANALYSIS_TOOL_NAMES,
     _DISCOVERY_CAPABILITIES,
     _RESEARCH_LOOP_CAPABILITIES,
     _RETRIEVAL_LOOP_TOOL_NAMES,
@@ -26,6 +25,7 @@ from product_factory.scheduling.scheduler import select_model
 from product_factory.tools.registry import default_tool_registry
 
 DISCOVERY_CAPABILITIES = ("domain_research", "decision_analysis")
+DECISION_ANALYSIS_TOOL_NAMES = {"compare_options"}
 
 
 def _task(
@@ -194,9 +194,9 @@ def test_retrieval_tools_trigger_the_research_loop_and_comparison_does_not() -> 
     )
     # decision_analysis stays one-shot: compare_options is local and needs no loop.
     assert "compare_options" not in _RETRIEVAL_LOOP_TOOL_NAMES
-    assert set(_DECISION_ANALYSIS_TOOL_NAMES) == {"compare_options"}
+    assert {"compare_options"} == DECISION_ANALYSIS_TOOL_NAMES
 
 
 def test_decision_analysis_grant_resolves_against_registered_tools() -> None:
     registered = {tool.name for tool in default_tool_registry().list()}
-    assert registered & _DECISION_ANALYSIS_TOOL_NAMES == {"compare_options"}
+    assert registered & DECISION_ANALYSIS_TOOL_NAMES == {"compare_options"}

@@ -79,9 +79,7 @@ class WorkerSupervisor:
         if scanner and scanner.is_alive():
             scanner.join(timeout=max(1.0, self.scan_seconds + 0.1))
 
-    def spawn(
-        self, run_id: str, *, recovery: bool = False, recovered_queue: bool = False
-    ) -> bool:
+    def spawn(self, run_id: str, *, recovery: bool = False, recovered_queue: bool = False) -> bool:
         """Start one supervised worker unless this process already has one."""
         with self._lock:
             current = self._workers.get(run_id)
@@ -169,9 +167,7 @@ class WorkerSupervisor:
                 if current is threading.current_thread():
                     self._workers.pop(run_id, None)
 
-    def _run_leased(
-        self, run_id: str, *, recovery: bool, recovered_queue: bool
-    ) -> Any:
+    def _run_leased(self, run_id: str, *, recovery: bool, recovered_queue: bool) -> Any:
         owner = f"{self.instance_id}:{run_id}:{uuid.uuid4().hex[:8]}"
         self.db.acquire_worker_lease(
             run_id=run_id,
@@ -200,7 +196,9 @@ class WorkerSupervisor:
             daemon=True,
         )
         heartbeat_thread.start()
-        outcome = "resumed" if recovery else ("recovered_queued" if recovered_queue else "completed")
+        outcome = (
+            "resumed" if recovery else ("recovered_queued" if recovered_queue else "completed")
+        )
         try:
             result = self.resume(run_id) if recovery else self.execute(run_id)
             final_status = getattr(result, "final_status", None)

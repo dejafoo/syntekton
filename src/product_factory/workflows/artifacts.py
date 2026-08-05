@@ -30,6 +30,9 @@ ROLE_SPIKE_RESULT = "spike_result"
 ROLE_CHANGE_SET = "change_set"
 ROLE_VERIFICATION_REPORT = "verification_report"
 ROLE_VALIDATION_EVIDENCE = "validation_evidence"
+ROLE_RELEASE_PLAN = "release_plan"
+ROLE_DEPLOYMENT_RECORD = "deployment_record"
+ROLE_OPERATIONAL_RECORD = "operational_record"
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,32 @@ class ArtifactLandSpec:
             "renamable": self.renamable,
             "required": self.required,
         }
+
+
+# Shared PM5 role defaults. Packs consume these immutable specs rather than
+# duplicating filenames/media types, while retaining the normal host override
+# and path-safety checks in ``resolve_artifact_land_map``.
+RELEASE_PLAN_LAND_SPEC = ArtifactLandSpec(
+    role=ROLE_RELEASE_PLAN,
+    default_logical_name="RELEASE_PLAN.json",
+    default_dest_path="docs/RELEASE_PLAN.json",
+    media_type="application/json",
+    description="Release readiness decision and rollout contract",
+)
+DEPLOYMENT_RECORD_LAND_SPEC = ArtifactLandSpec(
+    role=ROLE_DEPLOYMENT_RECORD,
+    default_logical_name="DEPLOYMENT_RECORD.json",
+    default_dest_path="docs/DEPLOYMENT_RECORD.json",
+    media_type="application/json",
+    description="Deployment action and health receipt",
+)
+OPERATIONAL_RECORD_LAND_SPEC = ArtifactLandSpec(
+    role=ROLE_OPERATIONAL_RECORD,
+    default_logical_name="OPERATIONAL_RECORD.json",
+    default_dest_path="docs/OPERATIONAL_RECORD.json",
+    media_type="application/json",
+    description="Incident or service-health evidence record",
+)
 
 
 @dataclass(frozen=True)

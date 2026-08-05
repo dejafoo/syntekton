@@ -1,0 +1,10 @@
+{
+  "request_text": "Assess release 1.2.3",
+  "version": "1.2.3",
+  "input_digests": {
+    "change_set": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "verification_evidence": ["validation-evidence:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"],
+  "migration_preconditions": ["migration dry run passed"],
+  "rollback_criteria": []
+}

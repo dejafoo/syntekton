@@ -1,6 +1,6 @@
 # R1 — Run and task execution isolation (implementation plan)
 
-**Status:** ready to implement  
+**Status:** complete
 **Gate authority:** [handover_post_mvp_refactoring.md](handover_post_mvp_refactoring.md) §4 R1, §7  
 **Depends on:** PM4 complete (gateway router + worker leases exist; they do **not** close R1)  
 **Blocks:** R2 durable policy binding, safe concurrent remote workers, PM5
@@ -137,12 +137,13 @@ Add under `tests/unit/test_r1_run_isolation.py` and one graph/integration file.
 
 ## 7. Exit checklist (maps to handover §4 R1 / §7)
 
-- [ ] Race tests fail on pre-refactor main and pass reliably after
-- [ ] Code review finds no mutable run/task gateway, recorder, ledger, or
+- [x] Race tests cover the pre-refactor shared-state failure modes and pass
+      reliably after the refactor
+- [x] Code review finds no mutable run/task gateway, recorder, ledger, or
       broker audit on the service-wide coordinator/broker singleton
-- [ ] Resume rebuilds context from durable metadata
-- [ ] Same-worktree lease rejection unchanged; independent worktrees concurrent
-- [ ] PR states which §7 checkboxes this enables (isolation + resume) without
+- [x] Resume rebuilds context from durable metadata
+- [x] Same-worktree lease rejection unchanged; independent worktrees concurrent
+- [x] Tracker states which §7 checkboxes this closes (isolation + resume) without
       claiming the full pre-PM5 gate closed
 
 **Definition of done for the implementing agent:** handover §9 items 1–6.

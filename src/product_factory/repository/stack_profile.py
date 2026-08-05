@@ -207,9 +207,7 @@ def discover_stack_profile(
                 LanguageStack(
                     language=language,
                     runtime=str(runtime) if runtime else None,
-                    frameworks=_framework_slots(
-                        dependencies, _JAVASCRIPT_FRAMEWORKS, locations
-                    ),
+                    frameworks=_framework_slots(dependencies, _JAVASCRIPT_FRAMEWORKS, locations),
                     location_globs=locations,
                 )
             )
@@ -233,9 +231,7 @@ def discover_stack_profile(
         {
             command_id
             for language in languages
-            for command_id in _relevant_commands(
-                registered_command_ids, language.language
-            )
+            for command_id in _relevant_commands(registered_command_ids, language.language)
         }
     )
     return StackProfile(

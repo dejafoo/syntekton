@@ -13,19 +13,27 @@ from product_factory.workflows.artifacts import (
 )
 from product_factory.workflows.base import WorkflowPack
 from product_factory.workflows.change_intake import CHANGE_INTAKE_PACK
+from product_factory.workflows.deployment_execution import DEPLOYMENT_EXECUTION_PACK
 from product_factory.workflows.feasibility_discovery import FEASIBILITY_DISCOVERY_PACK
+from product_factory.workflows.incident_triage import INCIDENT_TRIAGE_PACK
 from product_factory.workflows.quality_gate import QUALITY_GATE_PACK
+from product_factory.workflows.release_readiness import RELEASE_READINESS_PACK
 from product_factory.workflows.repository_change import REPOSITORY_CHANGE_PACK
 from product_factory.workflows.repository_investigation import REPOSITORY_INVESTIGATION_PACK
+from product_factory.workflows.service_health_review import SERVICE_HEALTH_REVIEW_PACK
 from product_factory.workflows.technical_plan import TECHNICAL_PLAN_PACK
 from product_factory.workflows.technical_spike import TECHNICAL_SPIKE_PACK
 
 _PACKS: dict[str, WorkflowPack] = {
     CHANGE_INTAKE_PACK.id: CHANGE_INTAKE_PACK,
+    DEPLOYMENT_EXECUTION_PACK.id: DEPLOYMENT_EXECUTION_PACK,
     FEASIBILITY_DISCOVERY_PACK.id: FEASIBILITY_DISCOVERY_PACK,
+    INCIDENT_TRIAGE_PACK.id: INCIDENT_TRIAGE_PACK,
     QUALITY_GATE_PACK.id: QUALITY_GATE_PACK,
+    RELEASE_READINESS_PACK.id: RELEASE_READINESS_PACK,
     REPOSITORY_CHANGE_PACK.id: REPOSITORY_CHANGE_PACK,
     REPOSITORY_INVESTIGATION_PACK.id: REPOSITORY_INVESTIGATION_PACK,
+    SERVICE_HEALTH_REVIEW_PACK.id: SERVICE_HEALTH_REVIEW_PACK,
     TECHNICAL_PLAN_PACK.id: TECHNICAL_PLAN_PACK,
     TECHNICAL_SPIKE_PACK.id: TECHNICAL_SPIKE_PACK,
 }
@@ -39,8 +47,46 @@ _ALIASES: dict[str, str] = {
 }
 
 
+def _validate_pack(pack: WorkflowPack) -> None:
+    from product_factory.schemas import default_schema_registry
+
+    pack.execution_policy.validate(
+        pack_id=pack.id,
+        capabilities=pack.allowed_capabilities,
+    )
+    declared_roles = tuple(spec.role for spec in pack.artifacts)
+    if tuple(pack.execution_policy.output_roles) != declared_roles:
+        raise ConfigurationError(
+            f"Pack {pack.id!r} execution-policy roles do not match artifacts: "
+            f"{pack.execution_policy.output_roles!r} != {declared_roles!r}"
+        )
+    schemas = default_schema_registry()
+    unknown_handoffs = sorted(
+        schema_id
+        for schema_id in pack.execution_policy.accepted_handoff_schemas
+        if not schemas.known(schema_id)
+    )
+    if unknown_handoffs:
+        raise ConfigurationError(
+            f"Pack {pack.id!r} accepts unknown handoff schemas: {unknown_handoffs}"
+        )
+
+
+def register_workflow_pack(pack: WorkflowPack) -> None:
+    """Register a trusted data-only pack; duplicate ids fail closed."""
+
+    _validate_pack(pack)
+    if pack.id in _PACKS:
+        raise ConfigurationError(f"Workflow pack already registered: {pack.id!r}")
+    _PACKS[pack.id] = pack
+
+
 def canonical_workflow_id(workflow_type: str) -> str:
     return _ALIASES.get(workflow_type, workflow_type)
+
+
+def is_registered_workflow(workflow_type: str) -> bool:
+    return canonical_workflow_id(workflow_type) in _PACKS
 
 
 def resolve_workflow_pack(workflow_type: str) -> WorkflowPack:
@@ -48,6 +94,7 @@ def resolve_workflow_pack(workflow_type: str) -> WorkflowPack:
     pack = _PACKS.get(canonical)
     if pack is None:
         raise ConfigurationError(f"Unknown workflow pack: {workflow_type!r}")
+    _validate_pack(pack)
     return pack
 
 
