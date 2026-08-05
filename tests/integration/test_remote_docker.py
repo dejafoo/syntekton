@@ -361,3 +361,40 @@ def test_mock_worker_lease_recovers_after_container_restart(
     else:
         assert final.status == "failed"
         assert outcome.startswith("recoverable_failure:")
+
+
+def test_remote_meta_advertises_ingress_and_rejects_hostile_upload(
+    docker_remote_env: dict[str, str], remote: RemotePfClient
+) -> None:
+    """PM5.E: Docker remote exposes ingress bounds and rejects hostile uploads."""
+    meta = remote.meta()
+    assert "ingress" in meta
+    assert meta["ingress"]["upload_bounds"]["supported_upload_kinds"] == ["git_bundle"]
+
+    url = docker_remote_env["url"]
+    token = docker_remote_env["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    oversized = httpx.post(
+        f"{url}/api/v1/uploads/git-bundle/preflight",
+        headers=headers,
+        json={
+            "declared_size": 10**12,
+            "declared_sha256": "a" * 64,
+            "media_type": "application/x-git-bundle",
+        },
+        timeout=30.0,
+    )
+    assert oversized.status_code == 400
+    bad_type = httpx.post(
+        f"{url}/api/v1/uploads/git-bundle/preflight",
+        headers=headers,
+        json={
+            "declared_size": 32,
+            "declared_sha256": "b" * 64,
+            "media_type": "application/zip",
+        },
+        timeout=30.0,
+    )
+    assert bad_type.status_code == 400
+    unauth = httpx.get(f"{url}/api/v1/uploads/bounds", timeout=30.0)
+    assert unauth.status_code == 401

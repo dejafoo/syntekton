@@ -20,6 +20,7 @@ from product_factory.api.delivery import router as delivery_router
 from product_factory.api.deps import ApiState
 from product_factory.api.routes import router
 from product_factory.api.streaming import HEARTBEAT_SECONDS, MAX_QUEUE, iter_events
+from product_factory.api.uploads import router as uploads_router
 
 
 def create_app(
@@ -74,6 +75,7 @@ def create_app(
     app.include_router(router)
     app.include_router(control_router)
     app.include_router(delivery_router)
+    app.include_router(uploads_router)
     dashboard_dir = Path(__file__).with_name("static") / "dashboard"
     if dashboard_dir.is_dir():
         # Deliberately mounted after /api/v1 and docs: this is a single-user

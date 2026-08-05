@@ -5,6 +5,23 @@ prohibited_path_globs:
   - "**/.env"
   - "**/secrets/**"
 
+# PM5.E / R5: remote ingress hardening. Forwarded headers are ignored unless
+# trust_forwarded_headers is true AND the peer matches trusted_proxies.
+ingress:
+  trusted_proxies: []
+  trust_forwarded_headers: false
+  max_upload_bytes: 52428800
+  allowed_upload_media_types:
+    - application/x-git-bundle
+    - application/octet-stream
+  max_upload_filename_bytes: 255
+  auth_failure_limit: 20
+  auth_failure_window_seconds: 60
+  submit_rate_limit: 30
+  submit_window_seconds: 60
+  upload_rate_limit: 10
+  upload_window_seconds: 60
+
 # Run / task budget defaults. Host `--budget-usd` only overrides cost; these
 # ceilings apply unless a caller sets them explicitly on the RunRequest.
 # Task clamps also bound planner-invented budgets so a live plan cannot starve

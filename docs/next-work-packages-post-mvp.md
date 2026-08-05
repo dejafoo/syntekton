@@ -99,20 +99,20 @@ drift, capture bypasses, and coordinator workflow branching.
 | PM4.B | Delivery intelligence / validation evidence (S3) | [x] |
 | PM4.C | Repository-derived stack profiles (G3) | [x] |
 | PM4.D | Worker supervision + local-model gateway (R4) | [x] |
-| RF1 | Run/task execution isolation | [ ] |
-| RF2 | EffectiveTaskPolicy + truthful grants/routing | [ ] |
-| RF3 | ArtifactInstance + capture-policy unification | [ ] |
-| RF4.INV | Workflow-branch inventory (design) | [ ] |
-| RF4.EXT | Generic pack dispatch / PackExecutionPolicy | [ ] |
-| RF4.SPIKE | Technical spike cites typed interface evidence | [ ] |
-| RF5 | Real local-model proof (AMD OpenAI-compatible) | [ ] |
-| RF6 | Observability, migration, operator hardening | [ ] |
-| PM5.A | `release_readiness` + release/ops read plane (WF7, S4) | [ ] blocked |
-| PM5.B | Controlled deployment execution (WF8, S5) | [ ] blocked |
-| PM5.C | Domain/policy packs + deployment composition (G4) | [ ] blocked |
-| PM5.D | Operational workflows (WF9) | [ ] blocked |
-| PM5.E | Remote hardening / optional remote MCP (R5) | [ ] blocked |
-| PMX | Evaluation, scorecards, controlled expansion (WF10, S6) | [ ] |
+| RF1 | Run/task execution isolation | [x] |
+| RF2 | EffectiveTaskPolicy + truthful grants/routing | [x] |
+| RF3 | ArtifactInstance + capture-policy unification | [x] |
+| RF4.INV | Workflow-branch inventory (design) | [x] |
+| RF4.EXT | Generic pack dispatch / PackExecutionPolicy | [x] |
+| RF4.SPIKE | Technical spike cites typed interface evidence | [x] |
+| RF5 | Real local-model proof (AMD OpenAI-compatible) | [x] |
+| RF6 | Observability, migration, operator hardening | [x] |
+| PM5.A | `release_readiness` + release/ops read plane (WF7, S4) | [x] |
+| PM5.B | Controlled deployment execution (WF8, S5) | [x] |
+| PM5.C | Domain/policy packs + deployment composition (G4) | [x] |
+| PM5.D | Operational workflows (WF9) | [x] |
+| PM5.E | Remote hardening / optional remote MCP (R5) | [x] |
+| PMX | Evaluation, scorecards, controlled expansion (WF10, S6) | [x] |
 
 ---
 
@@ -530,69 +530,128 @@ is demonstrated.
 
 | Step | Plan / contract | Status |
 | --- | --- | --- |
-| RF1 | [next-work-packages-r1-isolation.md](next-work-packages-r1-isolation.md) | [ ] |
-| RF2–RF3 contracts | [ADR-007](architecture/ADR-007-effective-policy-and-artifact-instances.md) | proposed |
-| RF2 | EffectiveTaskPolicy + stack-profile resource + route identity | [ ] |
-| RF3 | ArtifactInstance + content-class × capture matrix | [ ] |
-| RF4.INV / EXT / SPIKE | [next-work-packages-r4-pack-extensibility.md](next-work-packages-r4-pack-extensibility.md) | [ ] |
-| RF5 | Real local OpenAI-compatible proof (opt-in; not unit CI) | [ ] |
-| RF6 | Dashboard/API migration + operator guide | [ ] |
+| RF1 | [next-work-packages-r1-isolation.md](next-work-packages-r1-isolation.md) | [x] |
+| RF2–RF3 contracts | [ADR-007](architecture/ADR-007-effective-policy-and-artifact-instances.md) | Accepted |
+| RF2 | EffectiveTaskPolicy + stack-profile resource + route identity | [x] |
+| RF3 | ArtifactInstance + content-class × capture matrix | [x] |
+| RF4.INV / EXT / SPIKE | [next-work-packages-r4-pack-extensibility.md](next-work-packages-r4-pack-extensibility.md) | [x] |
+| RF5 | Real local OpenAI-compatible proof (opt-in; not unit CI) | [x] |
+| RF6 | Dashboard/API migration + operator guide | [x] |
 
 **Sequence:** RF1 → RF2 → (RF3 ∥ RF4.INV) → RF4.EXT after RF2; RF4.SPIKE
 tracked separately; RF5 after route identity from RF2; RF6 last; then PM5.
 
-### RF1 — Run and task execution isolation `[ ]`
+### RF1 — Run and task execution isolation `[x]`
 
 See [next-work-packages-r1-isolation.md](next-work-packages-r1-isolation.md).
 Introduce `RunExecutionContext`; stop mutating shared gateway/audit; add
 interleaving race tests.
 
-### RF2 — Resolve policy once `[ ]`
+**Done evidence:** immutable
+`src/product_factory/orchestration/execution_context.py`; coordinator `run` and
+`resume` construct fresh instrumented gateway/recorder/ledger/artifact
+bindings; connector audits are invocation-scoped through `ToolBroker`;
+`tests/unit/test_r1_run_isolation.py` (concurrent planning attribution,
+resume-during-active-run, independent budgets, interleaved connector
+receipts/audits); `tests/unit/test_worker_leases.py`
+(`test_one_active_writer_per_worktree`,
+`test_independent_worktree_runs_may_proceed_concurrently`);
+`tests/graph/test_resume.py`; `tests/graph/test_concurrency_graph.py`.
+
+**Gate evidence:** RF1 race suite repeated five times (20/20 passed); RF1
+focused + connector/coordinator regression gate (172 passed, 2 skipped);
+`pytest -m "not integration"` (765 passed, 3 skipped, 10 deselected; only the
+known pre-existing `test_pf_submit_builds_request_and_returns_host_response`
+MagicMock budget failure remains); changed-file Ruff/Basedpyright and
+`git diff --check` pass.
+
+### RF2 — Resolve policy once `[x]`
 
 Implement `effective_task_policy.v1` per ADR-007. Grant before
 `assemble_context`; persist prompt reductions; pin rendered stack profile;
 named cloud fallback identity.
 
-### RF3 — Artifact and capture unification `[ ]`
+**Done evidence:** `effective_policy.py` + registered
+`effective_task_policy.v1`; coordinator resolves/persists policy (JSON column +
+artifact) before context assembly; prompt tools ⊆ allowed; broker grant from
+`allowed_tool_names` only; stack profile pinned as run artifact and reused on
+resume; routing fields (`route_class`, named fallback) recorded on the policy;
+`tests/unit/test_rf2_rf3_policy_capture.py`.
+
+### RF3 — Artifact and capture unification `[x]`
 
 Implement `ArtifactInstance` and the capture matrix per ADR-007. Close the
 artifact-content bypass for raw validation/source captures.
 
-### RF4 — Pack extensibility (split) `[ ]`
+**Done evidence:** `artifact_instances` table + `ArtifactInstance` / capture
+matrix; validation evidence write-time capture enforcement; query
+`artifact_content` requires run ownership and honors visibility
+(`metadata_only` / `capture_off` / legacy); cross-run hashes return 404;
+`ContentView` exposes `reason` / `redacted` / `visibility`.
 
-- **RF4.INV:** branch inventory design artifact.
-- **RF4.EXT:** generic dispatch + `PackExecutionPolicy` (after RF2).
-- **RF4.SPIKE:** technical spike cites typed interface tools/artifacts
+### RF4 — Pack extensibility (split) `[x]`
+
+- **RF4.INV `[x]`:** branch inventory design artifact.
+- **RF4.EXT `[x]`:** generic dispatch + `PackExecutionPolicy` (after RF2).
+- **RF4.SPIKE `[x]`:** technical spike cites typed interface tools/artifacts
   (product completion; separate from EXT).
 
 See [next-work-packages-r4-pack-extensibility.md](next-work-packages-r4-pack-extensibility.md).
 
-### RF5 — Local-first model plane proof `[ ]`
+**Done evidence:** branch inventory; validated fixed executor catalogue and
+pack execution policy; registry-driven pack/handler dispatch; architecture
+allowlist for legacy workflow branches; typed contract inventory,
+compatibility, and simulation artifacts referenced by `SpikeResult`; focused
+RF4 tests plus existing-pack regression suite.
+
+### RF5 — Local-first model plane proof `[x]`
 
 Real AMD (or equivalent) OpenAI-compatible endpoint behind existing gateway
 contracts; probes; circuit breaker; opt-in live evaluation. OpenRouter remains
-the stand-in until this exits.
+the stand-in until hardware cutover via `base_url` /
+`PRODUCT_FACTORY_LOCAL_BASE_URL`.
 
-### RF6 — Observability and operator hardening `[ ]`
+**Done evidence:** deep/light probes with fail-closed capability proof; circuit
+breaker; named `coding_worker_cloud` / `strong_reviewer` fallbacks; role
+admission; durable `local_route_admission.v1` evidence; fake-server contract
+tests; opt-in `PRODUCT_FACTORY_LOCAL_LIVE=1` integration profile. See
+[docs/remote/local-model-gateway.md](remote/local-model-gateway.md).
+
+### RF6 — Observability and operator hardening `[x]`
 
 Projections for policy/visibility/route; additive migrations; package upgrade
 smoke; operator guide for legacy capture and local/cloud labels.
+
+**Done evidence:** task/run/invocation/artifact/cost projections expose
+effective policy, legacy flags, route/fallback identity, visibility, and
+`next_action`; `routing_json` + restart-safe migrate; legacy-directory observe
+smoke; [operator-guide.md](operator-guide.md) walkthrough. Dashboard Plan /
+Execution / Evidence / Costs tabs consume the new fields. PM5 remains blocked.
 
 ---
 
 ## PM5 — Release, operations, deployment, hardening
 
-**Status:** blocked until RF §7 entry gate passes.
+**Status:** PM5.A–E and PMX are landed with hermetic test evidence. Production
+deploy and Streamable HTTP MCP remain deferred.
 
 **Goal:** close the lifecycle with evidence-led release/ops and a narrowly
 useful non-production deployment path.
 
-### PM5.A — Release readiness and read plane (WF7, S4)
+### PM5.A — Release readiness and read plane (WF7, S4) `[x]`
 
 `release_readiness` pack plus `release_analysis` / `operations_analysis` over
 one owned Git/CI source and one observability or incident source. Monitor-only.
 
-### PM5.B — Controlled deployment (WF8, S5)
+**Done evidence:** `tests/unit/test_release_readiness_pack.py`,
+`tests/unit/test_release_analysis_capability.py`,
+`tests/unit/test_pm5a_release_validators.py`,
+`tests/connectors/test_git_ci_connector.py`,
+`tests/connectors/test_ops_read_connector.py`,
+`tests/graph/test_release_readiness_pack.py`;
+`skills/release/readiness-review/`; connectors `git_ci` / `ops_read`.
+
+### PM5.B — Controlled deployment (WF8, S5) `[x]`
 
 `deployment_execution` for **one** non-production target and **one** operator
 adapter: approval references, immutable artifact binding, idempotent
@@ -601,26 +660,63 @@ start/status/health/rollback receipts, restart reconciliation,
 
 **Production rollout is out of scope** until separate policy and trial evidence.
 
-### PM5.C — Domain/policy packs (G4)
+**Done evidence:** `tests/unit/test_deployment_execution_pack.py`,
+`tests/unit/test_deployment_change_control_skill.py`,
+`tests/unit/test_pm5b_deployment_receipts.py`,
+`tests/connectors/test_deploy_adapter.py`,
+`tests/security/test_deployment_authority.py`,
+`tests/graph/test_deployment_execution_pack.py`,
+`tests/graph/test_deployment_approval_binding.py`,
+`tests/integration/test_deploy_staging_live.py` (`DEPLOY_INTEGRATION=1`);
+`config/deployment_targets.yaml`; `skills/deployment/change-control/`.
+
+### PM5.C — Domain/policy packs (G4) `[x]`
 
 Versioned public domain reference packs, policy profiles, and human-review
 gates for regulated discovery and deployment composition. Provider target
 profiles only behind existing connector controls.
 
-### PM5.D — Operational workflows (WF9)
+**Done evidence:** `tests/unit/test_domain_policy_packs.py`,
+`tests/unit/test_pm5c_composition_gates.py`,
+`tests/graph/test_domain_pack_composition.py`,
+`tests/security/test_domain_pack_authority.py`,
+`tests/unit/test_rf4_pack_extensibility.py` (`test_pm5_canonical_packs_remain_on_registered_dispatch`);
+`packs/domain/fhir-r4-public/`; `profiles/policy/`.
+
+### PM5.D — Operational workflows (WF9) `[x]`
 
 `incident_triage` and `service_health_review` as read-only packs consuming
 operational evidence and producing follow-up intakes/plans.
 
-### PM5.E — Remote hardening (R5)
+**Done evidence:** `tests/unit/test_incident_triage_pack.py`,
+`tests/unit/test_service_health_review_pack.py`,
+`tests/unit/test_operations_analysis_capability.py`,
+`tests/graph/test_incident_triage_pack.py`,
+`tests/graph/test_service_health_review_pack.py`,
+`tests/security/test_ops_injection.py`;
+`skills/operations/incident-synthesis/`.
+
+### PM5.E — Remote hardening (R5) `[x]`
 
 Ingress, uploads, rate limits, audit, backup/restore, operator docs. Streamable
 HTTP MCP only if a real non-OpenCode host needs it — not a prerequisite for
-OpenCode remote use.
+OpenCode remote use. **Streamable HTTP MCP remains deferred.**
+
+**Done evidence:** `tests/security/test_remote_ingress.py`,
+`tests/security/test_remote_uploads.py`,
+`tests/unit/test_backup_restore.py`,
+`tests/integration/test_backup_restore.py` (`BACKUP_INTEGRATION=1`),
+`tests/integration/test_remote_docker.py`
+(`test_remote_meta_advertises_ingress_and_rejects_hostile_upload`,
+`DOCKER_INTEGRATION=1`); `src/product_factory/api/ingress.py`,
+`src/product_factory/workspace/uploads.py`,
+`src/product_factory/persistence/backup.py`;
+[operator-guide.md](operator-guide.md) backup/restore + ingress sections;
+`scripts/verify.sh` PM5.E spotlight + opt-in deploy/backup/docker gates.
 
 ---
 
-## Ongoing — Evaluation and promotion (PMX / WF10 / S6)
+## Ongoing — Evaluation and promotion (PMX / WF10 / S6) `[x]`
 
 Run continuously from PM1 onward; do not leave it as a final polish phase.
 
@@ -631,6 +727,13 @@ Run continuously from PM1 onward; do not leave it as a final polish phase.
 - Expand source profiles, contract formats, providers, and vertical packs
   **only** where measured outcomes justify maintenance and authority cost.
 
+**Done evidence:** `tests/unit/test_pmx_corpus_gates.py`,
+`tests/connectors/test_connector_disable_evidence.py`,
+`src/product_factory/evaluation/corpus.py`,
+`src/product_factory/evaluation/experiments.py`,
+`src/product_factory/evaluation/gates.py`;
+[skill-scorecards.md](skill-scorecards.md) metric columns retained for live
+operator runs (mock/CI stays hermetic).
 ---
 
 ## Parallelism rules
@@ -654,18 +757,11 @@ artifact-ownership rules.
 
 ## First 90-day recommendation
 
-PM0–PM4 are landed. Next:
+PM0–PM4 and PM5.A–E / PMX are landed. **RF1–RF6 and handover §7 are closed.**
 
-1. **RF1** — run/task isolation
-   ([next-work-packages-r1-isolation.md](next-work-packages-r1-isolation.md)).
-2. **RF2–RF3** — implement contracts frozen in
-   [ADR-007](architecture/ADR-007-effective-policy-and-artifact-instances.md).
-3. **RF4.INV → RF4.EXT** and **RF4.SPIKE** in parallel tracks
-   ([r4 plan](next-work-packages-r4-pack-extensibility.md)).
-4. **RF5–RF6** then close handover §7 before any PM5 pack.
-
-Stop and reassess before investing in live partner APIs, operations connectors,
-or deployment mutation.
+1. Operate the non-production deployment path under `DEPLOY_INTEGRATION=1` where useful.
+2. Keep remote hardening and evaluation expansion evidence-led (corpus/gates).
+3. Stop and reassess before investing in live partner APIs or production deployment mutation.
 
 ## Definition of done (portfolio)
 

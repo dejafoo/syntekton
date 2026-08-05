@@ -42,11 +42,13 @@ def _parse_sse_chunk(buffer: str) -> tuple[list[dict[str, Any]], str]:
         raw = "\n".join(data_lines).strip()
         if not raw:
             continue
+        parsed: Any
         try:
-            payload = json.loads(raw)
+            parsed = json.loads(raw)
         except json.JSONDecodeError:
-            payload = {"raw": raw}
-        if isinstance(payload, dict):
+            parsed = {"raw": raw}
+        if isinstance(parsed, dict):
+            payload: dict[str, Any] = dict(parsed)
             if event_id is not None and "seq" not in payload:
                 with contextlib.suppress(ValueError):
                     payload["seq"] = int(event_id)

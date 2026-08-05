@@ -1,0 +1,23 @@
+id: deployment-composition
+version: 1.0.0
+kind: composition_policy
+description: >-
+  Composition policy for controlled non-production deployment. Domain and
+  provider profiles may inform checklists only; mutation authority stays with
+  the deployment_execution pack, approval binding, and connector broker.
+require_human_review_for:
+  - production_target
+  - regulated_change
+deny_authority_widening: true
+deny_additional_tool_classes: true
+forbid_live_sensitive_systems: true
+allowed_data_classifications:
+  - synthetic
+  - public
+  - mixed
+  - operational
+require_approval_for_effect: true
+permitted_workflows:
+  - deployment_execution
+  - release_readiness
+provider_target_profiles_require_broker: true
