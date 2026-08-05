@@ -14,6 +14,7 @@ from product_factory.gateway.errors import (
     NonRetryableProviderError,
 )
 from product_factory.gateway.pricing import estimate_cost
+from product_factory.gateway.probes import LocalRouteController
 
 
 class RoutingGateway(ModelGateway):
@@ -25,17 +26,25 @@ class RoutingGateway(ModelGateway):
         profiles: dict[str, dict[str, Any]],
         profile_gateways: dict[str, ModelGateway],
         adapter_gateways: dict[str, ModelGateway],
+        route_controllers: dict[str, LocalRouteController] | None = None,
     ) -> None:
         self.profiles = profiles
         self.profile_gateways = profile_gateways
         self.adapter_gateways = adapter_gateways
+        self.route_controllers = route_controllers or {}
 
     def complete(self, request: ModelRequest) -> ModelResponse:
         started = time.perf_counter()
         profile = self._profile(request.model_profile)
         self._check_request_budget(request, profile)
         gateway = self.profile_gateways[request.model_profile]
-        reason = self._probe_reason(gateway, profile)
+        controller = self.route_controllers.get(request.model_profile)
+        reason = self._probe_reason(
+            gateway,
+            profile,
+            profile_name=request.model_profile,
+            controller=controller,
+        )
 
         if reason is None:
             try:
@@ -45,15 +54,33 @@ class RoutingGateway(ModelGateway):
             except ProviderError:
                 if profile.get("route_class") != "local":
                     raise
+                if controller is not None:
+                    controller.record_failure()
                 reason = "provider_error"
             else:
-                return self._annotate(response, profile, None, started)
+                if controller is not None:
+                    controller.record_success()
+                return self._annotate(
+                    response,
+                    profile,
+                    None,
+                    started,
+                    primary_profile=request.model_profile,
+                    controller=controller,
+                )
 
         if profile.get("route_class") != "local":
             raise NonRetryableProviderError(
                 f"Configured cloud route {request.model_profile!r} is unavailable: {reason}"
             )
-        return self._fallback(request, profile, reason, started)
+        return self._fallback(
+            request,
+            profile,
+            reason,
+            started,
+            primary_profile=request.model_profile,
+            controller=controller,
+        )
 
     def _fallback(
         self,
@@ -61,6 +88,9 @@ class RoutingGateway(ModelGateway):
         profile: dict[str, Any],
         reason: str,
         started: float,
+        *,
+        primary_profile: str,
+        controller: LocalRouteController | None,
     ) -> ModelResponse:
         policy = profile.get("cloud_fallback") or {}
         allowed = set(policy.get("allowed_reasons") or [])
@@ -78,9 +108,7 @@ class RoutingGateway(ModelGateway):
                     f"Fallback profile {fallback_profile_name!r} is not a cloud route"
                 )
             gateway = self.profile_gateways[fallback_profile_name]
-            fallback_request = request.model_copy(
-                update={"model_profile": fallback_profile_name}
-            )
+            fallback_request = request.model_copy(update={"model_profile": fallback_profile_name})
         elif adapter_name:
             fallback_profile = {**profile, "route_class": "cloud"}
             try:
@@ -90,20 +118,33 @@ class RoutingGateway(ModelGateway):
                     f"Fallback adapter {adapter_name!r} is not configured"
                 ) from exc
             fallback_request = request
+            fallback_profile_name = None
         else:
             raise NonRetryableProviderError(
                 f"Cloud fallback for {request.model_profile!r} has no profile or adapter"
             )
 
         self._check_request_budget(request, fallback_profile)
-        fallback_probe_reason = self._probe_reason(gateway, fallback_profile)
+        fallback_probe_reason = self._probe_reason(
+            gateway,
+            fallback_profile,
+            profile_name=fallback_profile_name or request.model_profile,
+            controller=None,
+        )
         if fallback_probe_reason is not None:
             raise NonRetryableProviderError(
-                f"Cloud fallback unavailable for {request.model_profile!r}: "
-                f"{fallback_probe_reason}"
+                f"Cloud fallback unavailable for {request.model_profile!r}: {fallback_probe_reason}"
             )
         response = gateway.complete(fallback_request)
-        return self._annotate(response, fallback_profile, reason, started)
+        return self._annotate(
+            response,
+            fallback_profile,
+            reason,
+            started,
+            primary_profile=primary_profile,
+            fallback_profile=fallback_profile_name,
+            controller=controller,
+        )
 
     @staticmethod
     def _check_request_budget(
@@ -125,12 +166,23 @@ class RoutingGateway(ModelGateway):
         )
         if projected > Decimal(str(request.max_cost_usd)):
             raise BudgetRejectedError(
-                f"Projected route cost ${projected} exceeds request ceiling "
-                f"${request.max_cost_usd}"
+                f"Projected route cost ${projected} exceeds request ceiling ${request.max_cost_usd}"
             )
 
-    @staticmethod
-    def _probe_reason(gateway: ModelGateway, profile: dict[str, Any]) -> str | None:
+    def _probe_reason(
+        self,
+        gateway: ModelGateway,
+        profile: dict[str, Any],
+        *,
+        profile_name: str,
+        controller: LocalRouteController | None,
+    ) -> str | None:
+        if controller is not None:
+            return controller.evaluate()
+
+        # Legacy light probe for cloud/adapters without a local controller.
+        # Advertised capability lists are trusted only when present; a missing
+        # field is not treated as proof for local routes.
         required = set(profile.get("capabilities") or [])
         probe = gateway.probe(
             model=str(profile["model"]),
@@ -138,8 +190,16 @@ class RoutingGateway(ModelGateway):
         )
         if not probe.healthy:
             return "local_unhealthy"
-        if not probe.model_available or not probe.supports(required):
+        if not probe.model_available:
             return "capability_miss"
+        if profile.get("route_class") == "local" and required and not probe.supports(required):
+            return "capability_miss"
+        if profile.get("route_class") != "local" and required and not probe.supports(required):
+            # Cloud catalogues often omit custom capability tags; only fail when
+            # the provider explicitly advertised a conflicting set.
+            advertised = probe.capabilities
+            if advertised and not required.issubset(advertised):
+                return "capability_miss"
         return None
 
     @staticmethod
@@ -148,26 +208,33 @@ class RoutingGateway(ModelGateway):
         profile: dict[str, Any],
         fallback_reason: str | None,
         started: float,
+        *,
+        primary_profile: str,
+        fallback_profile: str | None = None,
+        controller: LocalRouteController | None = None,
     ) -> ModelResponse:
         usage = response.usage
         cost_basis = "reported" if usage.reported_cost_usd is not None else "estimated"
-        return response.model_copy(
-            update={
-                "routing": {
-                    "route": profile.get("route_class", "cloud"),
-                    "provider": response.provider,
-                    "model": response.resolved_model_id,
-                    "fallback_reason": fallback_reason,
-                    "latency_ms": int((time.perf_counter() - started) * 1000),
-                    "cost_basis": cost_basis,
-                    "cost_usd": str(
-                        usage.reported_cost_usd
-                        if usage.reported_cost_usd is not None
-                        else usage.estimated_cost_usd
-                    ),
-                }
-            }
-        )
+        routing: dict[str, Any] = {
+            "route": profile.get("route_class", "cloud"),
+            "provider": response.provider,
+            "model": response.resolved_model_id,
+            "primary_profile": primary_profile,
+            "fallback_profile": fallback_profile,
+            "fallback_reason": fallback_reason,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "cost_basis": cost_basis,
+            "cost_usd": str(
+                usage.reported_cost_usd
+                if usage.reported_cost_usd is not None
+                else usage.estimated_cost_usd
+            ),
+        }
+        if controller is not None:
+            routing["circuit"] = controller.breaker.snapshot()
+            if controller.last_report is not None:
+                routing["admission_proven"] = sorted(controller.last_report.proven)
+        return response.model_copy(update={"routing": routing})
 
     def _profile(self, name: str) -> dict[str, Any]:
         try:
@@ -176,10 +243,7 @@ class RoutingGateway(ModelGateway):
             raise NonRetryableProviderError(f"Unknown model profile {name!r}") from exc
 
     def refresh_catalog(self) -> dict[str, Any]:
-        return {
-            name: gateway.refresh_catalog()
-            for name, gateway in self.profile_gateways.items()
-        }
+        return {name: gateway.refresh_catalog() for name, gateway in self.profile_gateways.items()}
 
     def list_models(self) -> list[dict[str, Any]]:
         models: dict[str, dict[str, Any]] = {}
@@ -188,3 +252,14 @@ class RoutingGateway(ModelGateway):
                 if "id" in model:
                     models[str(model["id"])] = model
         return list(models.values())
+
+    def probe_local_routes(self, *, force_deep: bool = True) -> dict[str, Any]:
+        """Run startup/periodic probes for every local controller."""
+        results: dict[str, Any] = {}
+        for name, controller in self.route_controllers.items():
+            report = controller.ensure_report(force_deep=force_deep)
+            results[name] = {
+                **controller.snapshot(),
+                "report": report.as_dict(),
+            }
+        return results

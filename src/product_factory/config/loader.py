@@ -8,6 +8,10 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
+from product_factory.connectors.deploy import (
+    DeploymentTargetsConfig,
+    load_deployment_targets_config,
+)
 from product_factory.connectors.policy import ConnectorsConfig, load_connectors_config
 from product_factory.domain.budgets import BudgetsConfig
 from product_factory.domain.errors import ConfigurationError
@@ -17,16 +21,14 @@ class CloudFallbackConfig(BaseModel):
     enabled: bool = False
     profile: str | None = None
     adapter: Literal["openai_compatible", "openrouter", "mock"] | None = None
-    allowed_reasons: list[
-        Literal["capability_miss", "local_unhealthy", "provider_error"]
-    ] = Field(default_factory=list)
+    allowed_reasons: list[Literal["capability_miss", "local_unhealthy", "provider_error"]] = Field(
+        default_factory=list
+    )
 
     @model_validator(mode="after")
     def validate_target(self) -> CloudFallbackConfig:
         if self.enabled and (self.profile is None) == (self.adapter is None):
-            raise ValueError(
-                "enabled cloud_fallback requires exactly one of profile or adapter"
-            )
+            raise ValueError("enabled cloud_fallback requires exactly one of profile or adapter")
         return self
 
 
@@ -47,6 +49,8 @@ class ModelProfileConfig(BaseModel):
     provider: dict[str, Any] = Field(default_factory=dict)
     pricing: dict[str, str] = Field(default_factory=dict)
     run_policy: dict[str, Any] = Field(default_factory=dict)
+    probe: dict[str, Any] = Field(default_factory=dict)
+    circuit_breaker: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_adapter_settings(self) -> ModelProfileConfig:
@@ -83,6 +87,8 @@ class PoliciesConfig(BaseModel):
     budgets: BudgetsConfig = Field(default_factory=BudgetsConfig)
     context: ContextPackingConfig = Field(default_factory=ContextPackingConfig)
     registered_commands: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # PM5.E remote ingress (trusted proxy, rate limits, upload bounds).
+    ingress: dict[str, Any] = Field(default_factory=dict)
 
 
 class WorkflowsConfig(BaseModel):
@@ -97,6 +103,7 @@ class AppConfig(BaseModel):
     workflows: WorkflowsConfig
     # `connectors.yaml` is optional; a missing file means no connector is enabled.
     connectors: ConnectorsConfig = ConnectorsConfig()
+    deployment_targets: DeploymentTargetsConfig = DeploymentTargetsConfig()
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -138,6 +145,7 @@ def load_config(root: Path | None = None) -> AppConfig:
         policies = PoliciesConfig.model_validate(_load_yaml(config_dir / "policies.yaml"))
         workflows = WorkflowsConfig.model_validate(_load_yaml(config_dir / "workflows.yaml"))
         connectors = load_connectors_config(config_dir)
+        deployment_targets = load_deployment_targets_config(config_dir)
     except ConfigurationError:
         raise
     except Exception as exc:
@@ -149,4 +157,5 @@ def load_config(root: Path | None = None) -> AppConfig:
         policies=policies,
         workflows=workflows,
         connectors=connectors,
+        deployment_targets=deployment_targets,
     )
