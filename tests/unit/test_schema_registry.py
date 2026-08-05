@@ -55,11 +55,6 @@ def test_unknown_schema_write_fails() -> None:
         assert_schema_writable("not.a.schema.v1")
 
 
-def test_reserved_schema_write_fails() -> None:
-    with pytest.raises(SchemaValidationError, match="reserved"):
-        assert_schema_writable("release_plan.v1")
-
-
 def test_feasibility_dossier_is_writable_after_pm1() -> None:
     """PM1.0 un-reserves the dossier so a discovery pack can emit it."""
     reg = default_schema_registry()
@@ -150,7 +145,9 @@ def test_pm1_legacy_aliases_resolve_to_canonical_ids() -> None:
     assert resolve_output_schema_id("feasibility_discovery.v1") == "feasibility_dossier.v1"
     assert resolve_output_schema_id("option_matrix.document.v1") == "option_matrix.v1"
     assert resolve_output_schema_id("change_brief.document.v1") == "change_brief.v1"
-    assert resolve_output_schema_id("clarification_request.document.v1") == "clarification_request.v1"
+    assert (
+        resolve_output_schema_id("clarification_request.document.v1") == "clarification_request.v1"
+    )
 
 
 def test_spike_result_is_writable_after_pm3b() -> None:
@@ -220,26 +217,21 @@ def test_pm4_change_intelligence_contracts_are_writable() -> None:
 
 def test_pm4_document_style_aliases_resolve_to_canonical_ids() -> None:
     assert resolve_output_schema_id("change_set.document.v1") == "change_set.v1"
-    assert (
-        resolve_output_schema_id("verification_report.document.v1")
-        == "verification_report.v1"
-    )
-    assert (
-        resolve_output_schema_id("validation_evidence.document.v1")
-        == "validation_evidence.v1"
-    )
+    assert resolve_output_schema_id("verification_report.document.v1") == "verification_report.v1"
+    assert resolve_output_schema_id("validation_evidence.document.v1") == "validation_evidence.v1"
 
 
-def test_remaining_reserved_ids_still_block_writes() -> None:
+def test_pm5_foundation_unreserves_typed_output_ids() -> None:
     reg = default_schema_registry()
     for schema_id in (
         "release_plan.v1",
         "deployment_record.v1",
         "operational_record.v1",
     ):
-        assert reg.require(schema_id, for_write=False).reserved
-        with pytest.raises(SchemaValidationError, match="reserved"):
-            assert_schema_writable(schema_id)
+        assert reg.require(schema_id, for_write=True).reserved is False
+        assert_schema_writable(schema_id)
+        with pytest.raises(SchemaValidationError, match="missing required fields"):
+            validate_write_payload(schema_id, {})
 
 
 def test_pm0_era_readers_are_unaffected_by_pm1_registrations() -> None:

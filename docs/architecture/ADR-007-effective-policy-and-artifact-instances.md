@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (freeze before R2/R3 implementation; accept when R2 schema PR merges)
+Accepted (RF2 schema registered; RF3 capture path enforced)
 
 ## Context
 
@@ -139,7 +139,9 @@ original local profile. Unknown usage remains explicitly estimated/unknown.
 ## Non-goals
 
 - PackExecutionPolicy / executor catalogue (R4 ADR or plan).
-- Real local AMD probes/circuit breakers (R5).
+- Real local AMD probes/circuit breakers — completed in RF5; see
+  `docs/remote/local-model-gateway.md`. Dashboard projections for route
+  identity remain RF6.
 - Multi-tenant authn/z.
 
 ## Acceptance

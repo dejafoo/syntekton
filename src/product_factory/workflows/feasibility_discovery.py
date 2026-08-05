@@ -7,7 +7,7 @@ grants, no technical spike, and never implementation/repair capabilities.
 from __future__ import annotations
 
 from product_factory.workflows.artifacts import ROLE_FEASIBILITY_DOSSIER, ArtifactLandSpec
-from product_factory.workflows.base import WorkflowPack
+from product_factory.workflows.base import WorkflowPack, execution_policy
 
 FEASIBILITY_DISCOVERY_PACK = WorkflowPack(
     id="feasibility_discovery",
@@ -26,6 +26,8 @@ FEASIBILITY_DISCOVERY_PACK = WorkflowPack(
             },
             "source_freshness_days": {"type": ["integer", "null"]},
             "source_policy_profile": {"type": ["string", "null"]},
+            "domain_reference_pack": {"type": ["string", "null"]},
+            "composition_policy_profile": {"type": ["string", "null"]},
             "seed_source_urls": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -80,6 +82,32 @@ FEASIBILITY_DISCOVERY_PACK = WorkflowPack(
         ],
     },
     routing_defaults={"coding_worker_tier": "mid"},
+    execution_policy=execution_policy(
+        capabilities=frozenset(
+            {
+                "domain_research",
+                "decision_analysis",
+                "requirements",
+                "repository_analysis",
+                "independent_review",
+                "documentation",
+                "composition",
+                "interface_analysis",
+            }
+        ),
+        validators=[
+            "feasibility_sections",
+            "research_provenance",
+            "option_comparison",
+            "regulated_claims_review",
+            "secret_scan",
+        ],
+        output_roles=(ROLE_FEASIBILITY_DOSSIER,),
+        denied_tool_names=frozenset({"create_file", "apply_patch", "run_validation_command"}),
+        required_output_roles=frozenset({ROLE_FEASIBILITY_DOSSIER}),
+        fallback_composition_roles=frozenset({ROLE_FEASIBILITY_DOSSIER}),
+        evaluation_fixture_id="feasibility_discovery.v1",
+    ),
     artifacts=(
         ArtifactLandSpec(
             role=ROLE_FEASIBILITY_DOSSIER,

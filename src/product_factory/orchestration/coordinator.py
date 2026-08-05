@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -29,10 +30,6 @@ from product_factory.context.assembler import (
 from product_factory.context.task_context import build_task_context, persist_task_context
 from product_factory.domain.artifacts import ResourceRef
 from product_factory.domain.budgets import TaskBudgetDefaults, clamp_task_budget
-from product_factory.domain.capabilities import (
-    CAPABILITY_TOOL_CLASSES,
-    EXTERNAL_READ_TOOL_CLASSES,
-)
 from product_factory.domain.errors import (
     ApprovalBlockedError,
     BudgetExhaustedError,
@@ -65,6 +62,14 @@ from product_factory.observability.recorder import TelemetryRecorder
 from product_factory.orchestration.agent_loop import run_tool_agent
 from product_factory.orchestration.budget_ledger import BudgetLedger, warn_unused_profile_set
 from product_factory.orchestration.concurrency import run_wave
+from product_factory.orchestration.effective_policy import (
+    EFFECTIVE_TASK_POLICY_SCHEMA,
+    EffectiveTaskPolicy,
+    compute_allowed_tool_names,
+    grantable_connector_names_for_task,
+    resolve_effective_task_policy,
+)
+from product_factory.orchestration.execution_context import RunExecutionContext
 from product_factory.orchestration.repair import (
     create_repair_tasks,
     patch_fingerprint,
@@ -76,10 +81,14 @@ from product_factory.orchestration.review_findings import (
     validate_review_findings,
 )
 from product_factory.orchestration.skill_grants import enforce_skill_grants
+from product_factory.persistence.artifact_policy import ArtifactInstance
 from product_factory.persistence.artifacts import ArtifactStore
 from product_factory.persistence.database import Database
 from product_factory.planning.compiler import compile_plan
 from product_factory.planning.planner import plan_with_gateway
+from product_factory.policy.composition_gates import evaluate_composition_gates
+from product_factory.policy.domain_packs import resolve_request_domain_packs
+from product_factory.policy.policy_profiles import resolve_request_policy_profiles
 from product_factory.policy.source_policy import resolve_request_source_policy
 from product_factory.repositories.patches import (
     apply_patch,
@@ -90,8 +99,9 @@ from product_factory.repositories.patches import (
 )
 from product_factory.repositories.snapshot import snapshot_repository
 from product_factory.repositories.worktrees import WorktreeManager
-from product_factory.repository.stack_profile import discover_stack_profile
+from product_factory.repository.stack_profile import StackProfile, discover_stack_profile
 from product_factory.scheduling.scheduler import resolve_task_model_profile, runnable_tasks
+from product_factory.schemas import validate_write_payload
 from product_factory.schemas.builtin import ROLE_TO_SCHEMA
 from product_factory.skills.profiles import ProfileRegistry
 from product_factory.skills.registry import SkillRegistry
@@ -105,16 +115,19 @@ from product_factory.validation.pipeline import (
     validate_architecture_request_specificity,
     validate_behavioral_commands,
     validate_citations,
+    validate_deployment_record,
     validate_document_sections,
     validate_intake_no_invention,
     validate_intake_sections,
     validate_investigation_document,
     validate_json_contract,
+    validate_operational_record,
     validate_option_comparison,
     validate_patch_applies,
     validate_path_scope,
     validate_recommendation,
     validate_regulated_claims,
+    validate_release_plan,
     validate_research_provenance,
     validate_secrets,
     validate_verification_report,
@@ -125,11 +138,13 @@ from product_factory.workflows.artifacts import (
     ROLE_CHANGE_BRIEF,
     ROLE_CHANGE_SET,
     ROLE_CLARIFICATION_REQUEST,
+    ROLE_DEPLOYMENT_RECORD,
     ROLE_EVIDENCE_REPORT,
     ROLE_FEASIBILITY_DOSSIER,
     ROLE_PROPOSED_PATCH,
     ROLE_QUALITY_FINDINGS,
     ROLE_SECURITY_EVIDENCE,
+    ROLE_SPIKE_RESULT,
     ROLE_TEST_PLAN,
     ROLE_VERIFICATION_REPORT,
     ArtifactLandMap,
@@ -139,7 +154,11 @@ from product_factory.workflows.handlers import handler_for
 from product_factory.workflows.handlers.base import ComposeContext
 from product_factory.workflows.handoffs import validate_pack_handoffs
 from product_factory.workflows.inputs import persist_pack_input, validate_pack_input
-from product_factory.workflows.registry import land_map_for_request, resolve_workflow_pack
+from product_factory.workflows.registry import (
+    is_registered_workflow,
+    land_map_for_request,
+    resolve_workflow_pack,
+)
 
 logger = logging.getLogger("product_factory.orchestration.coordinator")
 
@@ -147,24 +166,6 @@ logger = logging.getLogger("product_factory.orchestration.coordinator")
 # technical_plan share the technical_plan pack (P3.D).
 _CODE_CHANGE_WORKFLOW_TYPES = frozenset({"code_change", "repository_change"})
 _TECHNICAL_PLAN_WORKFLOW_TYPES = frozenset({"architecture", "technical_plan"})
-_INVESTIGATION_WORKFLOW_TYPES = frozenset({"repository_investigation"})
-_QUALITY_GATE_WORKFLOW_TYPES = frozenset({"quality_gate"})
-_DISCOVERY_WORKFLOW_TYPES = frozenset({"feasibility_discovery"})
-_INTAKE_WORKFLOW_TYPES = frozenset({"change_intake"})
-_SPIKE_WORKFLOW_TYPES = frozenset({"technical_spike"})
-_PACK_BACKED_WORKFLOW_TYPES = (
-    _CODE_CHANGE_WORKFLOW_TYPES
-    | _TECHNICAL_PLAN_WORKFLOW_TYPES
-    | _INVESTIGATION_WORKFLOW_TYPES
-    | _QUALITY_GATE_WORKFLOW_TYPES
-    | _DISCOVERY_WORKFLOW_TYPES
-    | _INTAKE_WORKFLOW_TYPES
-    | _SPIKE_WORKFLOW_TYPES
-)
-# Packs that never receive repository mutation or arbitrary validation commands.
-_READ_ONLY_STRIP_WORKFLOW_TYPES = (
-    _INVESTIGATION_WORKFLOW_TYPES | _DISCOVERY_WORKFLOW_TYPES | _INTAKE_WORKFLOW_TYPES
-)
 
 # Live architecture compose used to hardcode 8k output tokens, which truncated
 # long research docs mid-Citations even when the model profile allowed more.
@@ -180,8 +181,7 @@ _RESEARCH_AGENT_MAX_ROUNDS = 24
 _DISCOVERY_CAPABILITIES = frozenset({"domain_research", "decision_analysis"})
 # Capabilities that draft a document from a research loop or a single completion.
 _RESEARCH_LOOP_CAPABILITIES = (
-    frozenset({"architecture", "requirements", "interface_analysis"})
-    | _DISCOVERY_CAPABILITIES
+    frozenset({"architecture", "requirements", "interface_analysis"}) | _DISCOVERY_CAPABILITIES
 )
 # Evidence tools the discovery plane adds (PM1.B2). Named here rather than
 # imported so the grant path is stable whether or not the connector and local
@@ -190,7 +190,6 @@ _SOURCE_READ_TOOL_NAMES = frozenset({"fetch_source"})
 _EVIDENCE_BUILD_TOOL_NAMES = frozenset(
     {"extract_document", "normalize_citation", "compare_options"}
 )
-_DECISION_ANALYSIS_TOOL_NAMES = frozenset({"compare_options"})
 # Granting one of these means the task must run as a tool loop: a one-shot
 # completion cannot call a retrieval tool even when it is granted.
 _RETRIEVAL_LOOP_TOOL_NAMES = (
@@ -225,8 +224,6 @@ def append_markdown_continuation(base: str, continuation: str) -> str:
         base = f"{base}\n"
     return f"{base}{cont}"
 
-# Repository mutation tools — never granted for investigation or quality packs.
-_REPOSITORY_WRITE_TOOL_NAMES = frozenset({"create_file", "apply_patch"})
 
 # Quality-gate deliverable roles and their fallback names. Keyed by role so a
 # composer task resolves its document from the plan, not from the workflow id.
@@ -266,6 +263,12 @@ def default_investigation_plan(request_text: str) -> PlannerOutput:
 
 def default_quality_gate_plan(request_text: str) -> PlannerOutput:
     from product_factory.workflows.default_plans import default_quality_gate_plan as _plan
+
+    return _plan(request_text)
+
+
+def default_release_readiness_plan(request_text: str) -> PlannerOutput:
+    from product_factory.workflows.default_plans import default_release_readiness_plan as _plan
 
     return _plan(request_text)
 
@@ -466,7 +469,6 @@ class RunCoordinator:
         use_deterministic_planner: bool = False,
     ) -> None:
         self.config = config
-        self.gateway = gateway
         self.allow_deterministic_workers = isinstance(gateway, MockGateway)
         self.use_deterministic_planner = use_deterministic_planner or isinstance(
             gateway, MockGateway
@@ -476,7 +478,11 @@ class RunCoordinator:
         self.db = Database(self.pf_root / "data" / "product_factory.sqlite")
         self.skills = SkillRegistry.load(config.root / "skills")
         self.tool_registry = default_tool_registry()
-        self.connector_registry = default_connector_registry(config.connectors)
+        self.connector_registry = default_connector_registry(
+            config.connectors,
+            config_root=config.root,
+            deployment_state_path=self.pf_root / "deployments" / "staging-state.json",
+        )
         # Connector tools share the one registry so `ToolBroker.execute` resolves
         # and trust-labels them exactly like built-in tools.
         for definition in self.connector_registry.tool_definitions():
@@ -486,11 +492,63 @@ class RunCoordinator:
             config=config.connectors,
             mock=isinstance(gateway, MockGateway),
         )
-        if not isinstance(self.gateway, InstrumentedModelGateway):
-            # Will be rebound per-run with a recorder; keep raw gateway reference.
-            self._raw_gateway = self.gateway
-        else:
-            self._raw_gateway = self.gateway.inner
+        # The provider adapter is immutable shared configuration. Instrumented
+        # gateways are constructed per run and live only in RunExecutionContext.
+        self._raw_gateway = (
+            gateway.inner if isinstance(gateway, InstrumentedModelGateway) else gateway
+        )
+
+    def _build_execution_context(
+        self,
+        *,
+        run_id: str,
+        request: RunRequest,
+        run_dir: Path,
+        budget_snapshot: dict[str, Any] | None = None,
+        workflow_pack: WorkflowPack | None = None,
+    ) -> RunExecutionContext:
+        events = EventLog(run_dir / "events.jsonl")
+        artifacts = ArtifactStore(run_dir / "artifacts")
+        recorder = TelemetryRecorder(
+            self.db,
+            jsonl=events,
+            content_dir=run_dir / "content",
+            otel_exporter=maybe_create_otel_bridge(),
+        )
+        ledger = (
+            BudgetLedger.restore(request.budget, budget_snapshot)
+            if budget_snapshot
+            else BudgetLedger(request.budget)
+        )
+        gateway = InstrumentedModelGateway(
+            self._raw_gateway,
+            recorder=recorder,
+            db=self.db,
+            ledger=ledger,
+        )
+        workspace_key = (
+            str(request.repository_path.resolve())
+            if request.repository_path is not None
+            else (
+                f"{request.workspace.repository_id}:{request.workspace.ref}"
+                if request.workspace is not None
+                else request.repository_id
+            )
+        )
+        return RunExecutionContext(
+            run_id=run_id,
+            workflow_type=request.workflow_type,
+            run_dir=run_dir,
+            gateway=gateway,
+            recorder=recorder,
+            ledger=ledger,
+            artifacts=artifacts,
+            events=events,
+            cancel_check=lambda: self._raise_if_cancelled(run_id),
+            pack_id=workflow_pack.id if workflow_pack else None,
+            pack_version=workflow_pack.version if workflow_pack else None,
+            workspace_key=workspace_key,
+        )
 
     def run(self, request: RunRequest, *, run_id: str | None = None) -> RunManifest:
         run_id = run_id or f"run-{uuid.uuid4().hex[:12]}"
@@ -507,19 +565,14 @@ class RunCoordinator:
         ):
             (run_dir / sub).mkdir(parents=True, exist_ok=True)
 
-        events = EventLog(run_dir / "events.jsonl")
-        artifacts = ArtifactStore(run_dir / "artifacts")
-        otel = maybe_create_otel_bridge()
-        recorder = TelemetryRecorder(
-            self.db,
-            jsonl=events,
-            content_dir=run_dir / "content",
-            otel_exporter=otel,
+        execution_context = self._build_execution_context(
+            run_id=run_id,
+            request=request,
+            run_dir=run_dir,
         )
-        ledger = BudgetLedger(request.budget)
-        self.gateway = InstrumentedModelGateway(
-            self._raw_gateway, recorder=recorder, db=self.db, ledger=ledger
-        )
+        events = execution_context.events
+        artifacts = execution_context.artifacts
+        recorder = execution_context.recorder
         note = warn_unused_profile_set(request.model_profile_set)
         if note:
             logger.warning(note)
@@ -562,7 +615,7 @@ class RunCoordinator:
         # the resolved pack's identity is stamped on the run manifest.
         workflow_pack: WorkflowPack | None = None
         land_map = ArtifactLandMap()
-        if request.workflow_type in _PACK_BACKED_WORKFLOW_TYPES:
+        if is_registered_workflow(request.workflow_type):
             workflow_pack = resolve_workflow_pack(request.workflow_type)
             validate_pack_handoffs(request, workflow_pack)
             # Bad artifact overrides or typed pack input fail here, before any
@@ -578,6 +631,7 @@ class RunCoordinator:
                     "artifact_land_map": land_map.as_payload(),
                 },
             )
+        execution_context = execution_context.with_pack(workflow_pack)
         source_policy = resolve_request_source_policy(
             request, profiles_root=self.config.root / "profiles"
         )
@@ -631,7 +685,12 @@ class RunCoordinator:
                 summary="Planning",
                 payload={"status": "planning"},
             )
-            proposal = self._plan(run_id, request, repo_summary)
+            proposal = self._plan(
+                run_id,
+                request,
+                repo_summary,
+                execution_context=execution_context,
+            )
             art = artifacts.put_json(
                 proposal.model_dump(mode="json"),
                 logical_name="plan.json",
@@ -665,6 +724,7 @@ class RunCoordinator:
                         request,
                         repo_summary,
                         repair_errors=[e.model_dump() for e in compile_result.errors],
+                        execution_context=execution_context,
                     )
                     compile_result = compile_plan(
                         proposal,
@@ -712,18 +772,13 @@ class RunCoordinator:
 
             # Execute
             manifest = self._execute(
-                run_id=run_id,
+                execution_context=execution_context,
                 request=request,
                 plan=plan,
-                run_dir=run_dir,
-                artifacts=artifacts,
-                events=events,
-                recorder=recorder,
                 usage=usage,
                 worktrees=worktrees,
                 original_repo=original_repo,
                 base_commit=base_commit or "",
-                ledger=ledger,
                 workflow_pack=workflow_pack,
                 land_map=land_map,
             )
@@ -862,29 +917,24 @@ class RunCoordinator:
         ):
             (run_dir / sub).mkdir(parents=True, exist_ok=True)
 
-        events = EventLog(run_dir / "events.jsonl")
-        artifacts = ArtifactStore(run_dir / "artifacts")
-        otel = maybe_create_otel_bridge()
-        recorder = TelemetryRecorder(
-            self.db, jsonl=events, content_dir=run_dir / "content", otel_exporter=otel
-        )
-
         budget_snapshot = json.loads(run_row["budget_json"]) if run_row.get("budget_json") else None
-        ledger = (
-            BudgetLedger.restore(request.budget, budget_snapshot)
-            if budget_snapshot
-            else BudgetLedger(request.budget)
+        execution_context = self._build_execution_context(
+            run_id=run_id,
+            request=request,
+            run_dir=run_dir,
+            budget_snapshot=budget_snapshot,
         )
-        self.gateway = InstrumentedModelGateway(
-            self._raw_gateway, recorder=recorder, db=self.db, ledger=ledger
-        )
+        artifacts = execution_context.artifacts
+        recorder = execution_context.recorder
+        ledger = execution_context.ledger
         workflow_pack: WorkflowPack | None = None
         land_map = ArtifactLandMap()
-        if request.workflow_type in _PACK_BACKED_WORKFLOW_TYPES:
+        if is_registered_workflow(request.workflow_type):
             workflow_pack = resolve_workflow_pack(request.workflow_type)
             validate_pack_handoffs(request, workflow_pack)
             validate_pack_input(workflow_pack, request.pack_input)
             land_map = land_map_for_request(request)
+        execution_context = execution_context.with_pack(workflow_pack)
         source_policy = resolve_request_source_policy(
             request, profiles_root=self.config.root / "profiles"
         )
@@ -1035,18 +1085,13 @@ class RunCoordinator:
 
         try:
             return self._execute(
-                run_id=run_id,
+                execution_context=execution_context,
                 request=request,
                 plan=live_plan,
-                run_dir=run_dir,
-                artifacts=artifacts,
-                events=events,
-                recorder=recorder,
                 usage=usage,
                 worktrees=worktrees,
                 original_repo=original_repo,
                 base_commit=base_commit or "",
-                ledger=ledger,
                 workflow_pack=workflow_pack,
                 land_map=land_map,
                 initial_task_status=task_status,
@@ -1113,32 +1158,39 @@ class RunCoordinator:
         request: RunRequest,
         repo_summary: dict[str, Any] | None,
         repair_errors: list[dict[str, Any]] | None = None,
+        *,
+        execution_context: RunExecutionContext | None = None,
     ) -> PlannerOutput:
         planner_mode = str(request.metadata.get("planner_mode") or "").strip().lower()
         force_fixed = planner_mode in {"fixed", "complexity_sensitive", "deterministic"}
         force_live = planner_mode == "live"
         use_deterministic = force_fixed or (self.use_deterministic_planner and not force_live)
         if use_deterministic:
-            if request.workflow_type in _PACK_BACKED_WORKFLOW_TYPES:
+            if is_registered_workflow(request.workflow_type):
                 proposal = handler_for(request.workflow_type).plan_template(request.request_text)
             else:
                 proposal = default_code_change_plan(request.request_text)
         else:
             proposal = plan_with_gateway(
-                self.gateway,
+                execution_context.gateway if execution_context is not None else self._raw_gateway,
                 run_id=run_id,
                 request_text=request.request_text,
                 workflow_type=request.workflow_type,
                 repository_summary=repo_summary,
                 budget=request.budget.model_dump(mode="json"),
                 repair_errors=repair_errors,
+                allowed_capabilities=(
+                    resolve_workflow_pack(request.workflow_type).allowed_capabilities
+                    if is_registered_workflow(request.workflow_type)
+                    else None
+                ),
                 seed=(
                     int(request.metadata["benchmark_seed"])
                     if request.metadata.get("benchmark_seed") is not None
                     else None
                 ),
             )
-            if request.workflow_type in _PACK_BACKED_WORKFLOW_TYPES:
+            if is_registered_workflow(request.workflow_type):
                 pack = resolve_workflow_pack(request.workflow_type)
                 allowed = pack.allowed_capabilities
                 filtered = [t for t in proposal.tasks if t.capability in allowed]
@@ -1152,13 +1204,12 @@ class RunCoordinator:
                         )
                         for t in filtered
                     ]
-                    finals = [
-                        fa
-                        for fa in proposal.final_artifacts
-                        if fa.composer_task_id in kept
-                    ]
+                    finals = [fa for fa in proposal.final_artifacts if fa.composer_task_id in kept]
                     proposal = proposal.model_copy(
-                        update={"tasks": filtered, "final_artifacts": finals or proposal.final_artifacts}
+                        update={
+                            "tasks": filtered,
+                            "final_artifacts": finals or proposal.final_artifacts,
+                        }
                     )
         proposal = _clamp_proposal_budgets(proposal, self.config)
         if request.workflow_type not in _CODE_CHANGE_WORKFLOW_TYPES:
@@ -1259,18 +1310,13 @@ class RunCoordinator:
     def _execute(
         self,
         *,
-        run_id: str,
+        execution_context: RunExecutionContext,
         request: RunRequest,
         plan: CompiledPlan,
-        run_dir: Path,
-        artifacts: ArtifactStore,
-        events: EventLog,
-        recorder: TelemetryRecorder,
         usage: UsageMetrics,
         worktrees: WorktreeManager | None,
         original_repo: Path | None,
         base_commit: str,
-        ledger: BudgetLedger,
         workflow_pack: WorkflowPack | None = None,
         land_map: ArtifactLandMap | None = None,
         initial_task_status: dict[str, str] | None = None,
@@ -1280,6 +1326,11 @@ class RunCoordinator:
         initial_evidence_report_md: str = "",
         initial_documents_by_role: dict[str, str] | None = None,
     ) -> RunManifest:
+        run_id = execution_context.run_id
+        run_dir = execution_context.run_dir
+        artifacts = execution_context.artifacts
+        recorder = execution_context.recorder
+        ledger = execution_context.ledger
         # `initial_*` are only populated by `resume()` (P1.B): they seed the
         # wave loop with already-completed task state so resumed runs incur
         # no new model/tool spend for success/skipped tasks.
@@ -1298,8 +1349,7 @@ class RunCoordinator:
         # A quality pack's findings *are* its product: a blocking finding must not
         # spawn a repair task or fail the run the way it does for a code change.
         findings_are_deliverable = bool(
-            workflow_pack is not None
-            and workflow_pack.validation_policy.get("findings_are_deliverable")
+            workflow_pack is not None and workflow_pack.execution_policy.findings_are_deliverable
         )
         task_status = initial_task_status or {tid: "pending" for tid in plan.tasks}
         results: list[TaskResult] = list(initial_results or [])
@@ -1345,7 +1395,7 @@ class RunCoordinator:
         live_plan = plan
 
         while True:
-            self._raise_if_cancelled(run_id)
+            execution_context.cancel_check()
             if spent >= request.budget.max_cost_usd:
                 raise BudgetExhaustedError("Run budget exhausted")
             ledger.check_wall_clock()
@@ -1438,21 +1488,15 @@ class RunCoordinator:
                     str, list[dict[str, Any]]
                 ] = dependency_outputs_by_task,
                 validation_evidence_refs: list[str] = validation_evidence_refs,
-                collected_validator_results: list[
-                    dict[str, Any]
-                ] = collected_validator_results,
+                collected_validator_results: list[dict[str, Any]] = collected_validator_results,
             ) -> TaskResult:
                 return self._execute_task(
-                    run_id=run_id,
+                    execution_context=execution_context,
                     request=request,
                     task=task,
-                    run_dir=run_dir,
-                    artifacts=artifacts,
                     worktrees=worktrees,
                     original_repo=original_repo,
                     base_commit=base_commit,
-                    recorder=recorder,
-                    ledger=ledger,
                     dependency_outputs=dependency_outputs_by_task[task.id],
                     land_map=land_map,
                     composer_role=composer_roles.get(task.id),
@@ -1465,7 +1509,7 @@ class RunCoordinator:
                 executor_fn=_run_one,
                 max_workers=request.budget.max_parallel_tasks,
             )
-            self._raise_if_cancelled(run_id)
+            execution_context.cancel_check()
 
             for task, result in zip(ready, wave_results, strict=True):
                 usage = usage.merge(result.usage)
@@ -1601,6 +1645,11 @@ class RunCoordinator:
                         blocking_findings = []
                     if (
                         request.metadata.get("disable_validation_repair") != "true"
+                        and (
+                            workflow_pack is None
+                            or live_plan.tasks[result.task_id].capability
+                            in workflow_pack.execution_policy.repair_eligible_capabilities
+                        )
                         and (
                             result.status != "success"
                             or has_blocking_failures(validation_results)
@@ -1790,9 +1839,7 @@ class RunCoordinator:
                 )
             if not isinstance(self._raw_gateway, MockGateway):
                 web_check = validate_web_search_used(
-                    expected=request_expects_web_citations(
-                        request.request_text, request.metadata
-                    ),
+                    expected=request_expects_web_citations(request.request_text, request.metadata),
                     connector_enabled=self.config.connectors.is_enabled(TAVILY_CONNECTOR_ID),
                     invocation_count=self._count_connector_invocations(
                         run_id, connector_id=TAVILY_CONNECTOR_ID
@@ -1800,7 +1847,7 @@ class RunCoordinator:
                 )
                 if web_check is not None:
                     validation_results.append(web_check)
-        elif request.workflow_type in _PACK_BACKED_WORKFLOW_TYPES:
+        elif is_registered_workflow(request.workflow_type):
             # Role-driven final validation for investigation, quality_gate,
             # discovery, and any future document pack — never the architecture path.
             pack_handler = handler_for(request.workflow_type)
@@ -1816,11 +1863,10 @@ class RunCoordinator:
                         # Investigation/discovery keep a deterministic compose
                         # fallback (mock E2E). Quality gate and similar packs
                         # fail closed when a required deliverable is absent.
-                        if request.workflow_type in (
-                            _INVESTIGATION_WORKFLOW_TYPES
-                            | _DISCOVERY_WORKFLOW_TYPES
-                            | _INTAKE_WORKFLOW_TYPES
-                            | _SPIKE_WORKFLOW_TYPES
+                        if (
+                            workflow_pack is not None
+                            and entry.role
+                            in workflow_pack.execution_policy.fallback_composition_roles
                         ):
                             try:
                                 document = pack_handler.compose(
@@ -1863,9 +1909,7 @@ class RunCoordinator:
                                 ValidatorResult(
                                     validator_id=pack_handler.validator_id(entry.role),
                                     status="fail",
-                                    message=(
-                                        f"Required deliverable {entry.role} was not produced"
-                                    ),
+                                    message=(f"Required deliverable {entry.role} was not produced"),
                                     details={"logical_name": entry.logical_name},
                                 )
                             )
@@ -1876,21 +1920,29 @@ class RunCoordinator:
                 if entry.role == ROLE_VERIFICATION_REPORT:
                     validation_results.append(validate_verification_report(document))
                 else:
-                    validation_results.append(
-                        validate_document_sections(
-                            document,
-                            validator_id=pack_handler.validator_id(entry.role),
-                            required_sections=pack_handler.required_sections(entry.role),
+                    role_validator_id = pack_handler.validator_id(entry.role)
+                    if role_validator_id == "release_plan_contract":
+                        validation_results.append(validate_release_plan(document))
+                    elif role_validator_id == "deployment_record_contract":
+                        validation_results.append(validate_deployment_record(document))
+                    elif role_validator_id == "operational_record_contract":
+                        validation_results.append(validate_operational_record(document))
+                    else:
+                        validation_results.append(
+                            validate_document_sections(
+                                document,
+                                validator_id=role_validator_id,
+                                required_sections=pack_handler.required_sections(entry.role),
+                            )
                         )
-                    )
                     validation_results.append(validate_secrets(document))
-                if (
-                    request.workflow_type in _INVESTIGATION_WORKFLOW_TYPES
-                    and entry.role == ROLE_EVIDENCE_REPORT
-                ):
+                policy_validators = set(
+                    workflow_pack.execution_policy.validators if workflow_pack is not None else ()
+                )
+                if "citation_presence" in policy_validators and entry.role == ROLE_EVIDENCE_REPORT:
                     validation_results.append(validate_citations(document))
                 if (
-                    request.workflow_type in _DISCOVERY_WORKFLOW_TYPES
+                    "research_provenance" in policy_validators
                     and entry.role == ROLE_FEASIBILITY_DOSSIER
                 ):
                     validation_results.append(validate_research_provenance(document))
@@ -1900,15 +1952,13 @@ class RunCoordinator:
                     )
                     validation_results.append(validate_recommendation(document))
                 if (
-                    request.workflow_type in _INTAKE_WORKFLOW_TYPES
+                    "intake_sections" in policy_validators
                     and entry.role in {ROLE_CHANGE_BRIEF, ROLE_CLARIFICATION_REQUEST}
                     and document.strip()
                 ):
                     # Role-specific section validator (overrides the generic pass above
                     # only when the primary landable is present).
-                    validation_results.append(
-                        validate_intake_sections(document, role=entry.role)
-                    )
+                    validation_results.append(validate_intake_sections(document, role=entry.role))
                     validation_results.append(
                         validate_intake_no_invention(
                             document,
@@ -1917,7 +1967,10 @@ class RunCoordinator:
                             pack_input=getattr(request, "pack_input", None) or {},
                         )
                     )
-            if request.workflow_type in _QUALITY_GATE_WORKFLOW_TYPES:
+            if (
+                workflow_pack is not None
+                and "citation_presence" in workflow_pack.execution_policy.validators
+            ):
                 findings_doc = documents_by_role.get(ROLE_QUALITY_FINDINGS, "")
                 if findings_doc.strip():
                     validation_results.append(validate_citations(findings_doc))
@@ -1943,9 +1996,7 @@ class RunCoordinator:
                 )
             if not isinstance(self._raw_gateway, MockGateway):
                 web_check = validate_web_search_used(
-                    expected=request_expects_web_citations(
-                        request.request_text, request.metadata
-                    ),
+                    expected=request_expects_web_citations(request.request_text, request.metadata),
                     connector_enabled=self.config.connectors.is_enabled(TAVILY_CONNECTOR_ID),
                     invocation_count=self._count_connector_invocations(
                         run_id, connector_id=TAVILY_CONNECTOR_ID
@@ -1956,27 +2007,30 @@ class RunCoordinator:
 
         # Approval gate for code changes
         final_status: str
+        missing_policy_roles = (
+            {
+                role
+                for role in workflow_pack.execution_policy.required_output_roles
+                if not str(documents_by_role.get(role) or "").strip()
+            }
+            if workflow_pack is not None
+            else set()
+        )
+        invalid_exclusive_groups = (
+            [
+                group
+                for group in workflow_pack.execution_policy.exactly_one_output_role_groups
+                if sum(1 for role in group if str(documents_by_role.get(role) or "").strip()) != 1
+            ]
+            if workflow_pack is not None
+            else []
+        )
         terminal_failure = (
             any(status == "failed" for status in task_status.values())
             or has_blocking_failures(validation_results)
+            or bool(missing_policy_roles)
+            or bool(invalid_exclusive_groups)
             or (request.workflow_type in _CODE_CHANGE_WORKFLOW_TYPES and not patch_text.strip())
-            or (
-                request.workflow_type in _INVESTIGATION_WORKFLOW_TYPES
-                and not evidence_report_md.strip()
-            )
-            or (
-                request.workflow_type in _DISCOVERY_WORKFLOW_TYPES
-                and not str(documents_by_role.get(ROLE_FEASIBILITY_DOSSIER) or "").strip()
-            )
-            or (
-                request.workflow_type in _INTAKE_WORKFLOW_TYPES
-                and sum(
-                    1
-                    for role in (ROLE_CHANGE_BRIEF, ROLE_CLARIFICATION_REQUEST)
-                    if str(documents_by_role.get(role) or "").strip()
-                )
-                != 1
-            )
         )
         if terminal_failure:
             final_status = "failed"
@@ -2089,27 +2143,184 @@ class RunCoordinator:
         )
         if source_policy is not None:
             digests.update(source_policy.as_manifest_entry())
+        for pack in resolve_request_domain_packs(request, packs_root=self.config.root / "packs"):
+            digests.update(pack.as_manifest_entry())
+        for profile in resolve_request_policy_profiles(
+            request, profiles_root=self.config.root / "profiles"
+        ):
+            digests.update(profile.as_manifest_entry())
         return digests
+
+    def _record_artifact_instance(self, instance: ArtifactInstance) -> None:
+        self.db.record_artifact_instance(instance.model_dump(mode="json"))
+
+    def _pin_stack_profile(
+        self,
+        *,
+        request: RunRequest,
+        artifacts: ArtifactStore,
+        run_id: str,
+        task_id: str,
+        existing_policy: dict[str, Any] | None,
+    ) -> tuple[dict[str, str], str | None, str | None, str | None]:
+        """Return (profile_digests, digest, artifact_sha256, schema_version).
+
+        On resume, reuse the pinned stack-profile artifact instead of re-detecting.
+        """
+
+        digests = ProfileRegistry.load(self.config.root / "profiles").digests()
+        source_policy = resolve_request_source_policy(
+            request, profiles_root=self.config.root / "profiles"
+        )
+        if source_policy is not None:
+            digests.update(source_policy.as_manifest_entry())
+        for pack in resolve_request_domain_packs(request, packs_root=self.config.root / "packs"):
+            digests.update(pack.as_manifest_entry())
+        for profile in resolve_request_policy_profiles(
+            request, profiles_root=self.config.root / "profiles"
+        ):
+            digests.update(profile.as_manifest_entry())
+
+        stack_digest = None
+        stack_sha = None
+        stack_version = None
+        if existing_policy:
+            stack_sha = existing_policy.get("stack_profile_artifact_sha256")
+            stack_digest = existing_policy.get("stack_profile_digest")
+            stack_version = existing_policy.get("stack_profile_schema_version")
+            if stack_sha and artifacts.exists(str(stack_sha)):
+                try:
+                    pinned = StackProfile.model_validate(
+                        json.loads(artifacts.get_text(str(stack_sha)))
+                    )
+                    digests.update(pinned.as_manifest_entry())
+                    return digests, pinned.digest, str(stack_sha), pinned.version
+                except (OSError, json.JSONDecodeError, ValueError, TypeError):
+                    if stack_digest:
+                        digests["stack:pinned"] = str(stack_digest)
+                    return digests, stack_digest, str(stack_sha), stack_version
+            if stack_sha:
+                return digests, stack_digest, str(stack_sha), stack_version
+
+        existing_instance = next(
+            (
+                row
+                for row in self.db.list_artifact_instances(run_id)
+                if row.get("role") == "stack_profile"
+            ),
+            None,
+        )
+        if existing_instance and artifacts.exists(str(existing_instance["sha256"])):
+            try:
+                pinned = StackProfile.model_validate(
+                    json.loads(artifacts.get_text(str(existing_instance["sha256"])))
+                )
+                digests.update(pinned.as_manifest_entry())
+                return (
+                    digests,
+                    pinned.digest,
+                    str(existing_instance["sha256"]),
+                    pinned.version,
+                )
+            except (OSError, json.JSONDecodeError, ValueError, TypeError):
+                pass
+
+        if request.repository_path is None:
+            return digests, None, None, None
+
+        stack_profile = discover_stack_profile(
+            request.repository_path,
+            registered_command_ids=(
+                self._resolve_validation_command_ids(request)
+                or self.config.policies.registered_commands
+            ),
+        )
+        digests.update(stack_profile.as_manifest_entry())
+        ref = artifacts.put_json(
+            stack_profile.model_dump(mode="json"),
+            logical_name="stack-profile.json",
+            created_by_task_id=task_id,
+            schema_id="stack_profile.v1",
+            schema_version=stack_profile.version,
+            trust_level="generated",
+        )
+        self.db.record_artifact(ref.model_dump(mode="json"))
+        self._record_artifact_instance(
+            ArtifactInstance.create(
+                run_id=run_id,
+                sha256=ref.sha256,
+                content_class="durable_output",
+                capture_level="full",
+                role="stack_profile",
+                producer_task_id=task_id,
+                media_type=ref.media_type,
+                schema_id="stack_profile.v1",
+                schema_version=stack_profile.version,
+                size_bytes=ref.size_bytes,
+                display_name="stack-profile.json",
+                metadata={"stack_id": stack_profile.id, "digest": stack_profile.digest},
+            )
+        )
+        return digests, stack_profile.digest, ref.sha256, stack_profile.version
+
+    def _research_prompt_tool_names(
+        self,
+        *,
+        task: TaskSpec,
+        request: RunRequest,
+        allowed: set[str],
+    ) -> tuple[list[str] | None, str | None]:
+        if task.capability == "interface_analysis":
+            interface_tools = {
+                "parse_contract",
+                "contract_inventory",
+                "diff_contracts",
+                "map_capabilities",
+                "generate_synthetic_fixture",
+                "run_contract_simulation",
+            }
+            return (
+                sorted(name for name in allowed if name in interface_tools),
+                "interface_agent_loop_tools",
+            )
+        if task.capability not in _RESEARCH_LOOP_CAPABILITIES:
+            return None, None
+        loop_tool_names = (
+            {
+                TOOL_WEB_SEARCH,
+                "read_file",
+                "list_files",
+                "search_text",
+            }
+            | _SOURCE_READ_TOOL_NAMES
+            | _EVIDENCE_BUILD_TOOL_NAMES
+        )
+        prompt = sorted(name for name in allowed if name in loop_tool_names)
+        if set(prompt) == allowed:
+            return None, None
+        return prompt, "research_agent_loop_tools"
 
     def _execute_task(
         self,
         *,
-        run_id: str,
+        execution_context: RunExecutionContext,
         request: RunRequest,
         task: TaskSpec,
-        run_dir: Path,
-        artifacts: ArtifactStore,
         worktrees: WorktreeManager | None,
         original_repo: Path | None,
         base_commit: str,
-        recorder: TelemetryRecorder | None = None,
         dependency_outputs: list[dict[str, Any]] | None = None,
-        ledger: BudgetLedger | None = None,
         land_map: ArtifactLandMap | None = None,
         composer_role: str | None = None,
         validation_evidence_refs: list[str] | None = None,
         validator_results: list[dict[str, Any]] | None = None,
     ) -> TaskResult:
+        run_id = execution_context.run_id
+        run_dir = execution_context.run_dir
+        artifacts = execution_context.artifacts
+        recorder = execution_context.recorder
+        ledger = execution_context.ledger
+        gateway = execution_context.gateway
         land_map = land_map or ArtifactLandMap()
         validation_evidence_refs = validation_evidence_refs or []
         validator_results = validator_results or []
@@ -2132,7 +2343,7 @@ class RunCoordinator:
         }.get(task.capability, "implementation_worker")
 
         skill_policy: dict[str, Any] = {}
-        if request.workflow_type in _PACK_BACKED_WORKFLOW_TYPES:
+        if is_registered_workflow(request.workflow_type):
             skill_policy = dict(resolve_workflow_pack(request.workflow_type).skill_policy)
         skills_disabled = request.metadata.get("disable_skills") == "true"
         if skills_disabled:
@@ -2143,10 +2354,181 @@ class RunCoordinator:
                 required_skills=task.required_skills,
                 skill_policy=skill_policy,
             )
+
+        existing_policy_data: dict[str, Any] | None = None
+        existing_row = self.db.get_task(run_id, task.id)
+        if existing_row and existing_row.get("effective_policy_json"):
+            with contextlib.suppress(json.JSONDecodeError, TypeError):
+                loaded = json.loads(existing_row["effective_policy_json"])
+                if isinstance(loaded, dict):
+                    existing_policy_data = loaded
+
+        profile_digests, stack_digest, stack_sha, stack_version = self._pin_stack_profile(
+            request=request,
+            artifacts=artifacts,
+            run_id=run_id,
+            task_id=task.id,
+            existing_policy=existing_policy_data,
+        )
+
+        profile_cfg = self.config.models.profiles.get(profile)
+        route_class = profile_cfg.route_class if profile_cfg is not None else "cloud"
+        fallback_cfg = profile_cfg.cloud_fallback if profile_cfg is not None else None
+        fallback_model_profile = (
+            fallback_cfg.profile if fallback_cfg is not None and fallback_cfg.enabled else None
+        )
+        fallback_eligible = bool(fallback_cfg is not None and fallback_cfg.enabled)
+
+        pack_id = None
+        pack_version = None
+        if is_registered_workflow(request.workflow_type):
+            workflow_pack = resolve_workflow_pack(request.workflow_type)
+            pack_id = workflow_pack.id
+            pack_version = getattr(workflow_pack, "version", None)
+
+        if existing_policy_data:
+            effective_policy = EffectiveTaskPolicy.model_validate(existing_policy_data)
+        else:
+            connector_tool_names = self.connector_registry.tool_names()
+            grantable = grantable_connector_names_for_task(
+                task=task,
+                grantable_fn=self.connector_broker.grantable_tool_names,
+            )
+            # Precompute allowed set so research prompt reduction can be recorded.
+            allowed_preview, _, _ = compute_allowed_tool_names(
+                task=task,
+                request=request,
+                tool_registry=self.tool_registry,
+                connector_tool_names=connector_tool_names,
+                grantable_connector_tools=grantable,
+                web_search_tool=TOOL_WEB_SEARCH,
+                denied_tool_names=workflow_pack.execution_policy.denied_tool_names,
+                pack_allowed_tool_classes=(workflow_pack.execution_policy.allowed_tool_classes),
+            )
+            prompt_names, reduction_reason = self._research_prompt_tool_names(
+                task=task,
+                request=request,
+                allowed=allowed_preview,
+            )
+            domain_packs = resolve_request_domain_packs(
+                request, packs_root=self.config.root / "packs"
+            )
+            policy_profiles = resolve_request_policy_profiles(
+                request, profiles_root=self.config.root / "profiles"
+            )
+            composition_gate = evaluate_composition_gates(
+                request=request,
+                domain_packs=domain_packs,
+                policy_profiles=policy_profiles,
+                granted_tool_names=allowed_preview,
+                granted_tool_classes={
+                    t.tool_class for t in self.tool_registry.list() if t.name in allowed_preview
+                },
+                skill_ids=[s.manifest.id for s in skills],
+            )
+            if not composition_gate.ok:
+                conflict_result = TaskResult(
+                    task_id=task.id,
+                    status="failed",
+                    summary="composition_conflict",
+                    validator_results=[
+                        ValidatorResult(
+                            validator_id="composition_conflict",
+                            status="fail",
+                            message="Domain/policy composition conflict detected",
+                            details={"conflicts": composition_gate.conflicts},
+                        )
+                    ],
+                    model_profile=profile,
+                )
+                self.db.upsert_task(
+                    run_id=run_id,
+                    task_id=task.id,
+                    capability=task.capability,
+                    status="failed",
+                    spec=task.model_dump(mode="json"),
+                    result=conflict_result.model_dump(mode="json"),
+                    ended_at=datetime.now(UTC).isoformat(),
+                    active_operation=None,
+                )
+                return conflict_result
+            profile_digests.update(composition_gate.profile_digests)
+            effective_policy = resolve_effective_task_policy(
+                run_id=run_id,
+                task=task,
+                request=request,
+                tool_registry=self.tool_registry,
+                model_profile=profile,
+                agent_profile=agent_profile,
+                skill_ids=[s.manifest.id for s in skills],
+                pack_id=pack_id,
+                pack_version=pack_version,
+                connector_tool_names=connector_tool_names,
+                grantable_connector_tools=grantable,
+                web_search_tool=TOOL_WEB_SEARCH,
+                stack_profile_digest=stack_digest,
+                stack_profile_artifact_sha256=stack_sha,
+                stack_profile_schema_version=stack_version,
+                reference_pack_ids=composition_gate.reference_pack_ids,
+                profile_ids=[
+                    agent_profile,
+                    *composition_gate.policy_profile_ids,
+                ],
+                route_class=route_class,
+                fallback_model_profile=fallback_model_profile,
+                fallback_eligible=fallback_eligible,
+                validator_ids=self._resolve_validation_command_ids(request)
+                or list(self.config.policies.registered_commands),
+                prompt_tool_names=prompt_names,
+                prompt_reduction_reason=reduction_reason,
+                denied_tool_names=workflow_pack.execution_policy.denied_tool_names,
+                pack_allowed_tool_classes=(workflow_pack.execution_policy.allowed_tool_classes),
+                executor_mode=workflow_pack.execution_policy.executor_mode_for(task.capability)
+                if is_registered_workflow(request.workflow_type)
+                else "model_draft",
+            )
+            validate_write_payload(
+                EFFECTIVE_TASK_POLICY_SCHEMA,
+                effective_policy.model_dump(mode="json"),
+            )
+            policy_ref = artifacts.put_json(
+                effective_policy.model_dump(mode="json"),
+                logical_name=f"effective-policy-{task.id}.json",
+                created_by_task_id=task.id,
+                schema_id=EFFECTIVE_TASK_POLICY_SCHEMA,
+                schema_version="1",
+            )
+            self.db.record_artifact(policy_ref.model_dump(mode="json"))
+            self._record_artifact_instance(
+                ArtifactInstance.create(
+                    run_id=run_id,
+                    sha256=policy_ref.sha256,
+                    content_class="durable_output",
+                    capture_level="full",
+                    role="effective_task_policy",
+                    producer_task_id=task.id,
+                    media_type=policy_ref.media_type,
+                    schema_id=EFFECTIVE_TASK_POLICY_SCHEMA,
+                    schema_version="1",
+                    size_bytes=policy_ref.size_bytes,
+                    display_name=policy_ref.logical_name,
+                )
+            )
+            self.db.upsert_task(
+                run_id=run_id,
+                task_id=task.id,
+                capability=task.capability,
+                status="running",
+                spec=task.model_dump(mode="json"),
+                effective_policy=effective_policy.model_dump(mode="json"),
+                active_operation=task.capability,
+            )
+
+        prompt_set = set(effective_policy.prompt_tool_names)
         tool_defs = [
             {"name": t.name, "description": t.description, "parameters": t.input_schema}
             for t in self.tool_registry.list()
-            if t.tool_class in task.required_tool_classes or not task.required_tool_classes
+            if t.name in prompt_set
         ]
         registered_ids = self._resolve_validation_command_ids(request) or list(
             self.config.policies.registered_commands
@@ -2164,7 +2546,6 @@ class RunCoordinator:
         if skills_disabled:
             context_omissions.append("skills_disabled")
         context_mode = str(request.metadata.get("context_mode") or "targeted").strip().lower()
-        profile_cfg = self.config.models.profiles.get(profile)
         soft_limit = profile_cfg.context_soft_limit if profile_cfg is not None else None
         packing_limits = resolve_context_limits(
             self.config.policies.context,
@@ -2201,7 +2582,6 @@ class RunCoordinator:
                 "(1 + random())))). Do not sleep the base delay and only mutate "
                 "delay afterward — tests assert observed sleep values vary."
             )
-        profile_digests = self._profile_digests(request)
         ctx = assemble_context(
             task=task,
             model_profile=profile,
@@ -2219,9 +2599,11 @@ class RunCoordinator:
         task_context = build_task_context(
             task_id=task.id,
             skills=skills,
-            tool_names=[str(t.get("name") or "") for t in tool_defs],
+            tool_names=list(effective_policy.allowed_tool_names),
+            prompt_tool_names=list(effective_policy.prompt_tool_names),
             expected_output_schema=task.expected_output_schema,
             profile_digests=profile_digests,
+            effective_policy=effective_policy.model_dump(mode="json"),
         )
         persist_task_context(task_context, run_dir / "prompts")
         (run_dir / "prompts" / f"{task.id}.manifest.json").write_text(
@@ -2236,6 +2618,7 @@ class RunCoordinator:
                 payload={
                     "package_hash": ctx.package_hash,
                     "manifest": ctx.manifest.model_dump(mode="json"),
+                    "effective_policy": effective_policy.model_dump(mode="json"),
                 },
                 content=ctx.messages,
                 content_logical_name=f"prompt-package-{task.id}",
@@ -2365,14 +2748,12 @@ class RunCoordinator:
                 severity=severity,
             )
 
-        self.connector_broker.set_audit(_connector_audit if recorder is not None else None)
-
         broker = ToolBroker(
             registry=self.tool_registry,
             artifact_store=artifacts,
             worktree_root=(
                 wt_path
-                if original_repo or request.workflow_type in _SPIKE_WORKFLOW_TYPES
+                if original_repo or effective_policy.executor_mode == "interface_agent_loop"
                 else None
             ),
             original_repo=original_repo,
@@ -2381,73 +2762,28 @@ class RunCoordinator:
             observer=_tool_observer if recorder is not None else None,
             ledger=ledger,
             connectors=self.connector_broker,
+            connector_audit=_connector_audit,
             source_ledger=SourceLedger.for_run(run_dir),
             source_policy=resolve_request_source_policy(
                 request, profiles_root=self.config.root / "profiles"
             ),
+            connector_approval_verified=(
+                request.workflow_type == "deployment_execution"
+                and bool(request.pack_input.get("approval_binding", {}).get("approval_id"))
+                and request.pack_input.get("release_plan", {}).get("outcome") == "ready"
+                and all(
+                    str(request.pack_input.get("approval_binding", {}).get(field) or "")
+                    == str(request.pack_input.get(field) or "")
+                    for field in ("release_plan_digest", "artifact_digest", "target_id")
+                )
+                and request.pack_input.get("approval_binding", {}).get("change_window")
+                == request.pack_input.get("change_window")
+            ),
             run_id=run_id,
+            capture_level=recorder.capture_level if recorder is not None else None,
+            on_artifact_instance=self._record_artifact_instance,
         )
-        granted = {
-            t.name
-            for t in self.tool_registry.list()
-            if t.tool_class in task.required_tool_classes
-            or (not task.required_tool_classes and t.risk_class in {"R0", "R1"})
-        }
-        # Always allow artifact write for composition/architecture/documentation
-        if task.capability in {
-            "composition",
-            "architecture",
-            "documentation",
-            "domain_research",
-            "decision_analysis",
-            "interface_analysis",
-        }:
-            granted.add("write_artifact")
-        if task.capability == "decision_analysis":
-            # Option comparison is local and write-free; grant it whenever the tool
-            # is registered so a plan need not spell out the evidence_build class.
-            registered_tool_names = {t.name for t in self.tool_registry.list()}
-            granted |= registered_tool_names & _DECISION_ANALYSIS_TOOL_NAMES
-        if task.capability in {"implementation", "repair"}:
-            granted = {
-                "create_file",
-                "apply_patch",
-                "git_diff",
-                "git_status",
-                "read_file",
-                "list_files",
-                "search_text",
-                "run_validation_command",
-            }
-        if task.capability in {"repository_analysis", "independent_review"}:
-            granted.update({"read_file", "list_files", "search_text", "git_diff", "git_status"})
-        # Investigation and discovery packs never receive repository mutation tools.
-        if request.workflow_type in _READ_ONLY_STRIP_WORKFLOW_TYPES:
-            granted -= _REPOSITORY_WRITE_TOOL_NAMES
-            granted.discard("run_validation_command")
-        if request.workflow_type in _INTAKE_WORKFLOW_TYPES:
-            # Intake must not open a new live research plane (discovery already
-            # did that). Strip web/source retrieval even if decision_analysis
-            # would otherwise inherit external-read catalogue classes.
-            granted.discard(TOOL_WEB_SEARCH)
-            granted -= _SOURCE_READ_TOOL_NAMES
-        elif request.workflow_type in _QUALITY_GATE_WORKFLOW_TYPES:
-            # A quality gate may execute registered validation commands, but it
-            # reports on code rather than changing it (P4.E).
-            granted -= _REPOSITORY_WRITE_TOOL_NAMES
-
-        # Connector grants are resolved last so no capability-specific branch above
-        # can hand out an external provider by accident. External tools are never
-        # part of the permissive default: a task reaches one only when its
-        # capability catalogue permits the tool class (or the plan names it) *and*
-        # an operator enabled the connector.
-        connector_tool_names = self.connector_registry.tool_names()
-        if connector_tool_names:
-            granted -= connector_tool_names
-            grant_classes = set(task.required_tool_classes)
-            permitted = CAPABILITY_TOOL_CLASSES.get(task.capability, frozenset())
-            grant_classes |= permitted & EXTERNAL_READ_TOOL_CLASSES
-            granted |= self.connector_broker.grantable_tool_names(grant_classes)
+        granted = set(effective_policy.allowed_tool_names)
 
         # Fail closed before granting if a matched skill's declared tool policy
         # is inconsistent with the task's actual grant (P1.E).
@@ -2468,7 +2804,12 @@ class RunCoordinator:
                 readable_path_patterns=task.effective_read_patterns(),
                 writable_path_patterns=task.effective_write_patterns(),
                 # Reserve headroom for post-loop system git_diff / status calls.
-                max_calls=max(task.budget.max_tool_calls * 2, task.budget.max_tool_calls + 10),
+                max_calls=int(
+                    effective_policy.call_limits.get(
+                        "max_calls",
+                        max(task.budget.max_tool_calls * 2, task.budget.max_tool_calls + 10),
+                    )
+                ),
             )
         )
 
@@ -2512,10 +2853,7 @@ class RunCoordinator:
 
         # A quality gate's design task needs the same repository scope as an
         # analysis task: without it the test plan has no real paths to rank.
-        scopes_repository = task.capability == "repository_analysis" or (
-            task.capability == "test_design"
-            and request.workflow_type in _QUALITY_GATE_WORKFLOW_TYPES
-        )
+        scopes_repository = task.capability in {"repository_analysis", "test_design"}
         if scopes_repository and broker.worktree_root:
             listing = broker.execute(
                 task_id=task.id,
@@ -2640,7 +2978,7 @@ class RunCoordinator:
                         if definition.name in granted
                     ]
                     loop = run_tool_agent(
-                        gateway=self.gateway,
+                        gateway=gateway,
                         broker=broker,
                         run_id=run_id,
                         task_id=task.id,
@@ -2787,6 +3125,135 @@ class RunCoordinator:
                 result_status = "failed"
                 summary = summary or "invalid_patch_format"
             summary = summary or "Implementation patch produced"
+        elif task.capability == "deployment_execution":
+            if not broker.connector_approval_verified:
+                raise ApprovalBlockedError(
+                    "Deployment approval binding is missing or does not match immutable inputs"
+                )
+            data = request.pack_input
+            actions: list[dict[str, Any]] = []
+
+            def _connector_payload(value: dict[str, Any]) -> dict[str, Any]:
+                payload = value.get("result")
+                return dict(payload) if isinstance(payload, dict) else dict(value)
+
+            try:
+                resolved_call = broker.execute(
+                    task_id=task.id,
+                    tool_name="resolve_deployment_target",
+                    arguments={"target_id": data["target_id"]},
+                )
+                tool_call_ids.append(resolved_call["tool_call_id"])
+                resolved = _connector_payload(resolved_call)
+                actions.append(resolved)
+                started_call = broker.execute(
+                    task_id=task.id,
+                    tool_name="start_deployment",
+                    arguments={
+                        "target_id": data["target_id"],
+                        "release_plan_digest": data["release_plan_digest"],
+                        "artifact_digest": data["artifact_digest"],
+                        "idempotency_key": data["idempotency_key"],
+                        "change_window": data["change_window"],
+                    },
+                )
+                tool_call_ids.append(started_call["tool_call_id"])
+                started = _connector_payload(started_call)
+                actions.append(started)
+                deployment_id = str(started.get("deployment_id") or "")
+                status_call = broker.execute(
+                    task_id=task.id,
+                    tool_name="get_rollout_status",
+                    arguments={"deployment_id": deployment_id},
+                )
+                tool_call_ids.append(status_call["tool_call_id"])
+                actions.append(_connector_payload(status_call))
+                health_args: dict[str, Any] = {"deployment_id": deployment_id}
+                if "simulated_health" in data:
+                    health_args["healthy"] = bool(data["simulated_health"])
+                if data.get("health_checks"):
+                    health_args["checks"] = data["health_checks"]
+                health_call = broker.execute(
+                    task_id=task.id,
+                    tool_name="verify_health",
+                    arguments=health_args,
+                )
+                tool_call_ids.append(health_call["tool_call_id"])
+                health = _connector_payload(health_call)
+                actions.append(health)
+                healthy = bool(
+                    health.get("healthy")
+                    if "healthy" in health
+                    else health.get("status") == "succeeded"
+                )
+                data["environment"] = str(resolved.get("environment") or "staging")
+                data["health_checks"] = list(
+                    health.get("checks")
+                    or (health.get("health") or {}).get("checks")
+                    or [{"name": "rollout", "passed": healthy, "healthy": healthy}]
+                )
+                if not healthy:
+                    rollback_call = broker.execute(
+                        task_id=task.id,
+                        tool_name="rollback_deployment",
+                        arguments={"deployment_id": deployment_id},
+                    )
+                    tool_call_ids.append(rollback_call["tool_call_id"])
+                    rollback = _connector_payload(rollback_call)
+                    actions.append(rollback)
+                    data["rollback_result"] = dict(rollback)
+                    data["deployment_outcome"] = "rolled_back"
+                else:
+                    data["deployment_outcome"] = "succeeded"
+                data["action_log"] = actions
+                data["reconciliation"] = {
+                    "idempotency_key": data["idempotency_key"],
+                    "replayed": bool(started.get("replayed")),
+                    "deployment_id": deployment_id,
+                }
+                receipt_artifact = artifacts.put_json(
+                    {
+                        "schema_id": "deployment_execution_receipts.v1",
+                        "actions": actions,
+                        "outcome": data["deployment_outcome"],
+                        "reconciliation": data["reconciliation"],
+                    },
+                    logical_name="deployment-receipts.json",
+                    created_by_task_id=task.id,
+                )
+                artifact_refs.append(receipt_artifact)
+                summary = f"Deployment {data['deployment_outcome']}"
+            except ApprovalBlockedError:
+                raise
+            except Exception as exc:
+                data["deployment_outcome"] = "unknown"
+                data["action_log"] = actions + [
+                    {
+                        "action": "deployment_execution",
+                        "status": "unknown",
+                        "reason": type(exc).__name__,
+                        "durable": True,
+                        "reconciliation_required": True,
+                    }
+                ]
+                data["health_checks"] = []
+                data["rollback_result"] = {
+                    "status": "not_attempted",
+                    "reason": "deployment state unknown; reconcile before another effect",
+                }
+                artifact_refs.append(
+                    artifacts.put_json(
+                        {
+                            "schema_id": "deployment_execution_receipts.v1",
+                            "actions": data["action_log"],
+                            "outcome": "unknown",
+                            "error_type": type(exc).__name__,
+                        },
+                        logical_name="deployment-receipts.json",
+                        created_by_task_id=task.id,
+                    )
+                )
+                summary = f"Deployment state unknown: {type(exc).__name__}"
         elif task.capability == "independent_review":
             if broker.worktree_root is not None:
                 diff = broker.execute(task_id=task.id, tool_name="git_diff", arguments={})
@@ -2891,7 +3358,7 @@ class RunCoordinator:
                         ),
                     )
                 )
-                response = self.gateway.complete(
+                response = gateway.complete(
                     ModelRequest(
                         request_id=f"review-{uuid.uuid4().hex[:8]}",
                         run_id=run_id,
@@ -2974,7 +3441,7 @@ class RunCoordinator:
             summary = summary or "Independent review complete"
         elif task.capability == "composition":
             if (
-                request.workflow_type in _PACK_BACKED_WORKFLOW_TYPES
+                is_registered_workflow(request.workflow_type)
                 and composer_role
                 and composer_role != ROLE_PROPOSED_PATCH
             ):
@@ -2995,6 +3462,7 @@ class RunCoordinator:
                         profile=profile,
                         dependency_outputs=dependency_outputs or [],
                         document_name=document_name,
+                        gateway=gateway,
                     )
                     gen_usage_box.append(usage)
                     return text, usage
@@ -3026,7 +3494,12 @@ class RunCoordinator:
                 schema_id = ROLE_TO_SCHEMA.get(composer_role)
                 media_type = (
                     "application/json"
-                    if composer_role in {ROLE_CHANGE_SET, ROLE_VERIFICATION_REPORT}
+                    if composer_role
+                    in {
+                        ROLE_CHANGE_SET,
+                        ROLE_DEPLOYMENT_RECORD,
+                        ROLE_VERIFICATION_REPORT,
+                    }
                     else "text/markdown"
                 )
                 art = artifacts.put_text(
@@ -3069,6 +3542,180 @@ class RunCoordinator:
                         lineage_path.write_text(json.dumps(lineage, indent=2), encoding="utf-8")
                 else:
                     summary = "Nothing to compose"
+        elif effective_policy.executor_mode == "interface_agent_loop":
+            typed_artifacts = []
+            try:
+                contract_paths = [
+                    str(path)
+                    for path in request.pack_input.get("contract_paths") or []
+                    if str(path).strip()
+                ]
+                if not contract_paths:
+                    raise ToolAuthorizationError(
+                        "interface_analysis requires at least one contract path"
+                    )
+                inventory_results: list[dict[str, Any]] = []
+                for index, contract_path in enumerate(contract_paths):
+                    inventory = broker.execute(
+                        task_id=task.id,
+                        tool_name="contract_inventory",
+                        arguments={"path": contract_path},
+                    )
+                    inventory_results.append(inventory)
+                    receipt = {
+                        "schema_id": "contract_inventory.v1",
+                        "role": "contract_inventory",
+                        "result": inventory,
+                    }
+                    validate_write_payload("contract_inventory.v1", receipt)
+                    typed_artifacts.append(
+                        artifacts.put_json(
+                            receipt,
+                            logical_name=f"contract-inventory-{index + 1}.json",
+                            created_by_task_id=task.id,
+                            schema_id="contract_inventory.v1",
+                            schema_version="1",
+                        )
+                    )
+
+                if len(contract_paths) >= 2:
+                    comparison = broker.execute(
+                        task_id=task.id,
+                        tool_name="diff_contracts",
+                        arguments={
+                            "baseline_path": contract_paths[0],
+                            "candidate_path": contract_paths[1],
+                        },
+                    )
+                else:
+                    comparison = {
+                        "baseline_path": contract_paths[0],
+                        "candidate_path": None,
+                        "classification": "no_baseline",
+                        "changes": [],
+                        "limitations": [
+                            "Only one contract was supplied; cross-version "
+                            "compatibility was not measured"
+                        ],
+                    }
+                receipt = {
+                    "schema_id": "contract_compatibility.v1",
+                    "role": "contract_compatibility",
+                    "result": comparison,
+                }
+                validate_write_payload("contract_compatibility.v1", receipt)
+                typed_artifacts.append(
+                    artifacts.put_json(
+                        receipt,
+                        logical_name="contract-compatibility.json",
+                        created_by_task_id=task.id,
+                        schema_id="contract_compatibility.v1",
+                        schema_version="1",
+                    )
+                )
+
+                schema_name = request.pack_input.get("schema_name")
+                first_inventory = inventory_results[0]
+                if (
+                    not schema_name
+                    and first_inventory.get("kind") == "openapi"
+                    and first_inventory.get("schemas")
+                ):
+                    schema_name = first_inventory["schemas"][0]
+                fixture_path = f"synthetic/{task.id.lower()}-fixture.json"
+                fixture_args: dict[str, Any] = {
+                    "contract_path": contract_paths[0],
+                    "output_path": fixture_path,
+                }
+                if schema_name:
+                    fixture_args["schema_name"] = schema_name
+                fixture = broker.execute(
+                    task_id=task.id,
+                    tool_name="generate_synthetic_fixture",
+                    arguments=fixture_args,
+                )
+                simulation_args: dict[str, Any] = {
+                    "contract_path": contract_paths[0],
+                    "fixture_path": fixture_path,
+                }
+                if schema_name:
+                    simulation_args["schema_name"] = schema_name
+                simulation = broker.execute(
+                    task_id=task.id,
+                    tool_name="run_contract_simulation",
+                    arguments=simulation_args,
+                )
+                receipt = {
+                    "schema_id": "contract_simulation.v1",
+                    "role": "contract_simulation",
+                    "result": {**simulation, "fixture": fixture},
+                }
+                validate_write_payload("contract_simulation.v1", receipt)
+                typed_artifacts.append(
+                    artifacts.put_json(
+                        receipt,
+                        logical_name="contract-simulation.json",
+                        created_by_task_id=task.id,
+                        schema_id="contract_simulation.v1",
+                        schema_version="1",
+                    )
+                )
+
+                evidence_output = {
+                    "task_id": task.id,
+                    "artifact_refs": [
+                        {
+                            **ref.model_dump(mode="json"),
+                            "role": (
+                                "contract_inventory"
+                                if ref.schema_id == "contract_inventory.v1"
+                                else (
+                                    "contract_compatibility"
+                                    if ref.schema_id == "contract_compatibility.v1"
+                                    else "contract_simulation"
+                                )
+                            ),
+                        }
+                        for ref in typed_artifacts
+                    ],
+                    "artifact_excerpts": [
+                        {
+                            "logical_name": ref.logical_name,
+                            "schema_id": ref.schema_id,
+                            "content": artifacts.get_text(ref.sha256),
+                        }
+                        for ref in typed_artifacts
+                    ],
+                }
+                spike_document = handler_for(request.workflow_type).compose(
+                    composer_role or ROLE_SPIKE_RESULT,
+                    ComposeContext(
+                        request=request,
+                        role=composer_role or ROLE_SPIKE_RESULT,
+                        document_name=land_map.logical_name_for(
+                            ROLE_SPIKE_RESULT, default="SPIKE_RESULT.json"
+                        ),
+                        dependency_outputs=[evidence_output],
+                        use_mock=isinstance(self._raw_gateway, MockGateway),
+                    ),
+                )
+                spike_artifact = artifacts.put_text(
+                    spike_document,
+                    media_type="application/json",
+                    logical_name=land_map.logical_name_for(
+                        ROLE_SPIKE_RESULT, default="SPIKE_RESULT.json"
+                    ),
+                    created_by_task_id=task.id,
+                    schema_id="spike_result.v1",
+                    schema_version="1",
+                    handoff_state="evidence_complete",
+                )
+                artifact_refs.extend([*typed_artifacts, spike_artifact])
+                summary = "Typed interface evidence and spike result created"
+            except (ToolAuthorizationError, RuntimeError, ValueError) as exc:
+                artifact_refs.extend(typed_artifacts)
+                result_status = "failed"
+                summary = f"interface_analysis_failed: {exc}"
         elif task.capability in _RESEARCH_LOOP_CAPABILITIES:
             draft_text = ""
             if not isinstance(self._raw_gateway, MockGateway):
@@ -3078,12 +3725,7 @@ class RunCoordinator:
                     "list_files",
                     "search_text",
                 }
-                if (
-                    task.capability in _DISCOVERY_CAPABILITIES
-                    and request.workflow_type in _DISCOVERY_WORKFLOW_TYPES
-                ):
-                    # Only feasibility discovery hands the loop the evidence plane.
-                    loop_tool_names |= _SOURCE_READ_TOOL_NAMES | _EVIDENCE_BUILD_TOOL_NAMES
+                loop_tool_names |= _SOURCE_READ_TOOL_NAMES | _EVIDENCE_BUILD_TOOL_NAMES
                 research_tool_names = {name for name in granted if name in loop_tool_names}
                 try:
                     if research_tool_names & _RETRIEVAL_LOOP_TOOL_NAMES:
@@ -3125,7 +3767,7 @@ class RunCoordinator:
                             if definition.name in research_tool_names
                         ]
                         loop = run_tool_agent(
-                            gateway=self.gateway,
+                            gateway=gateway,
                             broker=broker,
                             run_id=run_id,
                             task_id=task.id,
@@ -3161,7 +3803,7 @@ class RunCoordinator:
                             result_status = "failed"
                             summary = f"research_{loop.termination_reason}"
                     else:
-                        resp = self.gateway.complete(
+                        resp = gateway.complete(
                             ModelRequest(
                                 request_id=f"req-{uuid.uuid4().hex[:8]}",
                                 run_id=run_id,
@@ -3228,7 +3870,7 @@ class RunCoordinator:
             changed_files=changed_files,
             model_profile=profile,
             resolved_model_id=profile,
-            provider=getattr(self.gateway, "default_model", type(self.gateway).__name__),
+            provider=getattr(gateway, "default_model", type(gateway).__name__),
             prompt_package_hash=ctx.package_hash,
             tool_call_ids=tool_call_ids,
             usage=model_usage,
@@ -3245,6 +3887,21 @@ class RunCoordinator:
         )
         for art in artifact_refs:
             self.db.record_artifact(art.model_dump(mode="json"))
+            self._record_artifact_instance(
+                ArtifactInstance.create(
+                    run_id=run_id,
+                    sha256=art.sha256,
+                    content_class="durable_output",
+                    capture_level=recorder.capture_level if recorder is not None else "full",
+                    role=art.logical_name,
+                    producer_task_id=task.id,
+                    media_type=art.media_type,
+                    schema_id=art.schema_id,
+                    schema_version=art.schema_version,
+                    size_bytes=art.size_bytes,
+                    display_name=art.logical_name,
+                )
+            )
             if recorder is not None:
                 recorder.emit(
                     run_id=run_id,
@@ -3323,7 +3980,12 @@ class RunCoordinator:
                     )
                 )
             results.append(validate_secrets(architecture_md))
-        if request.workflow_type in _INVESTIGATION_WORKFLOW_TYPES and evidence_report_md:
+        pack_validators = (
+            set(resolve_workflow_pack(request.workflow_type).execution_policy.validators)
+            if is_registered_workflow(request.workflow_type)
+            else set()
+        )
+        if "investigation_sections" in pack_validators and evidence_report_md:
             results.append(validate_investigation_document(evidence_report_md))
             results.append(validate_citations(evidence_report_md))
             results.append(validate_secrets(evidence_report_md))
@@ -3379,6 +4041,7 @@ class RunCoordinator:
         profile: str,
         dependency_outputs: list[dict[str, Any]],
         document_name: str = "ARCHITECTURE.md",
+        gateway: ModelGateway | None = None,
     ) -> tuple[str, UsageMetrics]:
         """Ask the live model for a request-specific architecture document.
 
@@ -3422,6 +4085,7 @@ class RunCoordinator:
             else None
         )
         usage = UsageMetrics()
+        model_gateway = gateway or self._raw_gateway
         try:
             messages = [
                 CanonicalMessage(role="system", content=system),
@@ -3430,7 +4094,7 @@ class RunCoordinator:
                     content=json.dumps(payload, indent=2, default=str),
                 ),
             ]
-            resp = self.gateway.complete(
+            resp = model_gateway.complete(
                 ModelRequest(
                     request_id=f"arch-{uuid.uuid4().hex[:8]}",
                     run_id=run_id,
@@ -3488,7 +4152,7 @@ class RunCoordinator:
                         ),
                     ),
                 ]
-                resp = self.gateway.complete(
+                resp = model_gateway.complete(
                     ModelRequest(
                         request_id=f"arch-cont-{uuid.uuid4().hex[:8]}",
                         run_id=run_id,
@@ -3686,9 +4350,7 @@ class RunCoordinator:
         ).strip()
         domain = str(pack_input.get("domain") or "unspecified").strip()
         jurisdiction = str(pack_input.get("jurisdiction") or "").strip()
-        policy = resolve_request_source_policy(
-            request, profiles_root=self.config.root / "profiles"
-        )
+        policy = resolve_request_source_policy(request, profiles_root=self.config.root / "profiles")
         regulated_topics = list(getattr(policy, "require_expert_review_for", None) or [])
         domain_lower = domain.lower()
         text_lower = f"{decision}\n{domain}".lower()
@@ -3696,6 +4358,17 @@ class RunCoordinator:
             topic.lower() in text_lower or topic.lower() in domain_lower
             for topic in ("compliance", "clinical", "legal", "privacy", *regulated_topics)
         ) or bool(regulated_topics and (policy and policy.id == "regulated-domain"))
+        composition_gate = evaluate_composition_gates(
+            request=request,
+            domain_packs=resolve_request_domain_packs(
+                request, packs_root=self.config.root / "packs"
+            ),
+            policy_profiles=resolve_request_policy_profiles(
+                request, profiles_root=self.config.root / "profiles"
+            ),
+        )
+        if composition_gate.requires_human_review:
+            hits_regulated = True
 
         if hits_regulated:
             recommendation = "needs_expert_review"
@@ -3790,7 +4463,6 @@ class RunCoordinator:
         ]
         return "\n".join(sections) + "\n"
 
-
     def _compose_change_intake(
         self,
         request: RunRequest,
@@ -3812,9 +4484,7 @@ class RunCoordinator:
             for item in (pack_input.get("known_constraints") or [])
             if str(item).strip()
         ]
-        underspecified = request_looks_underspecified(
-            request_text, pack_input=pack_input
-        )
+        underspecified = request_looks_underspecified(request_text, pack_input=pack_input)
         wants_clarification = role == ROLE_CLARIFICATION_REQUEST or (
             role != ROLE_CHANGE_BRIEF and underspecified
         )
@@ -3829,9 +4499,7 @@ class RunCoordinator:
             ]
             if constraints:
                 questions.append(
-                    "- Do the stated constraints still apply: "
-                    + "; ".join(constraints[:3])
-                    + "?"
+                    "- Do the stated constraints still apply: " + "; ".join(constraints[:3]) + "?"
                 )
             sections = [
                 f"# {name}",

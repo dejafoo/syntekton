@@ -65,7 +65,7 @@ def test_disallowed_capability_rejected() -> None:
     assert any(e.code == "capability_not_allowed" for e in result.errors)
 
 
-def test_reserved_schema_rejected() -> None:
+def test_pm5_schema_rejected_until_pack_declares_contract_validator() -> None:
     pack = resolve_workflow_pack("technical_plan")
     plan = PlannerOutput(
         objective="x",
@@ -75,7 +75,8 @@ def test_reserved_schema_rejected() -> None:
                 title="brief",
                 capability="architecture",
                 objective="x",
-                # PM4.0 un-reserves verification_report.v1; release_plan.v1 stays reserved.
+                # PM5 Phase 0 registers the schema, but technical_plan does not
+                # own its contract validator and must remain unable to emit it.
                 expected_output_schema="release_plan.v1",
                 required_tool_classes={"artifact_write"},
                 acceptance_criteria=[
@@ -93,4 +94,4 @@ def test_reserved_schema_rejected() -> None:
     )
     result = compile_plan(plan, workflow_pack=pack, require_baseline_validators=False)
     assert not result.ok
-    assert any(e.code == "reserved_output_schema" for e in result.errors)
+    assert any(e.code == "missing_output_validator" for e in result.errors)

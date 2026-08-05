@@ -39,8 +39,46 @@ _ALIASES: dict[str, str] = {
 }
 
 
+def _validate_pack(pack: WorkflowPack) -> None:
+    from product_factory.schemas import default_schema_registry
+
+    pack.execution_policy.validate(
+        pack_id=pack.id,
+        capabilities=pack.allowed_capabilities,
+    )
+    declared_roles = tuple(spec.role for spec in pack.artifacts)
+    if tuple(pack.execution_policy.output_roles) != declared_roles:
+        raise ConfigurationError(
+            f"Pack {pack.id!r} execution-policy roles do not match artifacts: "
+            f"{pack.execution_policy.output_roles!r} != {declared_roles!r}"
+        )
+    schemas = default_schema_registry()
+    unknown_handoffs = sorted(
+        schema_id
+        for schema_id in pack.execution_policy.accepted_handoff_schemas
+        if not schemas.known(schema_id)
+    )
+    if unknown_handoffs:
+        raise ConfigurationError(
+            f"Pack {pack.id!r} accepts unknown handoff schemas: {unknown_handoffs}"
+        )
+
+
+def register_workflow_pack(pack: WorkflowPack) -> None:
+    """Register a trusted data-only pack; duplicate ids fail closed."""
+
+    _validate_pack(pack)
+    if pack.id in _PACKS:
+        raise ConfigurationError(f"Workflow pack already registered: {pack.id!r}")
+    _PACKS[pack.id] = pack
+
+
 def canonical_workflow_id(workflow_type: str) -> str:
     return _ALIASES.get(workflow_type, workflow_type)
+
+
+def is_registered_workflow(workflow_type: str) -> bool:
+    return canonical_workflow_id(workflow_type) in _PACKS
 
 
 def resolve_workflow_pack(workflow_type: str) -> WorkflowPack:
@@ -48,6 +86,7 @@ def resolve_workflow_pack(workflow_type: str) -> WorkflowPack:
     pack = _PACKS.get(canonical)
     if pack is None:
         raise ConfigurationError(f"Unknown workflow pack: {workflow_type!r}")
+    _validate_pack(pack)
     return pack
 
 

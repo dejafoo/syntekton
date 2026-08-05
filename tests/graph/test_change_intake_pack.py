@@ -101,18 +101,12 @@ def test_well_scoped_defect_lands_change_brief(tmp_path: Path) -> None:
         )
     )
     assert manifest.final_status == "completed", manifest.notes
-    brief = (
-        tmp_path
-        / ".product-factory"
-        / "runs"
-        / manifest.run_id
-        / "output"
-        / "CHANGE_BRIEF.md"
-    )
+    brief = tmp_path / ".product-factory" / "runs" / manifest.run_id / "output" / "CHANGE_BRIEF.md"
     assert brief.exists()
-    assert validate_intake_sections(
-        brief.read_text(encoding="utf-8"), role=ROLE_CHANGE_BRIEF
-    ).status == "pass"
+    assert (
+        validate_intake_sections(brief.read_text(encoding="utf-8"), role=ROLE_CHANGE_BRIEF).status
+        == "pass"
+    )
 
 
 def test_intake_honors_renamed_brief(tmp_path: Path) -> None:

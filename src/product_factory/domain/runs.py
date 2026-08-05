@@ -22,6 +22,10 @@ WorkflowType = Literal[
     "feasibility_discovery",
     "change_intake",
     "technical_spike",
+    "release_readiness",
+    "incident_triage",
+    "service_health_review",
+    "deployment_execution",
 ]
 
 

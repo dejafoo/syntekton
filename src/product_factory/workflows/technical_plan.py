@@ -11,7 +11,7 @@ from product_factory.workflows.artifacts import (
     ROLE_ARCHITECTURE_DOCUMENT,
     ArtifactLandSpec,
 )
-from product_factory.workflows.base import WorkflowPack
+from product_factory.workflows.base import WorkflowPack, execution_policy
 
 TECHNICAL_PLAN_PACK = WorkflowPack(
     id="technical_plan",
@@ -71,6 +71,37 @@ TECHNICAL_PLAN_PACK = WorkflowPack(
         ],
     },
     routing_defaults={"coding_worker_tier": "mid"},
+    execution_policy=execution_policy(
+        capabilities=frozenset(
+            {
+                "requirements",
+                "architecture",
+                "composition",
+                "independent_review",
+                "documentation",
+                "interface_analysis",
+            }
+        ),
+        validators=[
+            "architecture_sections",
+            "architecture_substance",
+            "acceptance_verification_links",
+            "no_invented_defaults",
+            "secret_scan",
+        ],
+        output_roles=(ROLE_ARCHITECTURE_DOCUMENT,),
+        required_output_roles=frozenset({ROLE_ARCHITECTURE_DOCUMENT}),
+        fallback_composition_roles=frozenset({ROLE_ARCHITECTURE_DOCUMENT}),
+        accepted_handoff_schemas=frozenset(
+            {
+                "change_brief.v1",
+                "evidence_report.document.v1",
+                "evidence_report.document.v2",
+                "feasibility_dossier.v1",
+            }
+        ),
+        evaluation_fixture_id="technical_plan.v2",
+    ),
     artifacts=(
         ArtifactLandSpec(
             role=ROLE_ARCHITECTURE_DOCUMENT,

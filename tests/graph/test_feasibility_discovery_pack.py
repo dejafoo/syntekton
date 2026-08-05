@@ -131,9 +131,7 @@ def test_regulated_discovery_escalates(tmp_path: Path) -> None:
     ).read_text(encoding="utf-8")
     assert "needs_expert_review" in dossier.lower()
     assert "expert review:" in dossier.lower()
-    policy = resolve_source_policy(
-        "regulated-domain", profiles_root=coord.config.root / "profiles"
-    )
+    policy = resolve_source_policy("regulated-domain", profiles_root=coord.config.root / "profiles")
     assert validate_regulated_claims(dossier, policy=policy).status == "pass"
 
 
@@ -152,7 +150,9 @@ def test_existing_investigation_pack_still_works(tmp_path: Path) -> None:
         )
     )
     assert manifest.final_status == "completed"
-    assert (tmp_path / ".product-factory" / "runs" / manifest.run_id / "output" / "EVIDENCE_REPORT.md").exists()
+    assert (
+        tmp_path / ".product-factory" / "runs" / manifest.run_id / "output" / "EVIDENCE_REPORT.md"
+    ).exists()
 
 
 def test_host_submit_discovery_and_rejects_bad_input(tmp_path: Path) -> None:

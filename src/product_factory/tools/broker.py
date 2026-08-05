@@ -14,7 +14,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
-from product_factory.connectors.broker import ConnectorBroker
+from product_factory.connectors.broker import ConnectorAudit, ConnectorBroker
 from product_factory.connectors.source_ledger import (
     SEARCH_TOOL_NAMES,
     SourceLedger,
@@ -22,7 +22,10 @@ from product_factory.connectors.source_ledger import (
 )
 from product_factory.domain.errors import ToolAuthorizationError
 from product_factory.domain.tools import CapabilityGrant, ToolCallRecord
+from product_factory.observability.contracts import CaptureLevel
+from product_factory.observability.recorder import capture_level_from_env
 from product_factory.orchestration.budget_ledger import BudgetLedger
+from product_factory.persistence.artifact_policy import ArtifactInstance
 from product_factory.persistence.artifacts import ArtifactStore
 from product_factory.policy.source_policy import SourcePolicyProfile
 from product_factory.schemas import validate_write_payload
@@ -33,6 +36,7 @@ from product_factory.tools.sandbox import run_sandboxed_command
 from product_factory.validation.evidence import write_validation_evidence
 
 ToolObserver = Callable[[str, dict[str, Any]], None]
+ArtifactInstanceRecorder = Callable[[ArtifactInstance], None]
 
 
 class _DocumentTextParser(HTMLParser):
@@ -119,10 +123,14 @@ class ToolBroker:
         observer: ToolObserver | None = None,
         ledger: BudgetLedger | None = None,
         connectors: ConnectorBroker | None = None,
+        connector_audit: ConnectorAudit | None = None,
         source_ledger: SourceLedger | None = None,
         source_policy: SourcePolicyProfile | None = None,
+        connector_approval_verified: bool = False,
         run_id: str = "",
         validation_baselines: dict[str, str] | None = None,
+        capture_level: CaptureLevel | str | None = None,
+        on_artifact_instance: ArtifactInstanceRecorder | None = None,
     ) -> None:
         self.registry = registry
         self.artifact_store = artifact_store
@@ -136,12 +144,24 @@ class ToolBroker:
         self.observer = observer
         self.ledger = ledger
         self.connectors = connectors
+        self.connector_audit = connector_audit
         # Search results are what make a URL retrievable later (PM1.B1); with no
         # ledger bound, nothing is recorded and every gated fetch stays denied.
         self.source_ledger = source_ledger
         self.source_policy = source_policy
+        self.connector_approval_verified = connector_approval_verified
         self.run_id = run_id
         self.validation_baselines = validation_baselines or {}
+        if isinstance(capture_level, CaptureLevel):
+            self.capture_level = capture_level
+        elif capture_level is not None:
+            try:
+                self.capture_level = CaptureLevel(str(capture_level))
+            except ValueError:
+                self.capture_level = capture_level_from_env()
+        else:
+            self.capture_level = capture_level_from_env()
+        self.on_artifact_instance = on_artifact_instance
 
     def set_grant(self, grant: CapabilityGrant) -> None:
         self.grants[grant.task_id] = grant
@@ -507,7 +527,9 @@ class ToolBroker:
                     "media_type": media_type,
                     "source_sha256": source_sha256,
                 }
-            text = "\n\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(body)).pages)
+            text = "\n\n".join(
+                page.extract_text() or "" for page in PdfReader(io.BytesIO(body)).pages
+            )
         elif media_type == "text/html":
             parser = _DocumentTextParser(section=section)
             parser.feed(body.decode("utf-8", errors="replace"))
@@ -670,12 +692,18 @@ class ToolBroker:
             task_id=task_id,
             tool_call_id=tool_call_id,
             run_id=run_id,
-            invocation_options={"source_ledger": self.source_ledger},
+            invocation_options={
+                "source_ledger": self.source_ledger,
+                "_approval_binding_verified": self.connector_approval_verified,
+            },
+            audit=self.connector_audit,
         )
         handler_metadata = result.pop("_handler_metadata", {})
         if tool_name == "fetch_source":
             capture_data = handler_metadata.get("source_capture")
-            if not isinstance(capture_data, dict) or not isinstance(capture_data.get("body"), bytes):
+            if not isinstance(capture_data, dict) or not isinstance(
+                capture_data.get("body"), bytes
+            ):
                 raise ToolAuthorizationError("fetch_source returned no persistable source capture")
             body = capture_data["body"]
             # URL-policy media/size checks happened inside the connector. The
@@ -745,7 +773,7 @@ class ToolBroker:
         )
         source_refs = []
         source_records = []
-        for item in (() if tool_name == "fetch_source" else result.get("provenance") or []):
+        for item in () if tool_name == "fetch_source" else result.get("provenance") or []:
             if not isinstance(item, dict):
                 continue
             source = str(item.get("source") or "")
@@ -842,6 +870,9 @@ class ToolBroker:
             sandbox=result.sandbox,
             duration_seconds=result.duration_seconds,
             previous_evidence_ref=self.validation_baselines.get(command_id),
+            run_id=self.run_id,
+            capture_level=self.capture_level,
+            on_instance=self.on_artifact_instance,
         )
         return {
             "command_id": command_id,
