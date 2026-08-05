@@ -1,0 +1,12 @@
+{
+  "service_id": "checkout",
+  "environment": "production",
+  "start": "2026-01-01T00:00:00Z",
+  "end": "2026-01-01T01:00:00Z",
+  "incident_id": "INC-43",
+  "impact": "Impact is not yet established",
+  "evidence": [],
+  "hypotheses": [],
+  "unknown": true,
+  "follow_up": "human_escalation"
+}

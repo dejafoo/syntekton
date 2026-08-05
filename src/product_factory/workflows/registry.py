@@ -13,21 +13,27 @@ from product_factory.workflows.artifacts import (
 )
 from product_factory.workflows.base import WorkflowPack
 from product_factory.workflows.change_intake import CHANGE_INTAKE_PACK
+from product_factory.workflows.deployment_execution import DEPLOYMENT_EXECUTION_PACK
 from product_factory.workflows.feasibility_discovery import FEASIBILITY_DISCOVERY_PACK
+from product_factory.workflows.incident_triage import INCIDENT_TRIAGE_PACK
 from product_factory.workflows.quality_gate import QUALITY_GATE_PACK
 from product_factory.workflows.release_readiness import RELEASE_READINESS_PACK
 from product_factory.workflows.repository_change import REPOSITORY_CHANGE_PACK
 from product_factory.workflows.repository_investigation import REPOSITORY_INVESTIGATION_PACK
+from product_factory.workflows.service_health_review import SERVICE_HEALTH_REVIEW_PACK
 from product_factory.workflows.technical_plan import TECHNICAL_PLAN_PACK
 from product_factory.workflows.technical_spike import TECHNICAL_SPIKE_PACK
 
 _PACKS: dict[str, WorkflowPack] = {
     CHANGE_INTAKE_PACK.id: CHANGE_INTAKE_PACK,
+    DEPLOYMENT_EXECUTION_PACK.id: DEPLOYMENT_EXECUTION_PACK,
     FEASIBILITY_DISCOVERY_PACK.id: FEASIBILITY_DISCOVERY_PACK,
+    INCIDENT_TRIAGE_PACK.id: INCIDENT_TRIAGE_PACK,
     QUALITY_GATE_PACK.id: QUALITY_GATE_PACK,
     RELEASE_READINESS_PACK.id: RELEASE_READINESS_PACK,
     REPOSITORY_CHANGE_PACK.id: REPOSITORY_CHANGE_PACK,
     REPOSITORY_INVESTIGATION_PACK.id: REPOSITORY_INVESTIGATION_PACK,
+    SERVICE_HEALTH_REVIEW_PACK.id: SERVICE_HEALTH_REVIEW_PACK,
     TECHNICAL_PLAN_PACK.id: TECHNICAL_PLAN_PACK,
     TECHNICAL_SPIKE_PACK.id: TECHNICAL_SPIKE_PACK,
 }

@@ -1,0 +1,9 @@
+# Controlled deployment targets. Production is intentionally unsupported.
+targets:
+  - target_id: staging-local
+    environment: staging
+    adapter: in_process
+    enabled: true
+    health_checks:
+      - rollout
+      - error_rate
