@@ -24,6 +24,7 @@ from product_factory.observability.contracts import (
     TaskSummary,
     ToolCallView,
 )
+from product_factory.observability.operator import operator_next_action, policy_projection
 from product_factory.observability.recorder import capture_level_from_env
 from product_factory.observability.stuck import derive_liveness
 from product_factory.persistence.database import Database
@@ -123,6 +124,7 @@ class ObservabilityQueryService:
             liveness=derive_liveness(status=row["status"], last_progress_at=last_progress),
             active_operation=row.get("active_operation"),
             error_count=self.db.count_error_events(row["run_id"]),
+            next_action=operator_next_action(run_status=row["status"]),
         )
 
     def list_tasks(self, run_id: str) -> list[TaskSummary]:
@@ -130,11 +132,23 @@ class ObservabilityQueryService:
         dep_map: dict[str, list[str]] = {}
         for d in deps:
             dep_map.setdefault(d["task_id"], []).append(d["depends_on"])
+        run_row = self.db.get_run(run_id) or {}
+        run_status = str(run_row.get("status") or "")
+        validations = self.list_validations(run_id)
+        failed_validation_tasks = {
+            str(item.get("task_id"))
+            for item in validations
+            if isinstance(item.get("result"), dict)
+            and str(item["result"].get("status") or "").lower() in {"fail", "failed"}
+        }
         out: list[TaskSummary] = []
         for row in self.db.list_tasks(run_id):
             spec = _json_loads(row.get("spec_json"), {})
             result = _json_loads(row.get("result_json"), {})
             last = row.get("ended_at") or row.get("updated_at") or row.get("started_at")
+            raw_policy = _json_loads(row.get("effective_policy_json"), None)
+            policy = policy_projection(raw_policy if isinstance(raw_policy, dict) else None)
+            legacy_policy = policy is None
             out.append(
                 TaskSummary(
                     run_id=run_id,
@@ -143,7 +157,8 @@ class ObservabilityQueryService:
                     status=row["status"],
                     title=spec.get("title"),
                     dependencies=dep_map.get(row["task_id"], spec.get("dependencies") or []),
-                    model_profile=result.get("model_profile"),
+                    model_profile=result.get("model_profile")
+                    or (policy or {}).get("primary_model_profile"),
                     agent_profile=None,
                     started_at=row.get("started_at"),
                     ended_at=row.get("ended_at"),
@@ -152,6 +167,20 @@ class ObservabilityQueryService:
                     usage=result.get("usage") or {},
                     liveness=derive_liveness(status=row["status"], last_progress_at=last),
                     active_operation=row.get("active_operation"),
+                    effective_policy=policy,
+                    route_class=(policy or {}).get("route_class"),
+                    primary_model_profile=(policy or {}).get("primary_model_profile"),
+                    fallback_model_profile=(policy or {}).get("fallback_model_profile"),
+                    fallback_eligible=(policy or {}).get("fallback_eligible"),
+                    stack_profile_digest=(policy or {}).get("stack_profile_digest"),
+                    legacy_policy=legacy_policy,
+                    next_action=operator_next_action(
+                        run_status=run_status,
+                        task_status=row["status"],
+                        task_capability=row["capability"],
+                        approval_required=(policy or {}).get("approval_required"),
+                        has_validation_failures=row["task_id"] in failed_validation_tasks,
+                    ),
                 )
             )
         return out
@@ -199,6 +228,9 @@ class ObservabilityQueryService:
     def list_invocations(self, run_id: str) -> list[ModelInvocationView]:
         views: list[ModelInvocationView] = []
         for row in self.db.list_invocations(run_id):
+            routing = _json_loads(row.get("routing_json"), {})
+            if not isinstance(routing, dict):
+                routing = {}
             views.append(
                 ModelInvocationView(
                     request_id=row["request_id"],
@@ -215,6 +247,13 @@ class ObservabilityQueryService:
                     ended_at=row.get("ended_at"),
                     latency_ms=row.get("latency_ms"),
                     content_refs=_json_loads(row.get("content_refs_json"), []),
+                    route=routing.get("route"),
+                    primary_profile=routing.get("primary_profile"),
+                    fallback_profile=routing.get("fallback_profile"),
+                    fallback_reason=routing.get("fallback_reason"),
+                    cost_basis=routing.get("cost_basis"),
+                    cost_usd=routing.get("cost_usd"),
+                    routing=routing,
                 )
             )
         return views
@@ -257,6 +296,7 @@ class ObservabilityQueryService:
         if run_dir is None:
             return []
         task_ids = {t["task_id"] for t in self.db.list_tasks(run_id)}
+        instances = {str(item["sha256"]): item for item in self.db.list_artifact_instances(run_id)}
         views: list[ArtifactView] = []
         for a in self.db.list_artifacts():
             # Artifact rows predate a run_id column. The run-local blob is the
@@ -272,16 +312,24 @@ class ObservabilityQueryService:
                     "system",
                 }
             ):
+                instance = instances.get(str(a["sha256"]))
+                visibility = instance.get("visibility") if instance else "legacy_unknown"
                 views.append(
                     ArtifactView(
                         sha256=a["sha256"],
                         media_type=a["media_type"],
                         size_bytes=a["size_bytes"],
-                        logical_name=a["logical_name"],
+                        logical_name=((instance or {}).get("display_name") or a["logical_name"]),
                         relative_path=a.get("relative_path"),
                         created_by_task_id=a.get("created_by_task_id"),
                         trust_level=a.get("trust_level", "generated"),
                         metadata=_json_loads(a.get("metadata_json"), {}),
+                        content_class=(instance or {}).get("content_class"),
+                        visibility=str(visibility) if visibility else None,
+                        capture_level=(instance or {}).get("capture_level"),
+                        producer_role=(instance or {}).get("role"),
+                        producer_tool=(instance or {}).get("producer_tool"),
+                        legacy=instance is None or visibility == "legacy_unknown",
                     )
                 )
         # Also include filesystem prompts/artifacts under run dir when present
@@ -361,17 +409,26 @@ class ObservabilityQueryService:
             total[key] = str(total[key])
         by_task: dict[str, list[dict[str, Any]]] = defaultdict(list)
         by_model: dict[tuple[str | None, str | None, str], list[dict[str, Any]]] = defaultdict(list)
+        by_route: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for item in parsed:
             by_task[item["task_id"]].append(item["usage"])
             by_model[
                 (item.get("provider"), item.get("resolved_model_id"), item["model_profile"])
             ].append(item["usage"])
+            routing = _json_loads(item.get("routing_json"), {})
+            route = "unknown"
+            if isinstance(routing, dict) and routing.get("route"):
+                route = str(routing["route"])
+            by_route[route].append(item["usage"])
         task_rows = [self._cost_row({"task_id": key}, values) for key, values in by_task.items()]
         model_rows = [
             self._cost_row(
                 {"provider": key[0], "resolved_model_id": key[1], "model_profile": key[2]}, values
             )
             for key, values in by_model.items()
+        ]
+        route_rows = [
+            self._cost_row({"route": key}, values) for key, values in sorted(by_route.items())
         ]
         row = self.db.get_run(run_id) or {}
         ledger = _json_loads(row.get("budget_json"), {})
@@ -392,21 +449,85 @@ class ObservabilityQueryService:
             ledger=ledger if isinstance(ledger, dict) else {},
             by_task=task_rows,
             by_model=model_rows,
+            by_route=route_rows,
         )
 
     def artifact_content(self, run_id: str, sha256: str) -> ContentView | None:
         if not _SHA256.fullmatch(sha256):
             return None
-        artifact = next(
-            (item for item in self.list_artifacts_for_run(run_id) if item.sha256 == sha256), None
-        )
+        instance = self.db.get_artifact_instance(run_id, sha256)
+        if instance is None:
+            # Historical artifacts without an instance are not auto-exposed as full.
+            artifact = next(
+                (item for item in self.list_artifacts_for_run(run_id) if item.sha256 == sha256),
+                None,
+            )
+            if artifact is None:
+                return None
+            return ContentView(
+                sha256=sha256,
+                available=False,
+                capture_level=CaptureLevel.METADATA,
+                media_type=artifact.media_type,
+                byte_count=artifact.size_bytes,
+                reason="legacy_unknown",
+                visibility="legacy_unknown",
+                legacy=True,
+            )
+
+        from product_factory.persistence.artifact_policy import unavailability_reason
+
+        try:
+            level = CaptureLevel(str(instance.get("capture_level") or "full"))
+        except ValueError:
+            level = CaptureLevel.FULL
+        visibility = str(instance.get("visibility") or "legacy_unknown")
+        content_class = instance.get("content_class")
+        if visibility in {"unavailable", "metadata_only", "legacy_unknown"}:
+            return ContentView(
+                sha256=sha256,
+                available=False,
+                capture_level=level,
+                media_type=instance.get("media_type"),
+                byte_count=instance.get("size_bytes"),
+                reason=unavailability_reason(
+                    visibility,  # type: ignore[arg-type]
+                    capture_level=level,
+                ),
+                visibility=visibility,
+                content_class=content_class,
+                legacy=visibility == "legacy_unknown",
+            )
+
         run_dir = self._run_dir(run_id)
-        if artifact is None or run_dir is None:
+        if run_dir is None:
             return None
         path = run_dir / "artifacts" / "blobs" / sha256
         if not path.is_file():
-            return None
-        return self._content_view(sha256, path, media_type=artifact.media_type, capture_level=None)
+            return ContentView(
+                sha256=sha256,
+                available=False,
+                capture_level=level,
+                media_type=instance.get("media_type"),
+                byte_count=instance.get("size_bytes"),
+                reason="not_retained",
+                visibility=visibility,
+                content_class=content_class,
+            )
+        view = self._content_view(
+            sha256,
+            path,
+            media_type=instance.get("media_type"),
+            capture_level=level,
+            byte_count=instance.get("size_bytes"),
+        )
+        return view.model_copy(
+            update={
+                "redacted": visibility == "redacted",
+                "visibility": visibility,
+                "content_class": content_class,
+            }
+        )
 
     def content(self, run_id: str, sha256: str) -> ContentView | None:
         if not _SHA256.fullmatch(sha256):

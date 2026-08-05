@@ -19,4 +19,13 @@ describe("dashboard API compatibility helpers", () => {
     expect(projectionsForEvent("run.cancelled")).toEqual(expect.arrayContaining(["run", "tasks", "costs"]));
     expect(projectionsForEvent("host.future_event")).toEqual(expect.arrayContaining(["run", "plan", "prompts"]));
   });
+
+  it("invalidates task projections so policy/route fields refresh from durable state", () => {
+    expect(projectionsForEvent("task.started")).toEqual(
+      expect.arrayContaining(["run", "tasks", "lineage", "costs"]),
+    );
+    expect(projectionsForEvent("model.request.completed")).toEqual(
+      expect.arrayContaining(["run", "invocations", "costs"]),
+    );
+  });
 });

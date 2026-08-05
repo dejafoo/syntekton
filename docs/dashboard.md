@@ -2,6 +2,9 @@
 
 The dashboard is a bundled React single-page application served by `product-factory observe serve` at `/dashboard/`. It is deliberately local, single-user, and monitor-only. Use the CLI for approval, retry, cancellation, revision, model routing, and deployment actions.
 
+See [operator-guide.md](operator-guide.md) for backup/restore, legacy capture,
+local/cloud labels, and the blocked-task walkthrough.
+
 ## Start it
 
 ```bash
@@ -16,14 +19,16 @@ Open `http://127.0.0.1:8765/dashboard/`. The run list refreshes every two second
 ## Operator flow
 
 ```text
-Run list ── select run ──► Plan: DAG + kanban + repair lineage
-                           Execution: tasks, models, tools, validation
+Run list ── select run ──► Plan: DAG + kanban + repair lineage + policy/grants
+                           Execution: tasks, route/fallback invocations, tools
                            Timeline: cursor-ordered durable events
-                           Evidence: authorized artifacts, plan, lineage
-                           Costs: budget ledger and model/task totals
+                           Evidence: visibility-aware artifacts, plan, lineage
+                           Costs: budget ledger, by_route local vs cloud
 ```
 
-When a task is blocked, select it in **Plan** or **Execution**, inspect validator/tool evidence, then use the CLI action indicated by the run's normal workflow. The dashboard does not make that change for you.
+When a task is blocked, select it in **Plan** or **Execution**, inspect
+grants/route/validation evidence, then use the CLI action in the
+`next_action` banner. The dashboard does not make that change for you.
 
 ## Capture and local boundary
 

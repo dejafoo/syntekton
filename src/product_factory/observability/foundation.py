@@ -25,9 +25,7 @@ def collect_foundation_projections(run_dir: Path) -> dict[str, Any]:
             for skill_id, digest in (data.get("skill_digests") or {}).items():
                 skill_digests[str(skill_id)] = str(digest)
             if data.get("primary_skill_id") and data.get("primary_skill_digest"):
-                skill_digests[str(data["primary_skill_id"])] = str(
-                    data["primary_skill_digest"]
-                )
+                skill_digests[str(data["primary_skill_id"])] = str(data["primary_skill_digest"])
 
     if artifacts_root.is_dir():
         for path in sorted(artifacts_root.iterdir()):
@@ -55,9 +53,7 @@ def collect_foundation_projections(run_dir: Path) -> dict[str, Any]:
                 )
             if "classification" in data and isinstance(data["classification"], dict):
                 classification_decisions.append(data["classification"])
-            if data.get("outcome") in {"allow", "redact", "block"} and data.get(
-                "rule_version"
-            ):
+            if data.get("outcome") in {"allow", "redact", "block"} and data.get("rule_version"):
                 classification_decisions.append(data)
 
     # Deduplicate classification by JSON dump
