@@ -16,6 +16,7 @@ from product_factory.workflows.handlers.feasibility_discovery import (
     FeasibilityDiscoveryHandler,
 )
 from product_factory.workflows.handlers.quality_gate import QualityGateHandler
+from product_factory.workflows.handlers.release_readiness import ReleaseReadinessHandler
 from product_factory.workflows.handlers.repository_change import RepositoryChangeHandler
 from product_factory.workflows.handlers.repository_investigation import (
     RepositoryInvestigationHandler,
@@ -31,6 +32,7 @@ _HANDLERS: dict[str, PackHandler] = {
     ChangeIntakeHandler().pack_id: ChangeIntakeHandler(),
     FeasibilityDiscoveryHandler().pack_id: FeasibilityDiscoveryHandler(),
     QualityGateHandler().pack_id: QualityGateHandler(),
+    ReleaseReadinessHandler().pack_id: ReleaseReadinessHandler(),
     RepositoryChangeHandler().pack_id: RepositoryChangeHandler(),
     RepositoryInvestigationHandler().pack_id: RepositoryInvestigationHandler(),
     TechnicalPlanHandler().pack_id: TechnicalPlanHandler(),
@@ -75,7 +77,15 @@ def eligible_next_actions_for_workflow(
         handler = handler_for(workflow_type)
     except ConfigurationError:
         return []
-    return [action.as_payload() for action in handler.eligible_next_actions()]
+    actions = [action.as_payload() for action in handler.eligible_next_actions()]
+    if workflow_type == "release_readiness" and outcome == "ready":
+        actions.append(
+            EligibleNextAction(
+                pack_id="deployment_execution",
+                reason="Ready release plan is eligible for an approval-gated staging deployment",
+            ).as_payload()
+        )
+    return actions
 
 
 __all__ = [

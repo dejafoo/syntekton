@@ -68,9 +68,6 @@ class ConnectorBroker:
         self._semaphores: dict[str, threading.BoundedSemaphore] = {}
         self._lock = threading.Lock()
 
-    def set_audit(self, audit: ConnectorAudit | None) -> None:
-        self.audit = audit
-
     def handles(self, tool_name: str) -> bool:
         return self.registry.handles(tool_name)
 
@@ -112,6 +109,7 @@ class ConnectorBroker:
         tool_call_id: str,
         run_id: str = "",
         invocation_options: Mapping[str, Any] | None = None,
+        audit: ConnectorAudit | None = None,
     ) -> dict[str, Any]:
         decision_id = f"cd-{uuid.uuid4().hex[:12]}"
         args_hash = hashlib.sha256(
@@ -129,7 +127,7 @@ class ConnectorBroker:
         try:
             entry = self.registry.for_tool(tool_name)
         except ConnectorError as exc:
-            self._emit(EVENT_DENIED, {**base, **_error_payload(exc)})
+            self._emit(EVENT_DENIED, {**base, **_error_payload(exc)}, audit=audit)
             raise
 
         manifest = entry.manifest
@@ -148,7 +146,7 @@ class ConnectorBroker:
                 invocation_options=invocation_options,
             )
         except ConnectorError as exc:
-            self._emit(EVENT_DENIED, {**base, **_error_payload(exc)})
+            self._emit(EVENT_DENIED, {**base, **_error_payload(exc)}, audit=audit)
             raise
 
         try:
@@ -159,7 +157,11 @@ class ConnectorBroker:
                 **_error_payload(exc),
                 "duration_ms": _elapsed_ms(started),
             }
-            self._emit(EVENT_DENIED if exc.exit_code == 8 else EVENT_FAILED, payload)
+            self._emit(
+                EVENT_DENIED if exc.exit_code == 8 else EVENT_FAILED,
+                payload,
+                audit=audit,
+            )
             raise
 
         result = self._envelope(raw, manifest=manifest, tool_name=tool_name, invocation=invocation)
@@ -174,6 +176,7 @@ class ConnectorBroker:
                 "mock": invocation.mock,
                 "result_excerpt": self._retained_excerpt(manifest, result["result"]),
             },
+            audit=audit,
         )
         return result
 
@@ -215,14 +218,22 @@ class ConnectorBroker:
                 details={"permissions": sorted(manifest.permissions)},
             )
 
-        if self.config.requires_approval(manifest):
-            approved = self.approvals is not None and self.approvals(manifest, tool)
+        requires_approval = self.config.requires_approval(manifest) or tool.requires_approval
+        approved = False
+        if requires_approval:
+            approved = bool(
+                (invocation_options or {}).get("_approval_binding_verified")
+                or (self.approvals is not None and self.approvals(manifest, tool))
+            )
             if not approved:
                 raise ConnectorPolicyDenied(
                     f"Connector {connector_id!r} requires operator approval",
                     connector_id=connector_id,
                     tool_name=tool_name,
-                    details={"requires_approval": True},
+                    details={
+                        "requires_approval": True,
+                        "tool_requires_approval": tool.requires_approval,
+                    },
                 )
 
         settings = self.config.settings_for(connector_id)
@@ -234,6 +245,9 @@ class ConnectorBroker:
         # Run-scoped objects (for example SourceLedger) are supplied only by the
         # trusted ToolBroker and override static YAML options.
         options.update(invocation_options or {})
+        # This marker is derived exclusively from the trusted approval callback.
+        # Connector arguments cannot forge it.
+        options["_connector_approved"] = approved
         return ConnectorInvocation(
             connector_id=connector_id,
             tool_name=tool_name,
@@ -366,10 +380,17 @@ class ConnectorBroker:
         text = payload if isinstance(payload, str) else json.dumps(payload, default=str)
         return text[:2_000]
 
-    def _emit(self, event_type: str, payload: dict[str, Any]) -> None:
-        if self.audit is None:
+    def _emit(
+        self,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        audit: ConnectorAudit | None = None,
+    ) -> None:
+        sink = audit if audit is not None else self.audit
+        if sink is None:
             return
-        self.audit(event_type, payload)
+        sink(event_type, payload)
 
 
 def _elapsed_ms(started: float) -> int:

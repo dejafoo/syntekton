@@ -6,6 +6,7 @@ import json
 from typing import Any
 from unittest.mock import MagicMock
 
+from product_factory.domain.budgets import BudgetsConfig
 from product_factory.host.protocol import HOST_PROTOCOL, HostResponse, HostSubscription
 from product_factory.host_mcp.factory import resolve_mcp_config_root
 from product_factory.host_mcp.server import McpServer, _read_message, _write_message
@@ -16,12 +17,21 @@ def _ok(**kwargs: Any) -> HostResponse:
     return HostResponse.success(**kwargs)
 
 
+def _host_service_mock() -> MagicMock:
+    service = MagicMock()
+    service.config.policies.budgets = BudgetsConfig()
+    return service
+
+
 def test_tool_schemas_match_small_tool_set() -> None:
     names = [t["name"] for t in tool_schemas()]
     assert names == list(TOOL_NAMES)
     assert len(names) == 10
     assert "pf_materialize" in names
     assert "pf_materialize_all" in names
+    submit = next(tool for tool in tool_schemas() if tool["name"] == "pf_submit")
+    assert "technical_spike" in submit["inputSchema"]["properties"]["workflow"]["description"]
+    assert "release_readiness" in submit["inputSchema"]["properties"]["workflow"]["description"]
 
 
 def test_resolve_mcp_config_root_falls_back_to_package(tmp_path, monkeypatch) -> None:
@@ -50,7 +60,10 @@ def test_dispatch_unknown_tool() -> None:
 
 
 def test_pf_submit_builds_request_and_returns_host_response() -> None:
-    service = MagicMock()
+    service = _host_service_mock()
+    # pf_submit reads policy-backed run defaults. A bare MagicMock fabricates
+    # nested attributes and hides regressions in that contract, so use the same
+    # typed defaults as a real HostService config.
     service.submit.return_value = _ok(
         run_id="run-abc",
         status="queued",
@@ -77,6 +90,7 @@ def test_pf_submit_builds_request_and_returns_host_response() -> None:
     assert request.request_text.startswith("Investigate")
     assert request.validation_commands == ["unit"]
     assert float(request.budget.max_cost_usd) == 1.5
+    assert request.budget.max_parallel_tasks == BudgetsConfig().run.max_parallel_tasks
     kwargs = service.submit.call_args.kwargs
     assert kwargs["mock"] is True
     assert kwargs["detach"] is True
@@ -269,7 +283,7 @@ def test_pf_materialize_requires_args() -> None:
 
 
 def test_pf_submit_passes_artifact_overrides() -> None:
-    service = MagicMock()
+    service = _host_service_mock()
     service.submit.return_value = _ok(run_id="run-named", status="queued")
     payload = dispatch_tool(
         service,
@@ -289,7 +303,7 @@ def test_pf_submit_passes_artifact_overrides() -> None:
 
 
 def test_pf_submit_accepts_dest_path_shorthand() -> None:
-    service = MagicMock()
+    service = _host_service_mock()
     service.submit.return_value = _ok(run_id="run-named", status="queued")
     dispatch_tool(
         service,
