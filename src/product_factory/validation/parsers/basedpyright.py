@@ -38,9 +38,7 @@ def parse_basedpyright_output(
             NormalizedOutcome(
                 kind="diagnostic",
                 status=status,  # type: ignore[arg-type]
-                location=(
-                    f"{match.group('path')}:{match.group('line')}:{match.group('column')}"
-                ),
+                location=(f"{match.group('path')}:{match.group('line')}:{match.group('column')}"),
                 code=match.group("code"),
                 message=match.group("message").strip(),
             )

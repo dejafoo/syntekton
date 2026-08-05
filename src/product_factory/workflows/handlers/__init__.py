@@ -9,6 +9,7 @@ from product_factory.workflows.handlers.base import (
     ComposeContext,
     EligibleNextAction,
     PackHandler,
+    validate_handler_authority,
 )
 from product_factory.workflows.handlers.change_intake import ChangeIntakeHandler
 from product_factory.workflows.handlers.feasibility_discovery import (
@@ -21,7 +22,10 @@ from product_factory.workflows.handlers.repository_investigation import (
 )
 from product_factory.workflows.handlers.technical_plan import TechnicalPlanHandler
 from product_factory.workflows.handlers.technical_spike import TechnicalSpikeHandler
-from product_factory.workflows.registry import canonical_workflow_id
+from product_factory.workflows.registry import (
+    canonical_workflow_id,
+    resolve_workflow_pack,
+)
 
 _HANDLERS: dict[str, PackHandler] = {
     ChangeIntakeHandler().pack_id: ChangeIntakeHandler(),
@@ -34,15 +38,39 @@ _HANDLERS: dict[str, PackHandler] = {
 }
 
 
+def _validate_handler(handler: PackHandler, canonical: str) -> None:
+    pack = resolve_workflow_pack(canonical)
+    validate_handler_authority(
+        canonical,
+        handler.authority_class(),
+        approval_required=pack.execution_policy.approval_required,
+    )
+
+
+def register_pack_handler(handler: PackHandler) -> None:
+    """Register trusted runtime behavior for a canonical pack id."""
+
+    canonical = canonical_workflow_id(handler.pack_id)
+    _validate_handler(handler, canonical)
+    if canonical in _HANDLERS:
+        raise ConfigurationError(f"Pack handler already registered for {handler.pack_id!r}")
+    _HANDLERS[canonical] = handler
+
+
 def handler_for(pack_id: str) -> PackHandler:
     canonical = canonical_workflow_id(pack_id)
     handler = _HANDLERS.get(canonical)
     if handler is None:
         raise ConfigurationError(f"No pack handler registered for {pack_id!r}")
+    _validate_handler(handler, canonical)
     return handler
 
 
-def eligible_next_actions_for_workflow(workflow_type: str) -> list[dict[str, Any]]:
+def eligible_next_actions_for_workflow(
+    workflow_type: str,
+    *,
+    outcome: str | None = None,
+) -> list[dict[str, Any]]:
     try:
         handler = handler_for(workflow_type)
     except ConfigurationError:
@@ -56,4 +84,5 @@ __all__ = [
     "PackHandler",
     "eligible_next_actions_for_workflow",
     "handler_for",
+    "register_pack_handler",
 ]

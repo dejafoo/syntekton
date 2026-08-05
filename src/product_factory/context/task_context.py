@@ -20,6 +20,8 @@ class TaskContextManifest(BaseModel):
     specialization: str | None = None
     profile_digests: dict[str, str] = Field(default_factory=dict)
     tool_grant_set: list[str] = Field(default_factory=list)
+    prompt_tool_names: list[str] = Field(default_factory=list)
+    effective_policy: dict[str, Any] | None = None
     schema_expectations: dict[str, str] = Field(default_factory=dict)
     estimated_prompt_chars: int = 0
     max_prompt_chars: int | None = None
@@ -47,6 +49,8 @@ def build_task_context(
     profile_digests: dict[str, str] | None = None,
     specialization: str | None = None,
     policy_ceiling: int | None = None,
+    prompt_tool_names: list[str] | None = None,
+    effective_policy: dict[str, Any] | None = None,
 ) -> TaskContextManifest:
     budget = resolve_skill_budget(skills, policy_ceiling=policy_ceiling)
     estimated = skill_bundle_chars(skills)
@@ -61,6 +65,7 @@ def build_task_context(
         )
     primary = skills[0] if skills else None
     digests = {s.manifest.id: s.package_digest for s in skills}
+    prompt_names = list(prompt_tool_names) if prompt_tool_names is not None else list(tool_names)
     return TaskContextManifest(
         task_id=task_id,
         primary_skill_id=primary.manifest.id if primary else None,
@@ -69,6 +74,8 @@ def build_task_context(
         specialization=specialization,
         profile_digests=dict(profile_digests or {}),
         tool_grant_set=sorted(tool_names),
+        prompt_tool_names=sorted(prompt_names),
+        effective_policy=effective_policy,
         schema_expectations={"expected_output_schema": expected_output_schema},
         estimated_prompt_chars=estimated,
         max_prompt_chars=budget,

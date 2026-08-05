@@ -114,7 +114,9 @@ def run_budget_from_policy(
     **overrides: Any,
 ) -> RunBudget:
     """Build a RunBudget from policy defaults, with cost and optional overrides."""
-    run_defaults = budgets.run if isinstance(budgets, BudgetsConfig) else (budgets or RunBudgetDefaults())
+    run_defaults = (
+        budgets.run if isinstance(budgets, BudgetsConfig) else (budgets or RunBudgetDefaults())
+    )
     data = run_defaults.model_dump()
     data["max_cost_usd"] = parse_decimal(max_cost_usd)
     data.update({key: value for key, value in overrides.items() if value is not None})

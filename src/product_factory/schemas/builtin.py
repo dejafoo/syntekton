@@ -43,6 +43,11 @@ LEGACY_OUTPUT_SCHEMA_MAP: dict[str, str] = {
     "change_set.document.v1": "change_set.v1",
     "verification_report.document.v1": "verification_report.v1",
     "validation_evidence.document.v1": "validation_evidence.v1",
+    # PM5 release/operations outputs — document-style spellings remain accepted
+    # at planner boundaries while canonical ids stay compact.
+    "release_plan.document.v1": "release_plan.v1",
+    "deployment_record.document.v1": "deployment_record.v1",
+    "operational_record.document.v1": "operational_record.v1",
 }
 
 ROLE_TO_SCHEMA: dict[str, str] = {
@@ -59,6 +64,19 @@ ROLE_TO_SCHEMA: dict[str, str] = {
     "change_set": "change_set.v1",
     "verification_report": "verification_report.v1",
     "validation_evidence": "validation_evidence.v1",
+    "release_plan": "release_plan.v1",
+    "deployment_record": "deployment_record.v1",
+    "operational_record": "operational_record.v1",
+}
+
+# Typed PM5 outputs are registered for fixture and handoff validation in Phase
+# 0, but a workflow may not compile a writer until its pack declares the named
+# contract validator. Later phases satisfy these gates without coordinator
+# branches.
+OUTPUT_SCHEMA_VALIDATOR_IDS: dict[str, str] = {
+    "release_plan.v1": "release_plan_contract",
+    "deployment_record.v1": "deployment_record_contract",
+    "operational_record.v1": "operational_record_contract",
 }
 
 
@@ -440,7 +458,13 @@ def seed_builtin_schemas(registry: SchemaRegistry) -> None:
             kind="task_output",
             json_schema={
                 "type": "object",
-                "required": ["hypothesis", "method", "measurements", "limits"],
+                "required": [
+                    "hypothesis",
+                    "method",
+                    "measurements",
+                    "limits",
+                    "artifact_refs",
+                ],
                 "properties": {
                     "schema_id": {"const": "spike_result.v1"},
                     "hypothesis": {"type": "string", "minLength": 1},
@@ -457,6 +481,14 @@ def seed_builtin_schemas(registry: SchemaRegistry) -> None:
                         "minItems": 1,
                     },
                     "findings": {"type": "array"},
+                    "artifact_refs": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["role", "sha256", "schema_id"],
+                        },
+                        "minItems": 3,
+                    },
                 },
                 "additionalProperties": True,
             },
@@ -467,17 +499,305 @@ def seed_builtin_schemas(registry: SchemaRegistry) -> None:
         )
     )
 
-    for schema_id in (
-        "release_plan.v1",
-        "deployment_record.v1",
-        "operational_record.v1",
+    for schema_id, description in (
+        ("contract_inventory.v1", "Typed interface contract inventory"),
+        ("contract_compatibility.v1", "Typed contract compatibility comparison"),
+        ("contract_simulation.v1", "Synthetic fixture simulation evidence"),
     ):
         registry.register(
             SchemaSpec(
                 id=schema_id,
                 version="1",
-                kind="reserved",
-                reserved=True,
-                description=f"Reserved for later phase: {schema_id}",
+                kind="tool_receipt",
+                json_schema={
+                    "type": "object",
+                    "required": ["schema_id", "role", "result"],
+                    "properties": {
+                        "schema_id": {"const": schema_id},
+                        "role": {"type": "string"},
+                        "result": {"type": "object"},
+                    },
+                    "additionalProperties": False,
+                },
+                description=description,
             )
         )
+
+    registry.register(
+        SchemaSpec(
+            id="effective_task_policy.v1",
+            version="1",
+            kind="profile",
+            json_schema={
+                "type": "object",
+                "required": [
+                    "schema_version",
+                    "task_id",
+                    "run_id",
+                    "capability",
+                    "allowed_tool_names",
+                    "prompt_tool_names",
+                    "primary_model_profile",
+                ],
+                "properties": {
+                    "schema_version": {"const": "effective_task_policy.v1"},
+                    "task_id": {"type": "string", "minLength": 1},
+                    "run_id": {"type": "string", "minLength": 1},
+                    "pack_id": {"type": ["string", "null"]},
+                    "pack_version": {"type": ["string", "null"]},
+                    "capability": {"type": "string", "minLength": 1},
+                    "executor_mode": {"type": "string"},
+                    "allowed_tool_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "allowed_tool_classes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "connector_decisions": {"type": "object"},
+                    "path_scopes": {"type": "object"},
+                    "call_limits": {"type": "object"},
+                    "result_limits": {"type": "object"},
+                    "data_classification": {"type": "string"},
+                    "prompt_tool_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "prompt_reduction_reason": {"type": ["string", "null"]},
+                    "skill_ids": {"type": "array", "items": {"type": "string"}},
+                    "profile_ids": {"type": "array", "items": {"type": "string"}},
+                    "reference_pack_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "stack_profile_artifact_sha256": {"type": ["string", "null"]},
+                    "stack_profile_digest": {"type": ["string", "null"]},
+                    "stack_profile_schema_version": {"type": ["string", "null"]},
+                    "route_class": {"type": "string"},
+                    "primary_model_profile": {"type": "string", "minLength": 1},
+                    "fallback_model_profile": {"type": ["string", "null"]},
+                    "fallback_eligible": {"type": "boolean"},
+                    "budget_ceiling": {"type": "object"},
+                    "validator_ids": {"type": "array", "items": {"type": "string"}},
+                    "repair_eligible": {"type": "boolean"},
+                    "approval_required": {"type": "boolean"},
+                },
+                "additionalProperties": False,
+            },
+            description=(
+                "Immutable effective task policy resolved before context assembly (ADR-007 / RF2)"
+            ),
+        )
+    )
+    registry.register(
+        SchemaSpec(
+            id="local_route_admission.v1",
+            version="1",
+            kind="profile",
+            json_schema={
+                "type": "object",
+                "required": ["schema_version", "profile", "model", "report"],
+                "properties": {
+                    "schema_version": {
+                        "type": "string",
+                        "const": "local_route_admission.v1",
+                    },
+                    "profile": {"type": "string", "minLength": 1},
+                    "model": {"type": "string"},
+                    "route_class": {"type": "string"},
+                    "breaker": {"type": "object"},
+                    "report": {"type": "object"},
+                    "admission": {"type": ["object", "null"]},
+                    "fallback": {"type": "object"},
+                },
+                "additionalProperties": True,
+            },
+            description="Measured local-route probe and admission evidence (RF5)",
+        )
+    )
+
+    registry.register(
+        SchemaSpec(
+            id="release_plan.v1",
+            version="1",
+            kind="task_output",
+            json_schema={
+                "type": "object",
+                "required": [
+                    "outcome",
+                    "input_digests",
+                    "version",
+                    "change_notes",
+                    "compatibility_impact",
+                    "migration_preconditions",
+                    "rollout_phases",
+                    "monitors",
+                    "rollback_criteria",
+                    "required_approvals",
+                ],
+                "properties": {
+                    "schema_id": {"const": "release_plan.v1"},
+                    "outcome": {
+                        "type": "string",
+                        "enum": ["ready", "blocked", "needs_decision"],
+                    },
+                    "input_digests": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$",
+                        },
+                    },
+                    "version": {"type": "string", "minLength": 1},
+                    "change_notes": {"type": "array", "items": {"type": "string"}},
+                    "compatibility_impact": {"type": "array", "items": {"type": "string"}},
+                    "migration_preconditions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "rollout_phases": {"type": "array", "items": {"type": "object"}},
+                    "monitors": {"type": "array", "items": {"type": "object"}},
+                    "rollback_criteria": {"type": "array", "items": {"type": "object"}},
+                    "required_approvals": {"type": "array", "items": {"type": "string"}},
+                },
+                "additionalProperties": True,
+            },
+            description=(
+                "Pinned release decision with rollout, monitoring, rollback, "
+                "migration, and approval evidence"
+            ),
+        )
+    )
+    registry.register(
+        SchemaSpec(
+            id="deployment_record.v1",
+            version="1",
+            kind="task_output",
+            json_schema={
+                "type": "object",
+                "required": [
+                    "release_plan_digest",
+                    "artifact_digest",
+                    "target_id",
+                    "environment",
+                    "outcome",
+                    "action_log",
+                    "health_checks",
+                    "observed_metrics",
+                    "policy_decisions",
+                    "rollback_result",
+                ],
+                "properties": {
+                    "schema_id": {"const": "deployment_record.v1"},
+                    "release_plan_digest": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$",
+                    },
+                    "artifact_digest": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$",
+                    },
+                    "target_id": {"type": "string", "minLength": 1},
+                    "environment": {"type": "string", "minLength": 1},
+                    "outcome": {
+                        "type": "string",
+                        "enum": ["succeeded", "failed", "halted", "rolled_back", "unknown"],
+                    },
+                    "action_log": {"type": "array", "items": {"type": "object"}},
+                    "health_checks": {"type": "array", "items": {"type": "object"}},
+                    "observed_metrics": {"type": "array", "items": {"type": "object"}},
+                    "policy_decisions": {"type": "array", "items": {"type": "object"}},
+                    "rollback_result": {"type": ["object", "null"]},
+                },
+                "additionalProperties": True,
+            },
+            description=(
+                "Durable deployment receipt binding an approved release and immutable "
+                "artifact to target actions, health evidence, and rollback outcome"
+            ),
+        )
+    )
+    registry.register(
+        SchemaSpec(
+            id="operational_record.v1",
+            version="1",
+            kind="task_output",
+            json_schema={
+                "type": "object",
+                "required": [
+                    "record_type",
+                    "service_id",
+                    "environment",
+                    "time_window",
+                    "impact",
+                    "timeline",
+                    "evidence",
+                    "hypotheses",
+                    "recommendations",
+                    "follow_up",
+                    "follow_up_action",
+                    "authority",
+                ],
+                "properties": {
+                    "schema_id": {"const": "operational_record.v1"},
+                    "record_type": {
+                        "type": "string",
+                        "enum": ["incident_triage", "service_health_review"],
+                    },
+                    "service_id": {"type": "string", "minLength": 1},
+                    "environment": {"type": "string", "minLength": 1},
+                    "time_window": {"type": "object"},
+                    "impact": {"type": "object"},
+                    "timeline": {"type": "array", "items": {"type": "object"}},
+                    "evidence": {"type": "array", "items": {"type": "object"}},
+                    "hypotheses": {"type": "array", "items": {"type": "object"}},
+                    "recommendations": {"type": "array", "items": {"type": "string"}},
+                    "follow_up": {
+                        "type": "string",
+                        "enum": [
+                            "change_intake",
+                            "repository_investigation",
+                            "rollback_decision",
+                            "human_escalation",
+                            "none",
+                        ],
+                    },
+                    "follow_up_action": {
+                        "type": "object",
+                        "required": ["type", "reason", "requires_human"],
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": [
+                                    "change_intake",
+                                    "repository_investigation",
+                                    "rollback_decision",
+                                    "human_escalation",
+                                    "none",
+                                ],
+                            },
+                            "reason": {"type": "string", "minLength": 1},
+                            "requires_human": {"type": "boolean"},
+                        },
+                        "additionalProperties": False,
+                    },
+                    "authority": {
+                        "type": "object",
+                        "properties": {
+                            "class": {"const": "external_read"},
+                            "deploy": {"const": False},
+                            "restart": {"const": False},
+                            "traffic_mutation": {"const": False},
+                        },
+                        "additionalProperties": False,
+                    },
+                },
+                "additionalProperties": True,
+            },
+            description=(
+                "Bounded operational analysis separating observed evidence from "
+                "hypotheses and naming an explicit follow-up"
+            ),
+        )
+    )

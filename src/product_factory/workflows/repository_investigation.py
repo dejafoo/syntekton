@@ -8,7 +8,7 @@ the report itself.
 from __future__ import annotations
 
 from product_factory.workflows.artifacts import ROLE_EVIDENCE_REPORT, ArtifactLandSpec
-from product_factory.workflows.base import WorkflowPack
+from product_factory.workflows.base import WorkflowPack, execution_policy
 
 REPOSITORY_INVESTIGATION_PACK = WorkflowPack(
     id="repository_investigation",
@@ -59,6 +59,28 @@ REPOSITORY_INVESTIGATION_PACK = WorkflowPack(
     },
     skill_policy={"grant_enforcement": "fail_closed"},
     routing_defaults={"coding_worker_tier": "mid"},
+    execution_policy=execution_policy(
+        capabilities=frozenset(
+            {
+                "repository_analysis",
+                "independent_review",
+                "documentation",
+                "composition",
+            }
+        ),
+        validators=[
+            "investigation_sections",
+            "investigation_provenance",
+            "secret_scan",
+            "citation_presence",
+        ],
+        output_roles=(ROLE_EVIDENCE_REPORT,),
+        denied_tool_names=frozenset({"create_file", "apply_patch", "run_validation_command"}),
+        required_output_roles=frozenset({ROLE_EVIDENCE_REPORT}),
+        fallback_composition_roles=frozenset({ROLE_EVIDENCE_REPORT}),
+        accepted_handoff_schemas=frozenset({"change_brief.v1", "feasibility_dossier.v1"}),
+        evaluation_fixture_id="repository_investigation.v2",
+    ),
     artifacts=(
         ArtifactLandSpec(
             role=ROLE_EVIDENCE_REPORT,

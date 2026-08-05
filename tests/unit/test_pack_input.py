@@ -17,6 +17,7 @@ from product_factory.workflows import (
     validate_pack_input,
     validate_request_pack_input,
 )
+from product_factory.workflows.base import execution_policy
 
 TYPED_PACK = WorkflowPack(
     id="typed_pack",
@@ -40,6 +41,11 @@ TYPED_PACK = WorkflowPack(
     validation_policy={},
     skill_policy={},
     routing_defaults={},
+    execution_policy=execution_policy(
+        capabilities=frozenset({"documentation"}),
+        validators=[],
+        output_roles=(),
+    ),
 )
 
 VALID_PAYLOAD = {

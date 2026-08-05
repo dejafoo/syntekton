@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from product_factory.workflows.artifacts import ROLE_SPIKE_RESULT, ArtifactLandSpec
-from product_factory.workflows.base import WorkflowPack
+from product_factory.workflows.base import WorkflowPack, execution_policy
 
 TECHNICAL_SPIKE_PACK = WorkflowPack(
     id="technical_spike",
@@ -46,6 +46,23 @@ TECHNICAL_SPIKE_PACK = WorkflowPack(
         ],
     },
     routing_defaults={"coding_worker_tier": "mid"},
+    execution_policy=execution_policy(
+        capabilities=frozenset({"interface_analysis"}),
+        validators=["spike_result_schema", "secret_scan"],
+        output_roles=(ROLE_SPIKE_RESULT,),
+        denied_tool_names=frozenset(
+            {
+                "create_file",
+                "apply_patch",
+                "run_validation_command",
+                "web_search",
+                "fetch_source",
+            }
+        ),
+        required_output_roles=frozenset({ROLE_SPIKE_RESULT}),
+        fallback_composition_roles=frozenset({ROLE_SPIKE_RESULT}),
+        evaluation_fixture_id="technical_spike.v1",
+    ),
     artifacts=(
         ArtifactLandSpec(
             role=ROLE_SPIKE_RESULT,

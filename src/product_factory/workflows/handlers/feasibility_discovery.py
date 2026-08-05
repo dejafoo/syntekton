@@ -23,9 +23,7 @@ class FeasibilityDiscoveryHandler:
         if role != ROLE_FEASIBILITY_DOSSIER:
             raise RuntimeError(f"feasibility_discovery does not compose role {role!r}")
         if not callable(ctx.compose_feasibility_dossier):
-            raise RuntimeError(
-                "feasibility_discovery compose requires compose_feasibility_dossier"
-            )
+            raise RuntimeError("feasibility_discovery compose requires compose_feasibility_dossier")
         return str(
             ctx.compose_feasibility_dossier(
                 ctx.request,

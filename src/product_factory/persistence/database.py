@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     attempt INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT,
     active_operation TEXT,
+    effective_policy_json TEXT,
     PRIMARY KEY (run_id, task_id),
     FOREIGN KEY (run_id) REFERENCES runs(run_id)
 );
@@ -90,6 +91,7 @@ CREATE TABLE IF NOT EXISTS model_invocations (
     ended_at TEXT,
     latency_ms INTEGER,
     content_refs_json TEXT NOT NULL DEFAULT '[]',
+    routing_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL
 );
 
@@ -115,6 +117,35 @@ CREATE TABLE IF NOT EXISTS artifacts (
     trust_level TEXT NOT NULL,
     metadata_json TEXT NOT NULL DEFAULT '{}'
 );
+
+CREATE TABLE IF NOT EXISTS artifact_instances (
+    instance_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT '',
+    content_class TEXT,
+    producer_task_id TEXT,
+    producer_tool TEXT,
+    producer_validator TEXT,
+    event_seq INTEGER,
+    media_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+    schema_id TEXT,
+    schema_version TEXT,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    display_name TEXT NOT NULL DEFAULT '',
+    classification TEXT NOT NULL DEFAULT 'mixed',
+    capture_level TEXT NOT NULL DEFAULT 'full',
+    visibility TEXT NOT NULL DEFAULT 'available',
+    retention TEXT NOT NULL DEFAULT 'run',
+    truncated INTEGER NOT NULL DEFAULT 0,
+    parent_instance_ids_json TEXT NOT NULL DEFAULT '[]',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES runs(run_id)
+);
+
+CREATE INDEX IF NOT EXISTS artifact_instances_run_sha
+ON artifact_instances(run_id, sha256);
 
 CREATE TABLE IF NOT EXISTS findings (
     finding_id TEXT PRIMARY KEY,
@@ -208,9 +239,11 @@ def migrate(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "model_invocations", "ended_at", "TEXT")
     _ensure_column(conn, "model_invocations", "latency_ms", "INTEGER")
     _ensure_column(conn, "model_invocations", "content_refs_json", "TEXT NOT NULL DEFAULT '[]'")
+    _ensure_column(conn, "model_invocations", "routing_json", "TEXT NOT NULL DEFAULT '{}'")
     _ensure_column(conn, "tool_calls", "status", "TEXT NOT NULL DEFAULT 'completed'")
     _ensure_column(conn, "tool_calls", "started_at", "TEXT")
     _ensure_column(conn, "tool_calls", "ended_at", "TEXT")
+    _ensure_column(conn, "tasks", "effective_policy_json", "TEXT")
     conn.commit()
 
 
@@ -516,9 +549,7 @@ class Database:
         ).fetchone()
         return WorkerLease.model_validate(dict(row)) if row else None
 
-    def list_expired_worker_leases(
-        self, *, now: datetime | None = None
-    ) -> list[WorkerLease]:
+    def list_expired_worker_leases(self, *, now: datetime | None = None) -> list[WorkerLease]:
         expires_before = (now or datetime.now(UTC)).isoformat()
         rows = self.conn.execute(
             """
@@ -559,12 +590,18 @@ class Database:
         ended_at: str | None = None,
         attempt: int | None = None,
         active_operation: str | None = None,
+        effective_policy: dict[str, Any] | None = None,
     ) -> None:
         now = datetime.now(UTC).isoformat()
         existing = self.conn.execute(
-            "SELECT attempt, started_at FROM tasks WHERE run_id=? AND task_id=?",
+            "SELECT attempt, started_at, effective_policy_json FROM tasks WHERE run_id=? AND task_id=?",
             (run_id, task_id),
         ).fetchone()
+        policy_json = (
+            json.dumps(effective_policy, default=str)
+            if effective_policy is not None
+            else (existing["effective_policy_json"] if existing else None)
+        )
         if existing:
             next_attempt = attempt if attempt is not None else int(existing["attempt"] or 1)
             self.conn.execute(
@@ -574,7 +611,8 @@ class Database:
                   ended_at=COALESCE(?, ended_at),
                   attempt=?,
                   updated_at=?,
-                  active_operation=?
+                  active_operation=?,
+                  effective_policy_json=COALESCE(?, effective_policy_json)
                 WHERE run_id=? AND task_id=?
                 """,
                 (
@@ -587,6 +625,7 @@ class Database:
                     next_attempt,
                     now,
                     active_operation,
+                    policy_json,
                     run_id,
                     task_id,
                 ),
@@ -596,8 +635,9 @@ class Database:
                 """
                 INSERT INTO tasks
                 (run_id, task_id, capability, status, spec_json, result_json,
-                 started_at, ended_at, attempt, updated_at, active_operation)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 started_at, ended_at, attempt, updated_at, active_operation,
+                 effective_policy_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -611,6 +651,7 @@ class Database:
                     attempt or 1,
                     now,
                     active_operation,
+                    policy_json,
                 ),
             )
         for dep in spec.get("dependencies") or []:
@@ -641,6 +682,7 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    @_synchronized
     def get_task(self, run_id: str, task_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(
             "SELECT * FROM tasks WHERE run_id = ? AND task_id = ?", (run_id, task_id)
@@ -671,6 +713,7 @@ class Database:
         ended_at: str | None = None,
         latency_ms: int | None = None,
         content_refs: list[dict[str, Any]] | None = None,
+        routing: dict[str, Any] | None = None,
     ) -> None:
         now = datetime.now(UTC).isoformat()
         self.conn.execute(
@@ -679,8 +722,8 @@ class Database:
             (request_id, run_id, task_id, model_profile, status,
              usage_json, response_hash, provider, resolved_model_id,
              prompt_package_hash, started_at, ended_at, latency_ms,
-             content_refs_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             content_refs_json, routing_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 request_id,
@@ -697,6 +740,7 @@ class Database:
                 ended_at or now,
                 latency_ms,
                 json.dumps(content_refs or []),
+                json.dumps(routing or {}, default=str),
                 now,
             ),
         )
@@ -788,6 +832,67 @@ class Database:
     def get_artifact(self, sha256: str) -> dict[str, Any] | None:
         row = self.conn.execute("SELECT * FROM artifacts WHERE sha256 = ?", (sha256,)).fetchone()
         return dict(row) if row else None
+
+    @_synchronized
+    def record_artifact_instance(self, instance: dict[str, Any]) -> None:
+        now = datetime.now(UTC).isoformat()
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO artifact_instances
+            (instance_id, run_id, sha256, role, content_class, producer_task_id,
+             producer_tool, producer_validator, event_seq, media_type, schema_id,
+             schema_version, size_bytes, display_name, classification, capture_level,
+             visibility, retention, truncated, parent_instance_ids_json,
+             metadata_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                instance["instance_id"],
+                instance["run_id"],
+                instance["sha256"],
+                instance.get("role", ""),
+                instance.get("content_class"),
+                instance.get("producer_task_id"),
+                instance.get("producer_tool"),
+                instance.get("producer_validator"),
+                instance.get("event_seq"),
+                instance.get("media_type", "application/octet-stream"),
+                instance.get("schema_id"),
+                instance.get("schema_version"),
+                int(instance.get("size_bytes") or 0),
+                instance.get("display_name", ""),
+                instance.get("classification", "mixed"),
+                instance.get("capture_level", "full"),
+                instance.get("visibility", "available"),
+                instance.get("retention", "run"),
+                1 if instance.get("truncated") else 0,
+                json.dumps(instance.get("parent_instance_ids") or []),
+                json.dumps(instance.get("metadata") or {}, default=str),
+                now,
+            ),
+        )
+        self.conn.commit()
+
+    @_synchronized
+    def get_artifact_instance(self, run_id: str, sha256: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT * FROM artifact_instances
+            WHERE run_id = ? AND sha256 = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (run_id, sha256),
+        ).fetchone()
+        return dict(row) if row else None
+
+    @_synchronized
+    def list_artifact_instances(self, run_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM artifact_instances WHERE run_id = ? ORDER BY created_at",
+            (run_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     @_synchronized
     def record_validator_results(

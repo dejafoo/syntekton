@@ -612,34 +612,34 @@ tests, or a documented opt-in local-model evaluation as appropriate.
 
 ### Required technical outcomes
 
-- [ ] Concurrent runs have isolated model telemetry, tool receipts, event
+- [x] Concurrent runs have isolated model telemetry, tool receipts, event
       attribution, workspace leases, and budget ledgers.
-- [ ] Resume reconstructs run-scoped execution context deterministically.
-- [ ] Every task has a persisted effective policy; advertised tools, broker
+- [x] Resume reconstructs run-scoped execution context deterministically.
+- [x] Every task has a persisted effective policy; advertised tools, broker
       grants, and dashboard data agree.
-- [ ] The model receives a pinned, bounded stack-profile resource where one is
+- [x] The model receives a pinned, bounded stack-profile resource where one is
       applicable, and resume preserves it.
-- [ ] Every artifact/content reference is run-authorized, classified, and
+- [x] Every artifact/content reference is run-authorized, classified, and
       capture-policy controlled.
-- [ ] Interface analysis/technical spike performs and cites its declared tools
+- [x] Interface analysis/technical spike performs and cites its declared tools
       and typed evidence artifacts.
-- [ ] Existing packs execute through registered generic dispatch with no new
+- [x] Existing packs execute through registered generic dispatch with no new
       workflow-name branches on the current path.
-- [ ] At least one actual local OpenAI-compatible model route has measured
+- [x] At least one actual local OpenAI-compatible model route has measured
       admission evidence and an explicit named cloud fallback.
-- [ ] Dashboard/API can explain effective policy, evidence availability, and
+- [x] Dashboard/API can explain effective policy, evidence availability, and
       actual model route for current and legacy runs.
-- [ ] Data migration, package installation, restart, and dashboard smoke tests
+- [x] Data migration, package installation, restart, and dashboard smoke tests
       pass from a representative existing `.product-factory` directory.
 
 ### Required operator outcomes
 
-- [ ] An operator guide explains legacy-data behavior, capture availability,
+- [x] An operator guide explains legacy-data behavior, capture availability,
       local/cloud route labels, restart/recovery, and known local-model limits.
-- [ ] A usability walkthrough can identify a blocked task, its actual grant,
+- [x] A usability walkthrough can identify a blocked task, its actual grant,
       validation/source evidence availability, repair lineage, cost route, and
       the host/CLI action needed to continue.
-- [ ] The implementation tracker’s PM4 status accurately reflects verified
+- [x] The implementation tracker’s PM4 status accurately reflects verified
       completion; PM5 remains unstarted until this gate passes.
 
 ---

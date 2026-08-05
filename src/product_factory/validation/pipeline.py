@@ -1064,6 +1064,149 @@ def validate_verification_report(document: str) -> ValidatorResult:
     return contract
 
 
+def validate_release_plan(document: str) -> ValidatorResult:
+    """Validate the PM5.A outcome and evidence-binding invariants."""
+    contract = validate_json_contract(
+        document,
+        schema_id="release_plan.v1",
+        validator_id="release_plan_contract",
+    )
+    if contract.status != "pass":
+        return contract
+    payload = json.loads(document)
+    errors: list[str] = []
+    outcome = str(payload.get("outcome") or "")
+    if outcome not in {"ready", "blocked", "needs_decision"}:
+        errors.append(f"invalid outcome: {outcome!r}")
+    digests = payload.get("input_digests") or {}
+    if not isinstance(digests, dict) or not digests:
+        errors.append("input_digests must be a non-empty object")
+        digest_keys: set[str] = set()
+    else:
+        digest_keys = {str(key) for key in digests}
+        invalid_digests = [
+            str(key)
+            for key, value in digests.items()
+            if re.fullmatch(r"[0-9a-f]{64}", str(value)) is None
+        ]
+        if invalid_digests:
+            errors.append(f"invalid input digests: {sorted(invalid_digests)}")
+    verification = payload.get("verification_evidence") or payload.get("evidence_refs") or []
+    migration = payload.get("migration_preconditions") or []
+    rollback = payload.get("rollback_criteria") or []
+    decisions = payload.get("unresolved_decisions") or []
+    if outcome == "ready":
+        if not verification:
+            errors.append("ready requires verification evidence")
+        if not migration:
+            errors.append("ready requires migration evidence or explicit not-required precondition")
+        if not rollback:
+            errors.append("ready requires rollback criteria")
+        if decisions:
+            errors.append("ready cannot contain unresolved decisions")
+    if outcome == "needs_decision" and not decisions:
+        errors.append("needs_decision requires unresolved_decisions")
+    for index, claim in enumerate(payload.get("claims") or []):
+        refs = set(str(item) for item in (claim.get("input_digest_refs") or []))
+        if not refs or not refs <= digest_keys:
+            errors.append(f"claim {index} does not pin known input digests")
+    if not payload.get("claims"):
+        errors.append("release claims must pin input digests")
+    if errors:
+        return ValidatorResult(
+            validator_id="release_plan_contract",
+            status="fail",
+            message="ReleasePlan readiness contract is inconsistent",
+            details={"errors": errors},
+        )
+    return contract
+
+
+def validate_operational_record(document: str) -> ValidatorResult:
+    """Validate PM5.D evidence labels, follow-up typing, and read-only authority."""
+    contract = validate_json_contract(
+        document,
+        schema_id="operational_record.v1",
+        validator_id="operational_record_contract",
+    )
+    if contract.status != "pass":
+        return contract
+    payload = json.loads(document)
+    errors: list[str] = []
+    evidence = payload.get("evidence") or []
+    hypotheses = payload.get("hypotheses") or []
+    timeline = payload.get("timeline") or []
+    if any(item.get("label") != "observation" for item in evidence if isinstance(item, dict)):
+        errors.append("every evidence item must be labeled observation")
+    if any(item.get("label") != "inference" for item in hypotheses if isinstance(item, dict)):
+        errors.append("every hypothesis must be labeled inference")
+    if any(item.get("label") != "observation" for item in timeline if isinstance(item, dict)):
+        errors.append("every timeline item must be labeled observation")
+
+    follow_up = str(payload.get("follow_up") or "")
+    action = payload.get("follow_up_action") or {}
+    if action.get("type") != follow_up:
+        errors.append("follow_up_action.type must match follow_up")
+    if follow_up in {"rollback_decision", "human_escalation"} and not action.get("requires_human"):
+        errors.append(f"{follow_up} must require a human")
+
+    authority = payload.get("authority") or {}
+    if authority.get("class") != "external_read":
+        errors.append("operational records require external_read authority")
+    for effect in ("deploy", "restart", "traffic_mutation"):
+        if authority.get(effect) is not False:
+            errors.append(f"operational authority must explicitly deny {effect}")
+
+    if errors:
+        return ValidatorResult(
+            validator_id="operational_record_contract",
+            status="fail",
+            message="OperationalRecord evidence or authority contract is inconsistent",
+            details={"errors": errors},
+        )
+    return contract
+
+
+def validate_deployment_record(document: str) -> ValidatorResult:
+    """Validate immutable approval binding and fail-safe deployment receipts."""
+    contract = validate_json_contract(
+        document,
+        schema_id="deployment_record.v1",
+        validator_id="deployment_record_contract",
+    )
+    if contract.status != "pass":
+        return contract
+    payload = json.loads(document)
+    errors: list[str] = []
+    binding = payload.get("approval_binding") or {}
+    for field in ("release_plan_digest", "artifact_digest", "target_id"):
+        if not binding or str(binding.get(field) or "") != str(payload.get(field) or ""):
+            errors.append(f"approval binding does not match {field}")
+    if not str(binding.get("approval_id") or ""):
+        errors.append("approval binding requires approval_id")
+    if binding.get("change_window") != payload.get("change_window"):
+        errors.append("approval binding does not match change_window")
+    if str(payload.get("environment") or "").lower() in {"prod", "production"}:
+        errors.append("production deployment records are prohibited")
+    if not str(payload.get("idempotency_key") or ""):
+        errors.append("idempotency_key is required")
+    outcome = str(payload.get("outcome") or "")
+    if outcome in {"halted", "failed"} and not payload.get("rollback_result"):
+        errors.append("failed or halted deployment requires a rollback result")
+    if outcome == "succeeded" and not payload.get("health_checks"):
+        errors.append("succeeded deployment requires health checks")
+    if not payload.get("action_log"):
+        errors.append("deployment action_log must not be empty")
+    if errors:
+        return ValidatorResult(
+            validator_id="deployment_record_contract",
+            status="fail",
+            message="DeploymentRecord change-control contract is inconsistent",
+            details={"errors": errors},
+        )
+    return contract
+
+
 def validate_citations(markdown: str) -> ValidatorResult:
     """Require at least one path-like citation in backtick form."""
     citations = sorted({match.group(1) for match in CITATION_PATH_RE.finditer(markdown or "")})
