@@ -65,13 +65,15 @@ class ModelGateway(ABC):
                 reason=f"model {model!r} is not advertised",
             )
         advertised = entry.get("capabilities")
+        # A missing capability field is not proof of support (RF5).
         capabilities = (
             frozenset(str(value) for value in advertised)
             if isinstance(advertised, list)
-            else frozenset(required)
+            else frozenset()
         )
         return GatewayProbe(
             healthy=True,
             model_available=True,
             capabilities=capabilities,
+            reason=None if not required or required.issubset(capabilities) else "capability_miss",
         )

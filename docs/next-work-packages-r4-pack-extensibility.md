@@ -1,6 +1,6 @@
 # R4 — Pack extensibility vs technical-spike completion (split plan)
 
-**Status:** planning  
+**Status:** complete
 **Gate authority:** [handover_post_mvp_refactoring.md](handover_post_mvp_refactoring.md) §4 R4  
 **Depends on:** R1 complete; R2 `EffectiveTaskPolicy` available before **migrating** packs  
 **Related ADR:** [ADR-007](architecture/ADR-007-effective-policy-and-artifact-instances.md)
@@ -155,6 +155,27 @@ pre-PM5 gate (`RF4.SPIKE`), separate from `RF4.EXT`.
 
 Do **not** mark R4 complete in the tracker until **both** R4.EXT exit and
 R4.SPIKE exit are demonstrated. Inventory alone is not completion.
+
+## Completion evidence
+
+- **R4.INV:** [`architecture/r4-workflow-branch-inventory.md`](architecture/r4-workflow-branch-inventory.md)
+  classifies coordinator, planner, handler, host, and read-plane branches.
+- **R4.EXT:** `PackExecutionPolicy` declares executor modes, grant narrowing,
+  handoffs, validators, output roles, repair/approval behavior, and evaluation
+  fixture identity. Registry validation fails closed; coordinator dispatch uses
+  registered packs and the effective policy. Live planner capabilities are
+  pack-scoped, host MCP exposes the canonical spike pack, and a read-only
+  example pack registers without a coordinator workflow branch.
+- **R4.SPIKE:** `interface_agent_loop` executes contract inventory,
+  compatibility (when two contracts are supplied), synthetic fixture, and
+  simulation tools. Typed evidence artifacts are referenced by
+  `spike_result.v1`; composition fails without required typed roles.
+- **Tests:** `tests/unit/test_rf4_pack_extensibility.py`,
+  `tests/unit/test_interface_analysis.py`, and
+  `tests/graph/test_technical_spike_pack.py`; full non-integration gate:
+  785 passed, 3 skipped, 10 deselected, with only the known pre-existing
+  `test_pf_submit_builds_request_and_returns_host_response` budget assertion
+  failure.
 
 ## Out of scope
 

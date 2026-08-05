@@ -98,6 +98,7 @@ class InstrumentedModelGateway(ModelGateway):
                 started_at=started,
                 ended_at=ended,
                 latency_ms=resp.latency_ms,
+                routing=resp.routing if isinstance(resp.routing, dict) else {},
             )
         if self.recorder is not None:
             routing = resp.routing
@@ -112,6 +113,8 @@ class InstrumentedModelGateway(ModelGateway):
                     "route": routing.get("route"),
                     "provider": routing.get("provider", resp.provider),
                     "model": routing.get("model", resp.resolved_model_id),
+                    "primary_profile": routing.get("primary_profile"),
+                    "fallback_profile": routing.get("fallback_profile"),
                     "fallback_reason": routing.get("fallback_reason"),
                     "status": resp.status,
                     "usage": resp.usage.model_dump(mode="json"),
@@ -119,6 +122,8 @@ class InstrumentedModelGateway(ModelGateway):
                     "cost_basis": routing.get("cost_basis"),
                     "cost_usd": routing.get("cost_usd"),
                     "response_hash": resp.response_hash,
+                    "circuit": routing.get("circuit"),
+                    "admission_proven": routing.get("admission_proven"),
                 },
                 content={
                     "text": resp.text,

@@ -54,8 +54,7 @@ class ProfileRegistry:
             self.profiles.append(profile)
         else:
             self.profiles = [
-                profile if existing.id == profile.id else existing
-                for existing in self.profiles
+                profile if existing.id == profile.id else existing for existing in self.profiles
             ]
         self.profiles.sort(key=lambda item: item.id)
         return path
