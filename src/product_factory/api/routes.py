@@ -30,6 +30,7 @@ from product_factory.observability.contracts import (
     TaskSummary,
     ToolCallView,
 )
+from product_factory.workspace.uploads import upload_bounds_summary
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_auth)])
 
@@ -50,6 +51,7 @@ def meta(request: Request) -> dict:
     root = resolve_project_root(data_dir=state.data_dir, project_root=state.project_root)
     repos = repositories_for_root(root)
     base = canonical_observe_base(request_base=str(request.base_url))
+    ingress = state.ingress_config()
     return {
         "protocol": HOST_PROTOCOL,
         "api_version": "v1",
@@ -62,6 +64,11 @@ def meta(request: Request) -> dict:
         "delivery_support": True,
         "repository_ids": repos.ids(),
         "canonical_observe_base": base,
+        "ingress": {
+            "trusted_proxies_configured": bool(ingress.trusted_proxies),
+            "trust_forwarded_headers": ingress.trust_forwarded_headers,
+            "upload_bounds": upload_bounds_summary(ingress),
+        },
     }
 
 

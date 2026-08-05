@@ -2,6 +2,9 @@
 
 Local-first, SQLite-backed observability for Product Factory runs. The CLI writes durable events while orchestrating; a separate observer process serves REST, WebSocket, and SSE.
 
+Operator-facing policy, route, capture, and recovery guidance lives in
+[operator-guide.md](operator-guide.md).
+
 ## Quick start
 
 ```bash
@@ -75,8 +78,13 @@ Domain events map to OpenInference span kinds (`AGENT`, `LLM`, `TOOL`, …). The
 1. List runs via `GET /api/v1/runs`; open detail via `GET /api/v1/runs/{id}`.
 2. Catch up with `GET /api/v1/runs/{id}/events?after_seq=…`, then subscribe on WS/SSE with the same cursor.
 3. Use projection endpoints (`tasks`, `model-invocations`, `tool-calls`, `artifacts`, `prompts`) for list/detail UIs — do not rebuild them by replaying all events.
-4. Treat heartbeats as liveness of the stream, not of the run; use run `liveness` / `last_progress_at` for stuck detection.
-5. The bundled dashboard uses those projections for its state and only uses SSE to invalidate/append updates. Its plan, execution, timeline, evidence, and cost tabs are available at `/dashboard/runs/<run_id>`.
+4. Task projections include additive RF6 fields: `effective_policy`, `route_class`,
+   `fallback_*`, `stack_profile_digest`, `legacy_policy`, and `next_action`.
+   Invocations include `route` / `fallback_reason` / `fallback_profile`; costs
+   include `by_route` (local vs cloud). Artifact list/content include
+   `visibility`, `content_class`, and `legacy`.
+5. Treat heartbeats as liveness of the stream, not of the run; use run `liveness` / `last_progress_at` for stuck detection.
+6. The bundled dashboard uses those projections for its state and only uses SSE to invalidate/append updates. Its plan, execution, timeline, evidence, and cost tabs are available at `/dashboard/runs/<run_id>`.
 
 See the [dashboard operator guide](dashboard.md) for its local build, monitoring flow, and security boundary.
 

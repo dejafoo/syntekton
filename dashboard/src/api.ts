@@ -21,6 +21,7 @@ export interface RunSummary extends Dict {
   active_operation?: string | null;
   updated_at?: string | null;
   error_count?: number;
+  next_action?: string | null;
 }
 
 export interface TaskSummary extends Dict {
@@ -37,6 +38,14 @@ export interface TaskSummary extends Dict {
   usage?: Dict;
   liveness?: string;
   active_operation?: string | null;
+  effective_policy?: Dict | null;
+  route_class?: string | null;
+  primary_model_profile?: string | null;
+  fallback_model_profile?: string | null;
+  fallback_eligible?: boolean | null;
+  stack_profile_digest?: string | null;
+  legacy_policy?: boolean;
+  next_action?: string | null;
 }
 
 export interface StreamEvent extends Dict {
@@ -61,6 +70,11 @@ export interface ContentView extends Dict {
   byte_count?: number | null;
   truncated?: boolean;
   payload?: unknown;
+  redacted?: boolean;
+  reason?: string | null;
+  visibility?: string | null;
+  content_class?: string | null;
+  legacy?: boolean;
 }
 
 export class ApiError extends Error {
