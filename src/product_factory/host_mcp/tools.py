@@ -35,6 +35,10 @@ _WORKFLOW_VALUES = {
     "quality_gate",
     "feasibility_discovery",
     "change_intake",
+    "technical_spike",
+    "release_readiness",
+    "incident_triage",
+    "service_health_review",
 }
 
 
@@ -68,7 +72,9 @@ def tool_schemas() -> list[dict[str, Any]]:
                         "description": (
                             "Workflow pack id: change_intake, feasibility_discovery, "
                             "repository_investigation, technical_plan, "
-                            "quality_gate, repository_change, code_change, architecture"
+                            "technical_spike, release_readiness, incident_triage, "
+                            "service_health_review, quality_gate, repository_change, "
+                            "code_change, architecture"
                         ),
                         "default": "code_change",
                     },

@@ -28,15 +28,11 @@ from product_factory.connectors.source_fetch import (
 from product_factory.connectors.source_ledger import SourceLedger, SourceNotInLedger
 from product_factory.domain.errors import ToolAuthorizationError, UnsafeOperationError
 from product_factory.domain.tools import CapabilityGrant
-from product_factory.orchestration.coordinator import (
-    _DISCOVERY_WORKFLOW_TYPES,
-    _READ_ONLY_STRIP_WORKFLOW_TYPES,
-    _REPOSITORY_WRITE_TOOL_NAMES,
-)
 from product_factory.persistence.artifacts import ArtifactStore
 from product_factory.policy.source_policy import SourcePolicyProfile, SourcePolicyRegistry
 from product_factory.tools.broker import ToolBroker
 from product_factory.tools.registry import default_tool_registry
+from product_factory.workflows.registry import resolve_workflow_pack
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES_ROOT = ROOT / "tests" / "fixtures" / "discovery"
@@ -106,9 +102,8 @@ def _fetch_broker(
 
 
 def test_discovery_workflows_are_on_the_read_only_strip() -> None:
-    assert "feasibility_discovery" in _DISCOVERY_WORKFLOW_TYPES
-    assert _DISCOVERY_WORKFLOW_TYPES <= _READ_ONLY_STRIP_WORKFLOW_TYPES
-    assert _REPOSITORY_WRITE_TOOL_NAMES == frozenset({"create_file", "apply_patch"})
+    denied = resolve_workflow_pack("feasibility_discovery").execution_policy.denied_tool_names
+    assert {"create_file", "apply_patch", "run_validation_command"} <= denied
 
 
 def test_read_only_strip_removes_mutation_and_validation_tools() -> None:
@@ -122,8 +117,8 @@ def test_read_only_strip_removes_mutation_and_validation_tools() -> None:
         "apply_patch",
         "run_validation_command",
     }
-    stripped = granted - _REPOSITORY_WRITE_TOOL_NAMES
-    stripped.discard("run_validation_command")
+    denied = resolve_workflow_pack("feasibility_discovery").execution_policy.denied_tool_names
+    stripped = granted - denied
     assert WRITE_TOOLS.isdisjoint(stripped)
     assert {"read_file", "fetch_source", "write_artifact"} <= stripped
 
@@ -243,9 +238,7 @@ def test_adversarial_coverage_matrix_is_present() -> None:
 
 
 def test_g2_stale_fixture_is_stale_under_regulated_profile() -> None:
-    data = yaml.safe_load(
-        (FIXTURES_ROOT / "g2_stale_evidence.yaml").read_text(encoding="utf-8")
-    )
+    data = yaml.safe_load((FIXTURES_ROOT / "g2_stale_evidence.yaml").read_text(encoding="utf-8"))
     profile = SourcePolicyRegistry.load(PROFILES_ROOT).require("regulated-domain")
     published = datetime.fromisoformat(data["evidence"][0]["published_at"]).replace(tzinfo=UTC)
     assert profile.is_stale(published, now=datetime(2026, 7, 30, tzinfo=UTC))

@@ -1,0 +1,27 @@
+id: release.readiness-review
+version: 1.0.0
+title: Release Readiness Review
+capabilities:
+- release_analysis
+- operations_analysis
+languages:
+- "*"
+frameworks:
+- "*"
+trigger:
+  description: Review immutable build, verification, migration, monitoring, and rollback evidence.
+negative_triggers:
+- Never start, approve, retry, or roll back a deployment.
+- Never treat a branch name or mutable tag as an immutable revision.
+- Never widen a service, environment, repository, query-template, or time-window scope.
+required_tools: []
+prohibited_tools:
+- repository_write
+- git_write
+- deployment_read
+- deployment_write
+content_ref: SKILL.md
+status: active
+owner: product-factory
+output_schema_id: release_plan.v1
+max_prompt_chars: 5000

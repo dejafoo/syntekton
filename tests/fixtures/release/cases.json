@@ -1,0 +1,25 @@
+{
+  "ready_packet": {
+    "outcome": "ready",
+    "input_digests": {
+      "change_set": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "verification_report": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "version": "1.2.3",
+    "change_notes": ["Adds bounded release analysis"],
+    "compatibility_impact": ["No public API change"],
+    "migration_preconditions": ["No migration required"],
+    "rollout_phases": [{"name": "staging", "percent": 100}],
+    "monitors": [{"signal": "error_rate", "threshold": 0.02}],
+    "rollback_criteria": [{"signal": "error_rate", "operator": ">", "value": 0.02}],
+    "required_approvals": ["release-operator"]
+  },
+  "blocked_missing_rollback": {
+    "outcome": "blocked",
+    "missing_evidence": ["rollback_criteria"]
+  },
+  "needs_decision": {
+    "outcome": "needs_decision",
+    "decision": "Approve compatibility exception"
+  }
+}

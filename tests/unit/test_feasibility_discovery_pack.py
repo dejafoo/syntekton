@@ -98,7 +98,7 @@ def test_handler_plan_compiles_against_pack() -> None:
     assert proposal.final_artifacts[0].role == ROLE_FEASIBILITY_DOSSIER
     for task in proposal.tasks:
         assert task.required_tool_classes, task.id
-        assert "implementation" != task.capability
+        assert task.capability != "implementation"
 
 
 def test_eligible_next_actions_point_at_technical_plan() -> None:

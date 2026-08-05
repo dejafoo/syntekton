@@ -1,0 +1,19 @@
+{
+  "checks": [
+    {"name": "unit-and-contract", "status": "completed", "conclusion": "success"}
+  ]
+}
+{
+  "repository": "example/service",
+  "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "checks": [
+    {"name": "unit", "status": "completed", "conclusion": "success"},
+    {"name": "security", "status": "completed", "conclusion": "success"}
+  ],
+  "artifacts": [
+    {
+      "name": "service-image",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ]
+}

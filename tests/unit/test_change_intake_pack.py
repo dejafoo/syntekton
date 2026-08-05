@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from product_factory.domain.errors import ConfigurationError
-from product_factory.domain.runs import RunRequest
 from product_factory.orchestration.coordinator import default_change_intake_plan
 from product_factory.planning.compiler import compile_plan
 from product_factory.schemas import assert_schema_writable, default_schema_registry
@@ -19,7 +18,6 @@ from product_factory.workflows.artifacts import ROLE_CHANGE_BRIEF, ROLE_CLARIFIC
 from product_factory.workflows.change_intake import CHANGE_INTAKE_PACK
 from product_factory.workflows.handlers import eligible_next_actions_for_workflow, handler_for
 from product_factory.workflows.inputs import validate_pack_input
-
 
 GOOD_BRIEF = """# CHANGE_BRIEF.md
 
@@ -100,7 +98,7 @@ def test_handler_plan_compiles_against_pack() -> None:
     assert result.ok, result.errors
     assert proposal.final_artifacts[0].role == ROLE_CHANGE_BRIEF
     for task in proposal.tasks:
-        assert "implementation" != task.capability
+        assert task.capability != "implementation"
         assert "file_write" in task.prohibited_actions
 
     ambiguous = "Please improve something somehow — not sure what."
@@ -118,10 +116,13 @@ def test_eligible_next_actions_and_feasibility_prefers_intake() -> None:
 
 def test_pack_input_allows_empty_and_rejects_unknown() -> None:
     assert validate_pack_input(CHANGE_INTAKE_PACK, {}) == {}
-    assert validate_pack_input(
-        CHANGE_INTAKE_PACK,
-        {"desired_outcome": "Health check", "known_constraints": ["src/api"]},
-    )["desired_outcome"] == "Health check"
+    assert (
+        validate_pack_input(
+            CHANGE_INTAKE_PACK,
+            {"desired_outcome": "Health check", "known_constraints": ["src/api"]},
+        )["desired_outcome"]
+        == "Health check"
+    )
     with pytest.raises(ConfigurationError) as exc:
         validate_pack_input(CHANGE_INTAKE_PACK, {"request_text": "smuggled"})
     assert "request_text" in exc.value.details["unknown"]
@@ -136,9 +137,10 @@ def test_underspecified_heuristic() -> None:
 
 def test_intake_validators_pass_and_fail() -> None:
     assert validate_intake_sections(GOOD_BRIEF, role=ROLE_CHANGE_BRIEF).status == "pass"
-    assert validate_intake_sections(
-        GOOD_CLARIFICATION, role=ROLE_CLARIFICATION_REQUEST
-    ).status == "pass"
+    assert (
+        validate_intake_sections(GOOD_CLARIFICATION, role=ROLE_CLARIFICATION_REQUEST).status
+        == "pass"
+    )
     incomplete = "# Incomplete\n\n## Outcome\nOnly outcome.\n"
     assert validate_intake_sections(incomplete, role=ROLE_CHANGE_BRIEF).status == "fail"
 

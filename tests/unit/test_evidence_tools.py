@@ -95,12 +95,8 @@ def test_normalize_citation_is_deterministic_and_policy_checked(tmp_path: Path) 
         "source_class": "standard",
         "published_at": "2025-12-01T00:00:00Z",
     }
-    first = broker.execute(
-        task_id="T-001", tool_name="normalize_citation", arguments=arguments
-    )
-    second = broker.execute(
-        task_id="T-001", tool_name="normalize_citation", arguments=arguments
-    )
+    first = broker.execute(task_id="T-001", tool_name="normalize_citation", arguments=arguments)
+    second = broker.execute(task_id="T-001", tool_name="normalize_citation", arguments=arguments)
     assert first["record_sha256"] == second["record_sha256"]
 
     with pytest.raises(ToolAuthorizationError, match="not allowed"):
