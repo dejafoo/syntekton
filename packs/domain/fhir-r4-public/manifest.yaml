@@ -1,0 +1,25 @@
+id: fhir-r4-public
+version: 1.0.0
+title: FHIR R4 Public Reference
+domain: health-interoperability
+kind: domain_reference
+data_classification: synthetic
+source_policy_profile: regulated-domain
+required_review: domain_expert
+permitted_workflows:
+  - feasibility_discovery
+  - technical_plan
+permitted_capabilities:
+  - domain_research
+  - decision_analysis
+  - composition
+# Reference packs never grant tools or mutation authority.
+grants:
+  additional_tool_classes: []
+  additional_authority: []
+owner: product-factory
+status: active
+content_ref: references.yaml
+description: >-
+  Compact public FHIR R4 terminology and document pointers for discovery.
+  Synthetic/public material only; never live EHR, credentials, or endpoints.

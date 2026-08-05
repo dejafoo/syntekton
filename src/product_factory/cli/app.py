@@ -45,6 +45,8 @@ lessons_app = typer.Typer(help="Human-gated lesson triage and promotion (ADR-007
 app.add_typer(lessons_app, name="lessons")
 observe_app = typer.Typer(help="Observability API commands")
 app.add_typer(observe_app, name="observe")
+ops_app = typer.Typer(help="Operator backup/restore commands (PM5.E)")
+app.add_typer(ops_app, name="ops")
 app.add_typer(host_app, name="host")
 app.add_typer(remote_app, name="remote")
 console = Console()
@@ -698,6 +700,61 @@ def observe_serve_cmd(
 ) -> None:
     """Serve the local observability + host control REST/WebSocket API."""
     _serve_api(host=host, port=port, data_dir=data_dir, cors=cors)
+
+
+def _resolve_data_dir(data_dir: Path | None) -> Path:
+    if data_dir is not None:
+        return data_dir.expanduser().resolve()
+    env = os.environ.get("PRODUCT_FACTORY_DATA_DIR")
+    if env:
+        return Path(env).expanduser().resolve()
+    try:
+        return load_config().root / ".product-factory"
+    except ProductFactoryError:
+        return Path(".product-factory").resolve()
+
+
+@ops_app.command("backup")
+def ops_backup_cmd(
+    dest: Path = typer.Option(..., "--dest", help="Output .tar.gz path"),
+    data_dir: Path | None = typer.Option(None, "--data-dir"),
+) -> None:
+    """Create a consistent SQLite + runs/ops snapshot archive."""
+    from product_factory.persistence.backup import create_backup
+
+    root = _resolve_data_dir(data_dir)
+    manifest = create_backup(root, dest)
+    console.print(f"[green]backup written[/green] {dest.resolve()}")
+    console.print_json(data=manifest.model_dump(mode="json"))
+
+
+@ops_app.command("restore")
+def ops_restore_cmd(
+    archive: Path = typer.Option(..., "--archive", exists=True, dir_okay=False),
+    data_dir: Path | None = typer.Option(None, "--data-dir"),
+    replace: bool = typer.Option(
+        False,
+        "--replace",
+        help="Move aside a non-empty target data directory before restore",
+    ),
+) -> None:
+    """Restore a backup archive into the data root."""
+    from product_factory.persistence.backup import restore_backup
+
+    root = _resolve_data_dir(data_dir)
+    result = restore_backup(archive, root, replace=replace)
+    console.print(f"[green]restored[/green] {result.target_data_dir}")
+    console.print_json(data=result.model_dump(mode="json"))
+
+
+@ops_app.command("backup-status")
+def ops_backup_status_cmd(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),
+) -> None:
+    """Summarize the local data root for backup planning."""
+    from product_factory.persistence.backup import backup_status
+
+    console.print_json(data=backup_status(_resolve_data_dir(data_dir)))
 
 
 @app.command("serve")

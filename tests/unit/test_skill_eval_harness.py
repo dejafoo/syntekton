@@ -159,7 +159,9 @@ def test_architecture_and_code_checks_still_work() -> None:
             artifact_kind="architecture",
         ),
     )
-    assert any(r.validator_id == "architecture_sections" and r.status == "fail" for r in arch_results)
+    assert any(
+        r.validator_id == "architecture_sections" and r.status == "fail" for r in arch_results
+    )
 
     code = EvalCase(
         id="code",
