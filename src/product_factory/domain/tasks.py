@@ -12,6 +12,66 @@ from product_factory.domain.capabilities import Capability
 from product_factory.domain.findings import Finding, ValidatorResult
 from product_factory.domain.usage import UsageMetrics
 
+# Executor completion status (distinct from validation / domain outcome).
+#
+# success: executor completed and produced contract-valid required output.
+#   Domain failure (e.g. failing tests with complete receipts) may still be
+#   success; the outcome lives in receipts / validator results / findings.
+# partial: required output is incomplete and cannot satisfy a dependency.
+# blocked: mandatory evidence, authority, or capability was unavailable
+#   before valid execution.
+# unsupported: no registered and permitted execution path exists.
+# failed: execution was attempted but failed operationally.
+# budget_exhausted: task stopped because its budget was exhausted.
+# skipped: trusted pack / lifecycle policy intentionally omitted the task
+#   (e.g. origin superseded by a successful repair).
+TaskResultStatus = Literal[
+    "success",
+    "partial",
+    "blocked",
+    "failed",
+    "budget_exhausted",
+    "unsupported",
+    "skipped",
+]
+
+_TERMINAL_TASK_STATUSES: frozenset[str] = frozenset(
+    {
+        "success",
+        "partial",
+        "blocked",
+        "failed",
+        "budget_exhausted",
+        "unsupported",
+        "skipped",
+    }
+)
+_DEPENDENCY_SATISFYING_STATUSES: frozenset[str] = frozenset({"success", "skipped"})
+_REPAIR_OR_RESOLUTION_STATUSES: frozenset[str] = frozenset(
+    {
+        "partial",
+        "blocked",
+        "failed",
+        "budget_exhausted",
+        "unsupported",
+    }
+)
+
+
+def is_terminal_task_status(status: str) -> bool:
+    """Return True when the task will not make further progress."""
+    return status in _TERMINAL_TASK_STATUSES
+
+
+def satisfies_dependency(status: str) -> bool:
+    """Return True when dependents may treat this task as complete."""
+    return status in _DEPENDENCY_SATISFYING_STATUSES
+
+
+def requires_repair_or_terminal_resolution(status: str) -> bool:
+    """Return True when unsuccessful work needs repair or diagnosis."""
+    return status in _REPAIR_OR_RESOLUTION_STATUSES
+
 
 class AcceptanceCriterion(BaseModel):
     id: str
@@ -63,14 +123,7 @@ class TaskSpec(BaseModel):
 
 class TaskResult(BaseModel):
     task_id: str
-    status: Literal[
-        "success",
-        "partial",
-        "blocked",
-        "failed",
-        "budget_exhausted",
-        "unsupported",
-    ]
+    status: TaskResultStatus
     summary: str
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
     evidence_refs: list[ResourceRef] = Field(default_factory=list)

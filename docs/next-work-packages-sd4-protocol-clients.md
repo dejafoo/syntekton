@@ -37,16 +37,16 @@ All mutation-capable entry points use one application service and one versioned 
 
 ## SD4.D — Dashboard boundary
 
-- [x] Preserve a loopback-only, monitor-only dashboard; do not store bearer tokens or add mutations.
-- [x] Advertise dashboard deployment support explicitly in metadata.
-- [x] Document that a remote control token does not make the browser UI a public remote surface; laptop use is an operator-managed SSH/private tunnel to loopback.
-- [x] Add browser coverage for supported loopback use and a clear failure state for unsupported authenticated remote use.
+- [x] Preserve a loopback-only, monitor-only dashboard; do not store bearer tokens or add mutations. **Evidence level:** hermetically verified (unit + meta advertisement).
+- [x] Advertise dashboard deployment support explicitly in metadata. **Evidence level:** hermetically verified.
+- [x] Document that a remote control token does not make the browser UI a public remote surface; laptop use is an operator-managed SSH/private tunnel to loopback. **Evidence level:** implemented (docs).
+- [~] Add browser coverage for supported loopback use and a clear failure state for unsupported authenticated remote use. **Evidence level:** hermetic unit helpers + UI meta fetch (SR5.A first slice); **Playwright integration not verified** — deferred to SR5.A matrix.
 
 ## Tests and G3 contribution
 
-Contract tests own strict v2 decoding, limits, canonical IDs, v1 adapter behavior, and generated-schema drift. Cross-language golden fixtures cover host CLI, HTTP, MCP, OpenCode, and remote Python. Integration tests prove one application-service instance and SSE cursor behavior. Browser tests prove dashboard read-only operation, content policy, and remote failure messaging.
+Contract tests own strict v2 decoding, limits, canonical IDs, v1 adapter behavior, and generated-schema drift. Cross-language golden fixtures cover host CLI, HTTP, MCP, OpenCode, and remote Python. Integration tests prove one application-service instance and SSE cursor behavior. Dashboard **unit** tests cover read-only helpers and remote-failure messaging; **Playwright browser proof is deferred (SR5.A)** and must not be inferred from G3 hermetic green.
 
-G3 contribution is complete when all mutation ingress shares the application service, v2 is preferred and documented, generated DTOs detect drift, and dashboard boundaries remain intact.
+G3 contribution is complete when all mutation ingress shares the application service, v2 is preferred and documented, generated DTOs detect drift, and dashboard boundaries remain intact at the hermetic/docs level.
 
 **G3 still requires** merging `sd/sd3-durability`, `sd/sd4-protocol-clients`, and `sd/sd5-release-engineering` (and SD2) onto the integration branch.
 

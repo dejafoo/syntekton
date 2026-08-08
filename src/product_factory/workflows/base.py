@@ -14,7 +14,12 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from product_factory.domain.capabilities import CAPABILITIES, CAPABILITY_TOOL_CLASSES
+from product_factory.domain.capabilities import (
+    CAPABILITIES,
+    CAPABILITY_TOOL_CLASSES,
+    DEPLOYMENT_TOOL_CLASSES,
+    EXTERNAL_READ_TOOL_CLASSES,
+)
 from product_factory.domain.errors import ConfigurationError
 from product_factory.registry.capability_descriptors import (
     CAPABILITY_DESCRIPTORS,
@@ -23,6 +28,8 @@ from product_factory.registry.capability_descriptors import (
     require_descriptor,
 )
 from product_factory.workflows.artifacts import ArtifactLandSpec
+
+_CONNECTOR_TOOL_CLASSES: frozenset[str] = EXTERNAL_READ_TOOL_CLASSES | DEPLOYMENT_TOOL_CLASSES
 
 ExecutorMode = Literal[
     "deterministic",
@@ -84,6 +91,38 @@ DEFAULT_EXECUTOR_MODES: dict[str, ExecutorMode] = {
 
 
 @dataclass(frozen=True)
+class CapabilityExecutionPolicy:
+    """Per-capability authority grant compiled into a pack execution policy."""
+
+    capability_id: str
+    executor_mode: ExecutorMode
+    allowed_tool_classes: frozenset[str]
+    allowed_connector_classes: frozenset[str] = frozenset()
+    required_dependency_roles: frozenset[str] = frozenset()
+    output_roles: frozenset[str] = frozenset()
+    validator_ids: tuple[str, ...] = ()
+    repair_eligible: bool = False
+    findings_deliverable: bool = False
+    approval_required: bool = False
+    external_action_requires_approval: bool = False
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "capability_id": self.capability_id,
+            "executor_mode": self.executor_mode,
+            "allowed_tool_classes": sorted(self.allowed_tool_classes),
+            "allowed_connector_classes": sorted(self.allowed_connector_classes),
+            "required_dependency_roles": sorted(self.required_dependency_roles),
+            "output_roles": sorted(self.output_roles),
+            "validator_ids": list(self.validator_ids),
+            "repair_eligible": self.repair_eligible,
+            "findings_deliverable": self.findings_deliverable,
+            "approval_required": self.approval_required,
+            "external_action_requires_approval": self.external_action_requires_approval,
+        }
+
+
+@dataclass(frozen=True)
 class PackExecutionPolicy:
     """Compiled, data-only runtime policy for a registered workflow pack."""
 
@@ -102,6 +141,7 @@ class PackExecutionPolicy:
     findings_are_deliverable: bool = False
     approval_required: bool = False
     evaluation_fixture_id: str | None = None
+    capability_policies: dict[str, CapabilityExecutionPolicy] = field(default_factory=dict)
 
     def validate(self, *, pack_id: str, capabilities: frozenset[str]) -> None:
         unknown_capabilities = set(self.executor_modes) - CAPABILITIES
@@ -144,6 +184,28 @@ class PackExecutionPolicy:
         invalid_handoff_role_schemas = set(self.accepted_handoff_roles) - set(
             self.accepted_handoff_schemas
         )
+        missing_capability_policies = sorted(set(capabilities) - set(self.capability_policies))
+        unknown_capability_policies = sorted(set(self.capability_policies) - CAPABILITIES)
+        extra_capability_policies = sorted(set(self.capability_policies) - set(capabilities))
+        widened_capability_grants: list[str] = []
+        capability_id_mismatches: list[str] = []
+        capability_mode_mismatches: list[str] = []
+        for capability, policy in sorted(self.capability_policies.items()):
+            if policy.capability_id != capability:
+                capability_id_mismatches.append(f"{capability}:{policy.capability_id}")
+            permitted = CAPABILITY_TOOL_CLASSES.get(capability, frozenset())
+            widened = sorted(set(policy.allowed_tool_classes) - permitted)
+            if widened:
+                widened_capability_grants.append(f"{capability}:{','.join(widened)}")
+            if capability in CAPABILITY_DESCRIPTORS:
+                descriptor = require_descriptor(capability)
+                if policy.executor_mode != descriptor.executor_mode:
+                    capability_mode_mismatches.append(
+                        f"{capability}:{policy.executor_mode}!={descriptor.executor_mode}"
+                    )
+            unknown_cap_tools = sorted(set(policy.allowed_tool_classes) - known_tool_classes)
+            if unknown_cap_tools:
+                unknown_tool_classes |= set(unknown_cap_tools)
         problems = {
             "unknown_capabilities": sorted(unknown_capabilities),
             "missing_capabilities": sorted(missing_capabilities),
@@ -159,6 +221,12 @@ class PackExecutionPolicy:
             "invalid_repair_capabilities": sorted(invalid_repairs),
             "unknown_validators": sorted(unknown_validators),
             "invalid_handoff_role_schemas": sorted(invalid_handoff_role_schemas),
+            "missing_capability_policies": missing_capability_policies,
+            "unknown_capability_policies": unknown_capability_policies,
+            "extra_capability_policies": extra_capability_policies,
+            "widened_capability_grants": widened_capability_grants,
+            "capability_id_mismatches": capability_id_mismatches,
+            "capability_mode_mismatches": capability_mode_mismatches,
         }
         failed = {key: value for key, value in problems.items() if value}
         if failed:
@@ -194,6 +262,10 @@ class PackExecutionPolicy:
             "findings_are_deliverable": self.findings_are_deliverable,
             "approval_required": self.approval_required,
             "evaluation_fixture_id": self.evaluation_fixture_id,
+            "capability_policies": {
+                capability_id: policy.as_payload()
+                for capability_id, policy in sorted(self.capability_policies.items())
+            },
         }
 
 
@@ -217,11 +289,41 @@ def execution_policy(
         for capability in capabilities
         for tool_class in CAPABILITY_TOOL_CLASSES.get(capability, frozenset())
     )
+    repair_eligible_capabilities = frozenset(
+        kwargs.get("repair_eligible_capabilities") or frozenset()
+    )
+    findings_are_deliverable = bool(kwargs.get("findings_are_deliverable", False))
+    approval_required = bool(kwargs.get("approval_required", False))
+    capability_policies = kwargs.pop("capability_policies", None)
+    if capability_policies is None:
+        capability_policies = {}
+        for capability in capabilities:
+            if capability not in DEFAULT_EXECUTOR_MODES:
+                continue
+            descriptor_tools = CAPABILITY_TOOL_CLASSES.get(capability, frozenset())
+            if allowed_tool_classes is not None:
+                cap_tools = frozenset(descriptor_tools & allowed_tool_classes)
+            else:
+                cap_tools = frozenset(descriptor_tools)
+            capability_policies[capability] = CapabilityExecutionPolicy(
+                capability_id=capability,
+                executor_mode=DEFAULT_EXECUTOR_MODES[capability],
+                allowed_tool_classes=cap_tools,
+                allowed_connector_classes=frozenset(cap_tools & _CONNECTOR_TOOL_CLASSES),
+                validator_ids=tuple(validators),
+                repair_eligible=capability in repair_eligible_capabilities,
+                findings_deliverable=findings_are_deliverable,
+                approval_required=approval_required,
+                external_action_requires_approval=(
+                    capability == "deployment_execution" and approval_required
+                ),
+            )
     return PackExecutionPolicy(
         executor_modes=modes,
         allowed_tool_classes=tool_classes,
         validators=tuple(validators),
         output_roles=output_roles,
+        capability_policies=capability_policies,
         **kwargs,
     )
 

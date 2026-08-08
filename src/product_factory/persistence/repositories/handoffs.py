@@ -29,7 +29,7 @@ class HandoffRepository(AggregateRepository):
                 consumption["resolved_at"],
             ),
         )
-        self._conn.commit()
+        self._commit()
 
     @synchronized
     def list_handoff_consumptions(self, handoff_id: str) -> list[dict[str, Any]]:
@@ -99,7 +99,7 @@ class HandoffRepository(AggregateRepository):
                 expected_state,
             ),
         )
-        self._conn.commit()
+        self._commit()
         return cur.rowcount == 1
 
     @synchronized
@@ -141,4 +141,4 @@ class HandoffRepository(AggregateRepository):
                 json.dumps(record.get("metadata") or {}, sort_keys=True, default=str),
             ),
         )
-        self._conn.commit()
+        self._commit()

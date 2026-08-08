@@ -22,6 +22,7 @@ from product_factory.persistence.repositories import (
     TaskRepository,
     WorkerRepository,
 )
+from product_factory.persistence.unit_of_work import UnitOfWork
 
 # Re-export for migration baseline and tests.
 SCHEMA_SQL = """
@@ -258,6 +259,10 @@ class Database:
     def wal_enabled(self) -> bool:
         return self._actor.wal_enabled()
 
+    def unit_of_work(self) -> UnitOfWork:
+        """Create a unit of work bound to this database's actor and aggregates."""
+        return UnitOfWork.from_database(self)
+
     def upsert_run(self, *args: Any, **kwargs: Any) -> Any:
         return self.runs.upsert_run(*args, **kwargs)
     def get_run(self, *args: Any, **kwargs: Any) -> Any:
@@ -358,4 +363,4 @@ class Database:
         return self.events.last_event_at(*args, **kwargs)
 
 
-__all__ = ["SCHEMA_SQL", "Database", "connect", "migrate", "_ensure_column"]
+__all__ = ["SCHEMA_SQL", "Database", "UnitOfWork", "connect", "migrate", "_ensure_column"]

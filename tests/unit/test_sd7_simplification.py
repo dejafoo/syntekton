@@ -28,10 +28,7 @@ def test_langgraph_demo_and_deps_removed() -> None:
 
 
 def test_websocket_and_stub_remain_absent() -> None:
-    src_blob = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in (ROOT / "src").rglob("*.py")
-    )
+    src_blob = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "src").rglob("*.py"))
     assert "/api/v1/events/ws" not in src_blob
     assert "completed (stub)" not in src_blob
 
@@ -58,13 +55,9 @@ def test_jsonl_is_not_host_event_authority(tmp_path: Path) -> None:
 def test_simulated_staging_connector_id_and_legacy_config_alias() -> None:
     assert deploy.CONNECTOR_ID == "simulated_staging"
     assert deploy.LEGACY_CONNECTOR_ID == "staging_deploy"
-    legacy = ConnectorsConfig(
-        connectors={"staging_deploy": ConnectorSettings(enabled=True)}
-    )
+    legacy = ConnectorsConfig(connectors={"staging_deploy": ConnectorSettings(enabled=True)})
     assert legacy.settings_for("simulated_staging").enabled is True
-    modern = ConnectorsConfig(
-        connectors={"simulated_staging": ConnectorSettings(enabled=True)}
-    )
+    modern = ConnectorsConfig(connectors={"simulated_staging": ConnectorSettings(enabled=True)})
     assert modern.settings_for("staging_deploy").enabled is True
 
 

@@ -11,10 +11,11 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from product_factory.host.protocol import HostResponse
+from product_factory.host.protocol_v2 import HOST_PROTOCOL_V2, HostResponseV2
 from product_factory.host.service import TERMINAL_STATUSES
 
 if TYPE_CHECKING:
-    from product_factory.remote.client import RemotePfClient
+    from product_factory.remote.client import HostEnvelope, RemotePfClient
 
 _DEFAULT_WANTED = TERMINAL_STATUSES | {"awaiting_approval"}
 
@@ -94,13 +95,13 @@ def wait_for_terminal(
     timeout: float = 600.0,
     poll_interval: float = 0.5,
     wanted: set[str] | None = None,
-) -> HostResponse:
+) -> HostEnvelope:
     """Prefer SSE; fall back to status polling on stream failure."""
     targets = wanted or set(_DEFAULT_WANTED)
     deadline = time.monotonic() + timeout
     cursor = after_seq
 
-    def _status_if_ready() -> HostResponse | None:
+    def _status_if_ready() -> HostEnvelope | None:
         status = client.status(run_id)
         if status.status in targets:
             return status
@@ -133,10 +134,22 @@ def wait_for_terminal(
     last = client.status(run_id)
     if last.status in targets:
         return last
+    details = {"after_seq": cursor, "last_status": last.status}
+    if getattr(client, "active_protocol", None) == HOST_PROTOCOL_V2 or isinstance(
+        last, HostResponseV2
+    ):
+        return HostResponseV2.failure(
+            operation="wait",
+            code="wait_timeout",
+            message=f"Timed out waiting for run {run_id} to reach {sorted(targets)}",
+            run_id=run_id,
+            status=last.status,
+            details=details,
+        )
     return HostResponse.failure(
         code="wait_timeout",
         message=f"Timed out waiting for run {run_id} to reach {sorted(targets)}",
         run_id=run_id,
         status=last.status,
-        details={"after_seq": cursor, "last_status": last.status},
+        details=details,
     )

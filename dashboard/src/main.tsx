@@ -6,6 +6,9 @@ import { Background, Controls, MiniMap, ReactFlow, type Edge, type Node } from "
 import "@xyflow/react/dist/style.css";
 import {
   api,
+  fetchServiceMeta,
+  isUnsupportedRemoteDashboard,
+  unsupportedRemoteDashboardMessage,
   eventIdentity,
   eventItems,
   projectionsForEvent,
@@ -16,6 +19,7 @@ import {
   type ContentView,
   type Dict,
   type RunSummary,
+  type ServiceMeta,
   type StreamEvent,
   type TaskSummary,
 } from "./api";
@@ -41,8 +45,29 @@ function useRuns() {
   });
 }
 
+function useServiceMeta() {
+  return useQuery({
+    queryKey: ["meta"],
+    queryFn: fetchServiceMeta,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+function DeploymentNotice({ meta, error }: { meta?: ServiceMeta; error: unknown }) {
+  if (error) {
+    return <p className="notice warn">Could not load service metadata; treating deployment bounds as unknown.</p>;
+  }
+  if (!meta) return null;
+  const unsupported = isUnsupportedRemoteDashboard(meta);
+  return <p className={unsupported ? "notice error" : "notice"}>
+    {unsupportedRemoteDashboardMessage(meta)}
+  </p>;
+}
+
 function RunList() {
   const { data: runs = [], isLoading, error } = useRuns();
+  const { data: meta, error: metaError } = useServiceMeta();
   const [status, setStatus] = useState("");
   const [workflow, setWorkflow] = useState("");
   const [liveness, setLiveness] = useState("");
@@ -58,6 +83,7 @@ function RunList() {
       <p className="eyebrow">LOCAL · MONITOR ONLY</p>
       <h1>Product Factory</h1>
       <p>Durable orchestration runs. Mutations remain in the host CLI, MCP, or API control surface.</p>
+      <DeploymentNotice meta={meta} error={metaError} />
     </header>
     <div className="filters">
       <Filter label="Status" value={status} values={values("status")} onChange={setStatus} />
@@ -189,6 +215,7 @@ function Detail() {
   const [tab, setTab] = useState("Plan");
   const [selected, setSelected] = useState<string | null>(null);
   const encodedId = encodeURIComponent(runId);
+  const { data: meta, error: metaError } = useServiceMeta();
   const run = useQuery({ queryKey: ["run", runId], queryFn: () => api<RunSummary>(`/runs/${encodedId}`) });
   const tasks = useQuery({ queryKey: ["tasks", runId], queryFn: () => api<TaskSummary[]>(`/runs/${encodedId}/tasks`) });
   const plan = useQuery({ queryKey: ["plan", runId], queryFn: () => api<Row>(`/runs/${encodedId}/plan`) });
@@ -214,6 +241,7 @@ function Detail() {
       <div><p className="eyebrow">{currentRun.workflow_type}</p><h1>{runId}</h1><p>{currentRun.active_operation || "No active operation"} · {date(currentRun.updated_at)}</p></div>
       <span className={`${statusClass(currentRun.status)} ${stream}`}>{stream === "live" ? "live · " : ""}{currentRun.status}</span>
     </header>
+    <DeploymentNotice meta={meta} error={metaError} />
     <LifecycleNotice status={currentRun.status} nextAction={currentRun.next_action} />
     <nav className="tabs">{["Plan", "Execution", "Timeline", "Evidence", "Costs"].map((name) => <button key={name} className={tab === name ? "active" : ""} onClick={() => setTab(name)}>{name}</button>)}</nav>
     {tab === "Plan" && <section className="split">

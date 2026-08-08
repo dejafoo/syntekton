@@ -7,13 +7,26 @@ remains a one-release alias resolved by `workflows/registry.py`.
 
 from __future__ import annotations
 
-from product_factory.domain.capabilities import CAPABILITIES
 from product_factory.workflows.artifacts import (
     ROLE_CHANGE_SET,
     ROLE_PROPOSED_PATCH,
     ArtifactLandSpec,
 )
 from product_factory.workflows.base import WorkflowPack, execution_policy
+
+# Explicit grant — not all CAPABILITIES; deployment_execution is excluded (SR1).
+REPOSITORY_CHANGE_CAPABILITIES = frozenset(
+    {
+        "repository_analysis",
+        "implementation",
+        "repair",
+        "independent_review",
+        "composition",
+        "test_design",
+        "test_execution",
+        "documentation",
+    }
+)
 
 REPOSITORY_CHANGE_PACK = WorkflowPack(
     id="repository_change",
@@ -36,7 +49,7 @@ REPOSITORY_CHANGE_PACK = WorkflowPack(
             "validation_results": {"type": "array"},
         },
     },
-    allowed_capabilities=frozenset(CAPABILITIES),
+    allowed_capabilities=REPOSITORY_CHANGE_CAPABILITIES,
     default_planner_mode="fixed",
     validation_policy={
         "baseline_validators": ["patch_applies", "path_scope", "secret_scan"],
@@ -57,7 +70,7 @@ REPOSITORY_CHANGE_PACK = WorkflowPack(
     skill_policy={"grant_enforcement": "fail_closed"},
     routing_defaults={"coding_worker_tier": "mid"},
     execution_policy=execution_policy(
-        capabilities=frozenset(CAPABILITIES),
+        capabilities=REPOSITORY_CHANGE_CAPABILITIES,
         validators=["patch_applies", "path_scope", "secret_scan"],
         output_roles=(ROLE_PROPOSED_PATCH, ROLE_CHANGE_SET),
         accepted_handoff_schemas=frozenset(

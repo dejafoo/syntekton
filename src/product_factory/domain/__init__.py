@@ -32,7 +32,15 @@ from product_factory.domain.plans import (
     PlannerOutput,
 )
 from product_factory.domain.runs import FinalStatus, RunManifest, RunRequest, WorkflowType
-from product_factory.domain.tasks import AcceptanceCriterion, TaskResult, TaskSpec
+from product_factory.domain.tasks import (
+    AcceptanceCriterion,
+    TaskResult,
+    TaskResultStatus,
+    TaskSpec,
+    is_terminal_task_status,
+    requires_repair_or_terminal_resolution,
+    satisfies_dependency,
+)
 from product_factory.domain.tools import CapabilityGrant, ToolCallRecord, ToolDefinition
 from product_factory.domain.usage import UsageMetrics
 
@@ -99,6 +107,7 @@ __all__ = [
     "SchemaValidationError",
     "TaskBudget",
     "TaskResult",
+    "TaskResultStatus",
     "TaskSpec",
     "ToolAuthorizationError",
     "ToolCallRecord",
@@ -109,5 +118,8 @@ __all__ = [
     "ValidatorResult",
     "WorkflowType",
     "export_json_schemas",
+    "is_terminal_task_status",
     "model_json_schema",
+    "requires_repair_or_terminal_resolution",
+    "satisfies_dependency",
 ]

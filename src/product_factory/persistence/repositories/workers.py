@@ -107,7 +107,7 @@ class WorkerRepository(AggregateRepository):
                     worktree_key,
                 ),
             )
-            self._conn.commit()
+            self._commit()
         except Exception:
             self._conn.rollback()
             raise
@@ -146,7 +146,7 @@ class WorkerRepository(AggregateRepository):
             """,
             (released_at.isoformat(), recovery_outcome, run_id, owner),
         )
-        self._conn.commit()
+        self._commit()
         if cur.rowcount != 1:
             raise WorkerLeaseLostError(
                 f"Cannot release worker lease for {run_id}; ownership changed",
@@ -193,7 +193,7 @@ class WorkerRepository(AggregateRepository):
             """,
             (heartbeat_at.isoformat(), expires_at.isoformat(), run_id, owner),
         )
-        self._conn.commit()
+        self._commit()
         if cur.rowcount != 1:
             raise WorkerLeaseLostError(
                 f"Worker lease for {run_id} is no longer owned by {owner}",

@@ -73,14 +73,7 @@ class EffectiveTaskPolicy(BaseModel):
             )
 
 
-_REPOSITORY_WRITE_TOOL_NAMES = frozenset({"create_file", "apply_patch"})
-_SOURCE_READ_TOOL_NAMES = frozenset({"fetch_source"})
 _DECISION_ANALYSIS_TOOL_NAMES = frozenset({"compare_options"})
-_READ_ONLY_STRIP_WORKFLOW_TYPES = frozenset(
-    {"repository_investigation", "feasibility_discovery", "change_intake"}
-)
-_INTAKE_WORKFLOW_TYPES = frozenset({"change_intake"})
-_QUALITY_GATE_WORKFLOW_TYPES = frozenset({"quality_gate"})
 
 
 def compute_allowed_tool_names(
@@ -94,8 +87,14 @@ def compute_allowed_tool_names(
     denied_tool_names: frozenset[str] = frozenset(),
     pack_allowed_tool_classes: frozenset[str] | None = None,
 ) -> tuple[set[str], dict[str, str], list[str]]:
-    """Resolve the exact broker grant and connector decisions for a task."""
+    """Resolve the exact broker grant and connector decisions for a task.
 
+    Pack ``denied_tool_names`` and per-capability tool classes are the
+    authoritative strip/narrow path. ``request`` / ``web_search_tool`` remain
+    for call-site compatibility; workflow_type branches were removed in SR1.
+    """
+
+    _ = (request, web_search_tool)
     granted = {
         t.name
         for t in tool_registry.list()
@@ -127,14 +126,6 @@ def compute_allowed_tool_names(
         }
     if task.capability in {"repository_analysis", "independent_review"}:
         granted.update({"read_file", "list_files", "search_text", "git_diff", "git_status"})
-    if request.workflow_type in _READ_ONLY_STRIP_WORKFLOW_TYPES:
-        granted -= _REPOSITORY_WRITE_TOOL_NAMES
-        granted.discard("run_validation_command")
-    if request.workflow_type in _INTAKE_WORKFLOW_TYPES:
-        granted.discard(web_search_tool)
-        granted -= _SOURCE_READ_TOOL_NAMES
-    elif request.workflow_type in _QUALITY_GATE_WORKFLOW_TYPES:
-        granted -= _REPOSITORY_WRITE_TOOL_NAMES
 
     connector_decisions: dict[str, str] = {}
     if connector_tool_names:
@@ -184,6 +175,8 @@ def resolve_effective_task_policy(
     executor_mode: ExecutorMode = "model_draft",
     denied_tool_names: frozenset[str] = frozenset(),
     pack_allowed_tool_classes: frozenset[str] | None = None,
+    repair_eligible: bool | None = None,
+    approval_required: bool | None = None,
 ) -> EffectiveTaskPolicy:
     """Build the durable policy object enforced by broker and prompt builders."""
 
@@ -206,6 +199,11 @@ def resolve_effective_task_policy(
         reduction_reason = prompt_reduction_reason
         if set(prompt_names) != set(prompt_tool_names):
             reduction_reason = reduction_reason or "dropped_ungranted_tools"
+
+    if repair_eligible is None:
+        repair_eligible = task.capability in {"implementation", "repair"}
+    if approval_required is None:
+        approval_required = True
 
     max_calls = max(task.budget.max_tool_calls * 2, task.budget.max_tool_calls + 10)
     policy = EffectiveTaskPolicy(
@@ -237,8 +235,8 @@ def resolve_effective_task_policy(
         fallback_eligible=fallback_eligible,
         budget_ceiling=task.budget.model_dump(mode="json"),
         validator_ids=list(validator_ids or []),
-        repair_eligible=task.capability in {"implementation", "repair"},
-        approval_required=True,
+        repair_eligible=repair_eligible,
+        approval_required=approval_required,
         prompt_tool_names=prompt_names,
         prompt_reduction_reason=reduction_reason,
     )

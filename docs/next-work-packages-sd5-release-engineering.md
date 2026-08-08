@@ -22,19 +22,29 @@ Every released package is reproducibly built, installable, traceable, and covere
 - [x] OpenCode plugin tests, type check, and package build.
 - [x] OpenAPI/generated-client drift detection. Evidence: `scripts/check_openapi_drift.sh` wired into `scripts/verify.sh` and `.github/workflows/ci.yml` on `sd/g3-platform`.
 - [x] Wheel build/install and packaged dashboard plus health smoke.
-- [ ] Playwright coverage for blocked-task diagnosis, SSE refresh, repair lineage, capture policy, costs, and run-scoped content denial.
+- [ ] Playwright coverage for blocked-task diagnosis, SSE refresh, repair lineage, capture policy, costs, and run-scoped content denial. **Evidence level: not verified** (SR5.A).
 
 ## Scheduled and environment-owned gates
 
-- [~] Scheduled: Docker remote restart/recovery, backup/restore, worker shutdown, connector timeout/truncation/reconciliation, and browser package smoke. *(workflow stubs + hermetic backup; live soft-skip)*
-- [x] Live environment-owned jobs produce scorecards; their secrets never enter pull-request logs, artifacts, or forks. *(PR workflows remain secret-free; scheduled stubs use no secrets)*
+Distinguish **required hermetic** jobs from **optional live** jobs. Optional
+live work must not soft-pass inside the default verify ladder.
+
+| Job / check | Required? | Notes |
+| --- | --- | --- |
+| `scheduled-recovery` → `hermetic-backup` | Required on schedule | Unit backup/restore coverage |
+| `docker-remote-restart` | Optional live | Runs only with Docker + `FORCE_SCHEDULED=1` / `DOCKER_INTEGRATION=1` |
+| `backup-restore-integration` | Optional live | Runs only with `FORCE_SCHEDULED=1` / `BACKUP_INTEGRATION=1` |
+| `worker-shutdown` | Hermetic stub | Live drain remains deferred |
+
+- [~] Scheduled: Docker remote restart/recovery, backup/restore, worker shutdown, connector timeout/truncation/reconciliation, and browser package smoke. *(hermetic backup required; live Docker/backup optional and explicitly gated — see SR5 evidence)*
+- [x] Live environment-owned jobs produce scorecards; their secrets never enter pull-request logs, artifacts, or forks. *(PR workflows remain secret-free; scheduled optional stubs use no secrets)*
 - [ ] Record image/dependency/provenance identities with each scheduled and release run.
 
 ## Test/acceptance design
 
 Begin by making current installs and package smoke characterization tests explicit. Use hermetic fixtures for PR package tests and real built distributions in isolated environments for integration verification. Scheduled tests own destructive temporary data roots and prove their cleanup/recovery. A failed generated-client diff is a protocol review event, not a file to regenerate blindly.
 
-G3 contribution is complete when frozen installs work, all first-party packages build and install from clean environments, expected browser/package checks run in CI, scheduled recovery/restore checks are stable, and releases have hashes/SBOM/provenance.
+G3 contribution for SD5 is **hermetic**: frozen installs work, first-party packages build and install from clean environments, and package smoke runs in CI. **Browser Playwright checks, SBOM automation, and required live recovery drills are not G3 exit criteria** — they remain SR5.D / SR5.A work.
 
 **Evidence:** [`docs/evidence/sustainable-development/sd5/`](evidence/sustainable-development/sd5/).
 

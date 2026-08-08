@@ -6,7 +6,7 @@ from typing import Any
 
 from product_factory.domain.errors import ConfigurationError
 from product_factory.domain.plans import CompiledPlan
-from product_factory.domain.tasks import TaskSpec
+from product_factory.domain.tasks import TaskSpec, satisfies_dependency
 from product_factory.registry.capability_descriptors import model_role_for
 
 
@@ -40,7 +40,7 @@ def runnable_tasks(
     *,
     max_parallel: int,
 ) -> list[TaskSpec]:
-    done = {tid for tid, st in task_status.items() if st in {"success", "skipped"}}
+    done = {tid for tid, st in task_status.items() if satisfies_dependency(st)}
     running = {tid for tid, st in task_status.items() if st == "running"}
     available: list[TaskSpec] = []
     for tid in plan.task_order:

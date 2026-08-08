@@ -1,8 +1,8 @@
-"""SD6 comparison arms and local-first / skill promotion gates.
+"""SD6/SR6 comparison arms and local-first / skill promotion gates.
 
 Authoritative thresholds live in ``config/evaluation/sd6_promotion.yaml``.
-Gate functions fail closed: missing metrics or unresolved reliability issues
-block promotion rather than inventing success.
+Gate functions fail closed: missing metrics, hermetic/mock evidence, or
+unresolved reliability issues block promotion rather than inventing success.
 """
 
 from __future__ import annotations
@@ -32,6 +32,11 @@ COMPARISON_ARMS: tuple[ComparisonArm, ...] = (
 )
 
 PromotionDecisionKind = Literal["promote", "no_promote", "deferred", "rollback"]
+
+# Product-evidence levels. Only ``operational`` may promote defaults.
+EvidenceLevel = Literal["mock", "hermetic", "integration", "operational"]
+PROMOTABLE_EVIDENCE_LEVEL: EvidenceLevel = "operational"
+NON_PROMOTABLE_EVIDENCE_LEVELS: frozenset[str] = frozenset({"mock", "hermetic", "integration"})
 
 
 class ArmMetrics(BaseModel):
@@ -77,6 +82,18 @@ class FailClosedRules(BaseModel):
     mask_safety_with_aggregate: bool = False
     allow_weaker_category: bool = False
     allow_fallback_policy_mismatch: bool = False
+    allow_hermetic_or_mock_promotion: bool = False
+
+
+class StabilizationPolicy(BaseModel):
+    """SR6.A one-seed harness stabilization; never a promotion authority."""
+
+    corpus_id: str = "sr6-stabilization"
+    case_count: int = 12
+    seed_count: int = 1
+    may_promote: bool = False
+    evidence_level: EvidenceLevel = "hermetic"
+    claim: str = "Hermetic stabilization corpus only; AMD operational proof deferred (SR6.B+/G5)."
 
 
 class Sd6PromotionConfig(BaseModel):
@@ -89,6 +106,7 @@ class Sd6PromotionConfig(BaseModel):
     local_first_default: LocalFirstThresholds = Field(default_factory=LocalFirstThresholds)
     skill_promotion: SkillPromotionThresholds = Field(default_factory=SkillPromotionThresholds)
     fail_closed: FailClosedRules = Field(default_factory=FailClosedRules)
+    stabilization: StabilizationPolicy = Field(default_factory=StabilizationPolicy)
     external_adapters: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -169,14 +187,102 @@ def _require(metric: float | None, label: str, failures: list[str]) -> float | N
     return metric
 
 
+def label_evidence_level(
+    *,
+    is_mock: bool = False,
+    evidence_level: EvidenceLevel | str | None = None,
+    live_amd: bool = False,
+) -> EvidenceLevel:
+    """Normalize an evidence label. Mock/deterministic always win over claimed levels."""
+    if is_mock or evidence_level == "mock":
+        return "mock"
+    if evidence_level in {"hermetic", "integration", "operational"}:
+        labeled: EvidenceLevel = evidence_level  # type: ignore[assignment]
+        if labeled == "operational" and not live_amd:
+            # Stand-in or unset AMD ownership cannot claim operational proof.
+            return "hermetic"
+        return labeled
+    if live_amd:
+        return "operational"
+    return "hermetic"
+
+
+def evidence_allows_promotion(
+    evidence_level: EvidenceLevel | str,
+    *,
+    is_mock: bool = False,
+    config: Sd6PromotionConfig | None = None,
+) -> tuple[bool, str | None]:
+    """Fail closed: only operational, non-mock evidence may promote defaults."""
+    config = config or Sd6PromotionConfig()
+    if config.fail_closed.allow_hermetic_or_mock_promotion:
+        return True, None
+    if is_mock or evidence_level == "mock":
+        return (
+            False,
+            "mock/deterministic results cannot promote defaults; evidence_level='mock'",
+        )
+    if evidence_level in NON_PROMOTABLE_EVIDENCE_LEVELS:
+        return (
+            False,
+            f"evidence_level={evidence_level!r} cannot promote; "
+            f"require {PROMOTABLE_EVIDENCE_LEVEL!r} AMD-owned runs",
+        )
+    if evidence_level != PROMOTABLE_EVIDENCE_LEVEL:
+        return (
+            False,
+            f"unknown or insufficient evidence_level={evidence_level!r}; "
+            f"require {PROMOTABLE_EVIDENCE_LEVEL!r}",
+        )
+    return True, None
+
+
+def _deferred_for_evidence(
+    *,
+    details: dict[str, Any],
+    evidence_level: EvidenceLevel | str,
+    is_mock: bool,
+    operational_ready: bool,
+    config: Sd6PromotionConfig,
+    amd_unavailable_message: str,
+) -> PromotionGateResult | None:
+    """Return a deferred gate result when evidence is not promotion-eligible."""
+    details.update(
+        {
+            "evidence_level": evidence_level,
+            "is_mock": is_mock,
+            "operational_ready": operational_ready,
+            "stabilization_may_promote": config.stabilization.may_promote,
+        }
+    )
+    allowed, reason = evidence_allows_promotion(evidence_level, is_mock=is_mock, config=config)
+    if not allowed and reason is not None:
+        return PromotionGateResult(
+            passed=False,
+            decision="deferred",
+            failures=[reason],
+            details=details,
+        )
+    if not operational_ready:
+        return PromotionGateResult(
+            passed=False,
+            decision="deferred",
+            failures=[amd_unavailable_message],
+            details=details,
+        )
+    return None
+
+
 def evaluate_local_first_promotion(
     *,
     candidate: ArmMetrics,
     cloud: ArmMetrics,
     config: Sd6PromotionConfig | None = None,
     operational_ready: bool = False,
+    evidence_level: EvidenceLevel | str = "hermetic",
+    is_mock: bool = False,
 ) -> PromotionGateResult:
-    """Enforce SD6 local-first default promotion rules against the cloud arm."""
+    """Enforce SD6/SR6 local-first default promotion rules against the cloud arm."""
     config = config or Sd6PromotionConfig()
     thresholds = config.local_first_default
     failures: list[str] = []
@@ -184,6 +290,8 @@ def evaluate_local_first_promotion(
         "candidate_arm": candidate.arm,
         "cloud_arm": cloud.arm,
         "operational_ready": operational_ready,
+        "evidence_level": evidence_level,
+        "is_mock": is_mock,
     }
 
     if candidate.arm not in {"local_only", "local_first_fallback"}:
@@ -191,16 +299,19 @@ def evaluate_local_first_promotion(
     if cloud.arm != "cloud":
         failures.append(f"baseline arm {cloud.arm!r} must be 'cloud'")
 
-    if not operational_ready:
-        return PromotionGateResult(
-            passed=False,
-            decision="deferred",
-            failures=[
-                "operational AMD-owned multi-seed promotion run not available; "
-                "local-first default remains deferred"
-            ],
-            details=details,
-        )
+    deferred = _deferred_for_evidence(
+        details=details,
+        evidence_level=evidence_level,
+        is_mock=is_mock,
+        operational_ready=operational_ready,
+        config=config,
+        amd_unavailable_message=(
+            "operational AMD-owned multi-seed promotion run not available; "
+            "local-first default remains deferred"
+        ),
+    )
+    if deferred is not None:
+        return deferred
 
     if candidate.case_count < config.min_cases_for_promotion:
         failures.append(
@@ -332,27 +443,36 @@ def evaluate_skill_promotion(
     skills_disabled: ArmMetrics,
     config: Sd6PromotionConfig | None = None,
     operational_ready: bool = False,
+    evidence_level: EvidenceLevel | str = "hermetic",
+    is_mock: bool = False,
 ) -> PromotionGateResult:
-    """Enforce SD6 individual-skill promotion rules versus the no-skill baseline."""
+    """Enforce SD6/SR6 individual-skill promotion rules versus the no-skill baseline."""
     config = config or Sd6PromotionConfig()
     thresholds = config.skill_promotion
     failures: list[str] = []
-    details: dict[str, Any] = {"operational_ready": operational_ready}
+    details: dict[str, Any] = {
+        "operational_ready": operational_ready,
+        "evidence_level": evidence_level,
+        "is_mock": is_mock,
+    }
 
     if skills_enabled.arm != "skills_enabled":
         failures.append(f"skills_enabled arm got {skills_enabled.arm!r}")
     if skills_disabled.arm != "skills_disabled":
         failures.append(f"skills_disabled arm got {skills_disabled.arm!r}")
 
-    if not operational_ready:
-        return PromotionGateResult(
-            passed=False,
-            decision="deferred",
-            failures=[
-                "operational skill scorecard run not available; skill promotion remains deferred"
-            ],
-            details=details,
-        )
+    deferred = _deferred_for_evidence(
+        details=details,
+        evidence_level=evidence_level,
+        is_mock=is_mock,
+        operational_ready=operational_ready,
+        config=config,
+        amd_unavailable_message=(
+            "operational skill scorecard run not available; skill promotion remains deferred"
+        ),
+    )
+    if deferred is not None:
+        return deferred
 
     enabled_policy = _require(
         skills_enabled.policy_violation_rate, "skills_enabled.policy_violation_rate", failures

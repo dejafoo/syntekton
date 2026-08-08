@@ -360,14 +360,30 @@ class ObservabilityQueryService:
                 data = self._read_json(path)
                 if isinstance(data, dict):
                     files.append({"name": path.name, "data": data})
-        failed = [task for task in tasks if task.status in {"failed", "blocked"}]
+        failed = [
+            task
+            for task in tasks
+            if task.status in {"failed", "blocked", "partial", "budget_exhausted", "unsupported"}
+        ]
         repairs: list[dict[str, Any]] = []
         for task in tasks:
             if task.capability != "repair":
                 continue
             direct = [dep for dep in task.dependencies if dep in task_by_id]
             origin = next(
-                (dep for dep in direct if task_by_id[dep].status in {"failed", "blocked"}), None
+                (
+                    dep
+                    for dep in direct
+                    if task_by_id[dep].status
+                    in {
+                        "failed",
+                        "blocked",
+                        "partial",
+                        "budget_exhausted",
+                        "unsupported",
+                    }
+                ),
+                None,
             )
             # Older runs can replace a failed task's dependency with its repair.
             # The best durable derivation available is the most recent failed task.

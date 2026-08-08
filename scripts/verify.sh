@@ -56,20 +56,29 @@ fi
 
 # Optional OpenCode plugin smoke (P3.G.D): skips when `opencode` is absent
 # unless OPENCODE_INTEGRATION=1 is set (then missing binary fails).
+# Optional live — not part of the required hermetic gate.
 bash scripts/opencode_plugin_smoke.sh
 
 # Optional OpenCode remote smoke (PM3): loads the plugin against Docker compose
-# remote; soft-skips when opencode/docker are absent unless OPENCODE_INTEGRATION=1.
-bash scripts/opencode_remote_smoke.sh
+# remote; only when OPENCODE_INTEGRATION=1 (missing binary/docker then fails).
+if [[ "${OPENCODE_INTEGRATION:-}" == "1" ]]; then
+  bash scripts/opencode_remote_smoke.sh
+fi
 
-# Optional Docker remote HTTP integration (PM3.0 / PM5.E): soft-skips unless
+# Optional Docker remote HTTP integration (PM3.0 / PM5.E): required only when
 # DOCKER_INTEGRATION=1 (then missing/unhealthy Docker/compose fails).
-uv run pytest -q tests/integration/test_remote_docker.py
+if [[ "${DOCKER_INTEGRATION:-}" == "1" ]]; then
+  uv run pytest -q tests/integration/test_remote_docker.py
+fi
 
-# Opt-in staging deploy smoke (PM5.B): soft-skips unless DEPLOY_INTEGRATION=1.
-uv run pytest -q tests/integration/test_deploy_staging_live.py
+# Opt-in staging deploy smoke (PM5.B): required only when DEPLOY_INTEGRATION=1.
+if [[ "${DEPLOY_INTEGRATION:-}" == "1" ]]; then
+  uv run pytest -q tests/integration/test_deploy_staging_live.py
+fi
 
-# Opt-in backup/restore drill (PM5.E): soft-skips unless BACKUP_INTEGRATION=1.
-uv run pytest -q tests/integration/test_backup_restore.py
+# Opt-in backup/restore drill (PM5.E): required only when BACKUP_INTEGRATION=1.
+if [[ "${BACKUP_INTEGRATION:-}" == "1" ]]; then
+  uv run pytest -q tests/integration/test_backup_restore.py
+fi
 
 echo "verify OK"

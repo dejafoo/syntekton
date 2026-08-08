@@ -101,11 +101,20 @@ class RunCoordinator:
         data_dir: Path | None = None,
         use_deterministic_planner: bool = False,
     ) -> None:
+        from product_factory.application.composition_root import build_application
+
+        services = build_application(
+            config=config,
+            gateway=gateway,
+            data_dir=data_dir,
+            use_deterministic_planner=use_deterministic_planner,
+        )
         self._engine = RunLifecycleEngine(
             config=config,
             gateway=gateway,
             data_dir=data_dir,
             use_deterministic_planner=use_deterministic_planner,
+            services=services,
         )
         # HostService and tests read these attributes directly.
         self.config = self._engine.config
@@ -118,6 +127,7 @@ class RunCoordinator:
         self.allow_deterministic_workers = self._engine.allow_deterministic_workers
         self.use_deterministic_planner = self._engine.use_deterministic_planner
         self._raw_gateway = self._engine._raw_gateway
+        self.commands = self._engine.commands
 
     def run(self, request: RunRequest, *, run_id: str | None = None) -> RunManifest:
         return self._engine.run(request, run_id=run_id)

@@ -102,6 +102,13 @@ def list_workflow_packs() -> list[WorkflowPack]:
     return list(_PACKS.values())
 
 
+def list_accepted_workflow_ids() -> list[str]:
+    """Canonical pack ids plus compatibility aliases accepted by host/v1 surfaces."""
+    canonical = sorted(_PACKS)
+    aliases = sorted(_ALIASES)
+    return [*canonical, *[alias for alias in aliases if alias not in _PACKS]]
+
+
 def overrides_from_request(request: Any) -> dict[str, Any]:
     """Collect artifact overrides from every accepted request surface.
 

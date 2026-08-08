@@ -29,7 +29,7 @@ class EvaluationRepository(AggregateRepository):
             """,
             (case_id, suite, json.dumps(case_json, default=str)),
         )
-        self._conn.commit()
+        self._commit()
 
     @synchronized
     def record_score(self, *, bench_id: str, score: EvaluationScore) -> None:
@@ -66,7 +66,7 @@ class EvaluationRepository(AggregateRepository):
                 now,
             ),
         )
-        self._conn.commit()
+        self._commit()
 
     def list_scores(self, bench_id: str) -> list[Any]:
         from product_factory.evaluation.deterministic import EvaluationScore
@@ -109,7 +109,7 @@ class EvaluationRepository(AggregateRepository):
                 datetime.now(UTC).isoformat(),
             ),
         )
-        self._conn.commit()
+        self._commit()
 
     @synchronized
     def record_pairwise(
@@ -131,7 +131,7 @@ class EvaluationRepository(AggregateRepository):
                 datetime.now(UTC).isoformat(),
             ),
         )
-        self._conn.commit()
+        self._commit()
 
     def list_pairwise(self, bench_id: str) -> list[dict[str, Any]]:
         def _read(conn: Any) -> list[dict[str, Any]]:

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Evaluation and Promotion Change"
+  short_description: "Validate model, skill, and benchmark promotion."
+  default_prompt: "Use $evaluation-promotion-change to implement and verify this evaluation, model route, skill promotion, or optimization change."

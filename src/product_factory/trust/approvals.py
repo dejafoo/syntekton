@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from product_factory.domain.runs import RunRequest
 from product_factory.persistence.database import Database
 
 ApprovalStatus = Literal["pending", "approved", "rejected", "expired", "revoked", "consumed"]
@@ -179,6 +180,59 @@ class ApprovalService:
             self.db.update_action_approval(
                 approval.approval_id, expected_status=approval.status, values={"status": "expired"}
             )
+
+
+def verify_deployment_action_approval(
+    db: Database,
+    request: RunRequest,
+    *,
+    consumer_run_id: str,
+    capability: str,
+) -> bool:
+    """Resolve durable ActionApproval for deployment_execution (SR1 / SD0.C).
+
+    Capability-gated only — workflow_type is not authority. Pack-input booleans
+    and mirrored digest fields are never authority. Lifecycle may wire the
+    broker flag from this helper; ownership remains here.
+    """
+
+    if capability != "deployment_execution":
+        return False
+    binding = request.pack_input.get("approval_binding")
+    if not isinstance(binding, dict):
+        binding = {}
+    approval_id = str(
+        binding.get("approval_id") or request.pack_input.get("approval_id") or ""
+    ).strip()
+    if not approval_id:
+        return False
+
+    release_handoff_id = str(
+        binding.get("release_handoff_id") or request.pack_input.get("release_handoff_id") or ""
+    )
+    release_handoff_digest = str(
+        binding.get("release_handoff_digest")
+        or request.pack_input.get("release_handoff_digest")
+        or ""
+    )
+    try:
+        expected = deployment_action_fingerprint(
+            release_handoff_id=release_handoff_id,
+            release_handoff_digest=release_handoff_digest,
+            release_plan_digest=str(request.pack_input.get("release_plan_digest") or ""),
+            artifact_digest=str(request.pack_input.get("artifact_digest") or ""),
+            target_id=str(request.pack_input.get("target_id") or ""),
+            change_window=request.pack_input.get("change_window"),
+            idempotency_key=str(request.pack_input.get("idempotency_key") or ""),
+        )
+        ApprovalService(db).consume_for_execution(
+            approval_id,
+            expected_fingerprint=expected,
+            consumer_run_id=consumer_run_id,
+        )
+    except ApprovalError:
+        return False
+    return True
 
 
 def _safe_actor(actor: dict[str, Any] | str) -> dict[str, str]:

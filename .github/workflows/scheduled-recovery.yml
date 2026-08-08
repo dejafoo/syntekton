@@ -1,8 +1,18 @@
 name: scheduled-recovery
 
-# Environment-owned recovery ladder stubs (SD5). No live secrets in this workflow.
-# Jobs soft-skip when Docker/credentials are absent so the schedule stays green
-# on a fresh fork; set FORCE_SCHEDULED=1 (repository variable) to require them.
+# Scheduled recovery ladder (SD5 / SR5).
+#
+# Required on this schedule:
+#   - hermetic-backup — unit backup/restore coverage (always runs)
+#
+# Optional live (not required PR/hermetic proof):
+#   - docker-remote-restart — needs Docker; only executes when FORCE_SCHEDULED=1
+#   - backup-restore-integration — only executes when FORCE_SCHEDULED=1
+#   - worker-shutdown — hermetic stub until durable drain integration lands
+#
+# Soft-passing an optional live job without infrastructure is forbidden as a
+# required-gate signal. Optional jobs below exit 0 when gated off; set
+# repository variable FORCE_SCHEDULED=1 to require them.
 on:
   schedule:
     # Mondays 06:15 UTC — keep off the default busy hour.
@@ -15,6 +25,7 @@ concurrency:
 
 jobs:
   hermetic-backup:
+    name: hermetic-backup (required)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +39,7 @@ jobs:
         run: uv run pytest -q tests/unit/test_backup_restore.py
 
   docker-remote-restart:
+    name: docker-remote-restart (optional live)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,22 +49,23 @@ jobs:
           enable-cache: true
       - name: Sync (frozen)
         run: uv sync --frozen --extra dev
-      - name: Docker remote restart/recovery (soft-skip without Docker)
+      - name: Docker remote restart/recovery (optional; gated)
         env:
           DOCKER_INTEGRATION: ${{ vars.FORCE_SCHEDULED == '1' && '1' || '0' }}
         run: |
           set -euo pipefail
-          if ! command -v docker >/dev/null 2>&1; then
-            if [[ "${DOCKER_INTEGRATION}" == "1" ]]; then
-              echo "FORCE_SCHEDULED requires docker" >&2
-              exit 1
-            fi
-            echo "docker absent — soft-skip docker remote restart job"
+          if [[ "${DOCKER_INTEGRATION}" != "1" ]]; then
+            echo "::notice::optional live job skipped (set FORCE_SCHEDULED=1 to require)"
             exit 0
+          fi
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "FORCE_SCHEDULED requires docker" >&2
+            exit 1
           fi
           uv run pytest -q tests/integration/test_remote_docker.py
 
   backup-restore-integration:
+    name: backup-restore-integration (optional live)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,15 +75,19 @@ jobs:
           enable-cache: true
       - name: Sync (frozen)
         run: uv sync --frozen --extra dev
-      - name: Backup/restore integration (soft-skip unless gated)
+      - name: Backup/restore integration (optional; gated)
         env:
           BACKUP_INTEGRATION: ${{ vars.FORCE_SCHEDULED == '1' && '1' || '0' }}
         run: |
           set -euo pipefail
-          # Module soft-skips when BACKUP_INTEGRATION!=1; FORCE_SCHEDULED flips the gate.
+          if [[ "${BACKUP_INTEGRATION}" != "1" ]]; then
+            echo "::notice::optional live job skipped (set FORCE_SCHEDULED=1 to require)"
+            exit 0
+          fi
           uv run pytest -q tests/integration/test_backup_restore.py
 
   worker-shutdown:
+    name: worker-shutdown (hermetic stub)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,10 +97,10 @@ jobs:
           enable-cache: true
       - name: Sync (frozen)
         run: uv sync --frozen --extra dev
-      - name: Worker shutdown stub (SD3 drain proof owns live drain)
+      - name: Worker shutdown stub (live drain deferred)
         run: |
           set -euo pipefail
-          # Placeholder until SD3 lands durable worker drain integration.
+          # Placeholder until durable worker drain integration is required.
           uv run product-factory --help
           uv run pytest -q tests/unit/test_backup_restore.py
-          echo "worker-shutdown: hermetic stub OK (live drain deferred to SD3)"
+          echo "worker-shutdown: hermetic stub OK (live drain deferred)"

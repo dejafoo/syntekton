@@ -65,6 +65,8 @@ def test_sd6_promotion_config_encodes_playbook_arms_and_thresholds() -> None:
     assert config.external_adapters["swe_atlas"]["status"] == "minimal"
     assert config.external_adapters["terminal_bench"]["status"] == "next"
     assert config.external_adapters["deepswe"]["status"] == "deferred"
+    assert config.stabilization.may_promote is False
+    assert config.fail_closed.allow_hermetic_or_mock_promotion is False
 
 
 def test_local_first_gate_defers_without_operational_proof() -> None:
@@ -119,7 +121,11 @@ def test_local_first_gate_enforces_playbook_thresholds() -> None:
         category_accepted_outcome_rates={"discovery": 0.88, "release": 0.87},
     )
     ok = evaluate_local_first_promotion(
-        candidate=passing, cloud=cloud, config=config, operational_ready=True
+        candidate=passing,
+        cloud=cloud,
+        config=config,
+        operational_ready=True,
+        evidence_level="operational",
     )
     assert ok.passed
     assert ok.decision == "promote"
@@ -132,7 +138,11 @@ def test_local_first_gate_enforces_playbook_thresholds() -> None:
         }
     )
     blocked = evaluate_local_first_promotion(
-        candidate=failing, cloud=cloud, config=config, operational_ready=True
+        candidate=failing,
+        cloud=cloud,
+        config=config,
+        operational_ready=True,
+        evidence_level="operational",
     )
     assert not blocked.passed
     assert blocked.decision == "no_promote"
@@ -166,6 +176,7 @@ def test_skill_promotion_requires_quality_or_effort_gain() -> None:
         skills_disabled=disabled,
         config=config,
         operational_ready=True,
+        evidence_level="operational",
     )
     assert ok.passed
 
@@ -175,6 +186,7 @@ def test_skill_promotion_requires_quality_or_effort_gain() -> None:
         skills_disabled=disabled,
         config=config,
         operational_ready=True,
+        evidence_level="operational",
     )
     assert not blocked.passed
     assert any("quality improvement" in f or "correction-effort" in f for f in blocked.failures)

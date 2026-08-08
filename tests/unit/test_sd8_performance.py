@@ -78,9 +78,7 @@ def test_inventory_cache_keyed_by_snapshot_and_policy(tmp_path: Path) -> None:
 
     # Different policy digest must rebuild (never serve prohibited under old policy).
     tight = InventoryPolicy(max_files=1)
-    tight_inventory = cache.get_or_build(
-        root=repo, snapshot_revision="rev-a", policy=tight
-    )
+    tight_inventory = cache.get_or_build(root=repo, snapshot_revision="rev-a", policy=tight)
     assert tight_inventory is not first
     assert tight_inventory.policy_digest != first.policy_digest
 

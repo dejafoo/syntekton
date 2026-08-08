@@ -58,6 +58,8 @@ pre { overflow: auto; max-height: 380px; white-space: pre-wrap; background: #0d1
 .warn { color: #edc069; }
 .error { color: #ff9eae; }
 .notice { border-left: 3px solid #edc069; background: #242316; padding: 10px 12px; border-radius: 4px; }
+.notice.warn { border-left-color: #edc069; }
+.notice.error { border-left-color: #ff9eae; background: #2a1820; color: #ffd5dc; }
 .back { color: #69d6bd; display: inline-block; margin-bottom: 16px; }
 .compact { margin: 0; }
 @media (max-width: 850px) { .page { padding: 18px; } .split { grid-template-columns: 1fr; } .kanban, .metrics, .run-card dl { grid-template-columns: 1fr 1fr; } .filters { flex-wrap: wrap; } }
