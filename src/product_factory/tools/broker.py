@@ -694,9 +694,9 @@ class ToolBroker:
             run_id=run_id,
             invocation_options={
                 "source_ledger": self.source_ledger,
-                "_approval_binding_verified": self.connector_approval_verified,
             },
             audit=self.connector_audit,
+            approved=self.connector_approval_verified,
         )
         handler_metadata = result.pop("_handler_metadata", {})
         if tool_name == "fetch_source":

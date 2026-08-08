@@ -137,11 +137,21 @@ def test_brief_to_investigation_to_plan_uses_artifact_hash_pins(tmp_path: Path) 
     intake_output = tmp_path / ".product-factory" / "runs" / intake.run_id / "output"
     brief_bytes = (intake_output / "CHANGE_BRIEF.md").read_bytes()
     brief_digest = hashlib.sha256(brief_bytes).hexdigest()
+    from product_factory.trust.handoffs import HandoffService
+
+    handoffs = HandoffService(coord.db, tmp_path / ".product-factory")
+    brief_instance = coord.db.get_artifact_instance(intake.run_id, brief_digest)
+    assert brief_instance is not None, "intake must persist change_brief artifact instance"
+    brief_handoff = handoffs.create_from_artifact_instance(
+        brief_instance["instance_id"], role="change_brief"
+    )
+    handoffs.promote_evidence_complete(brief_handoff.handoff_id)
+    handoffs.approve(brief_handoff.handoff_id, actor="operator")
     brief_ref = HandoffRef(
         schema_id="change_brief.v1",
         digest=brief_digest,
         producer_run_id=intake.run_id,
-        producer_task_id="T-003",
+        producer_task_id=str(brief_instance.get("producer_task_id") or "T-003"),
         role="change_brief",
         state="approved",
     )
@@ -160,11 +170,17 @@ def test_brief_to_investigation_to_plan_uses_artifact_hash_pins(tmp_path: Path) 
     investigation_output = tmp_path / ".product-factory" / "runs" / investigation.run_id / "output"
     report_bytes = (investigation_output / "EVIDENCE_REPORT.md").read_bytes()
     evidence_digest = hashlib.sha256(report_bytes).hexdigest()
+    evidence_instance = coord.db.get_artifact_instance(investigation.run_id, evidence_digest)
+    assert evidence_instance is not None
+    evidence_handoff = handoffs.create_from_artifact_instance(
+        evidence_instance["instance_id"], role="evidence_report"
+    )
+    handoffs.promote_evidence_complete(evidence_handoff.handoff_id)
     evidence_ref = HandoffRef(
         schema_id="evidence_report.document.v2",
         digest=evidence_digest,
         producer_run_id=investigation.run_id,
-        producer_task_id="T-002",
+        producer_task_id=str(evidence_instance.get("producer_task_id") or "T-002"),
         role="evidence_report",
         state="evidence_complete",
     )

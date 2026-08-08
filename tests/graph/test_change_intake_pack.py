@@ -131,8 +131,8 @@ def test_intake_honors_renamed_brief(tmp_path: Path) -> None:
     assert not (output / "CHANGE_BRIEF.md").exists()
 
 
-def test_technical_plan_accepts_change_brief_handoff_pin(tmp_path: Path) -> None:
-    """Planning can consume a change_brief by pin (shape-level handoff smoke)."""
+def test_technical_plan_rejects_forged_change_brief_handoff_pin(tmp_path: Path) -> None:
+    """Forged HandoffRef without a durable record fails before admission (SD0.B)."""
     import shutil
 
     project = tmp_path / "project"
@@ -154,7 +154,7 @@ def test_technical_plan_accepts_change_brief_handoff_pin(tmp_path: Path) -> None
         role="change_brief",
         state="approved",
     )
-    accepted = host.submit(
+    rejected = host.submit(
         RunRequest(
             request_id="plan-from-brief",
             workflow_type="technical_plan",
@@ -164,7 +164,9 @@ def test_technical_plan_accepts_change_brief_handoff_pin(tmp_path: Path) -> None
         mock=True,
         detach=False,
     )
-    assert accepted.ok, accepted.error
+    assert not rejected.ok
+    assert rejected.error is not None
+    assert rejected.error.code == "invalid_handoff"
 
 
 def test_host_rejects_unknown_pack_input(tmp_path: Path) -> None:

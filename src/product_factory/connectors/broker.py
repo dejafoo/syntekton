@@ -110,6 +110,7 @@ class ConnectorBroker:
         run_id: str = "",
         invocation_options: Mapping[str, Any] | None = None,
         audit: ConnectorAudit | None = None,
+        approved: bool = False,
     ) -> dict[str, Any]:
         decision_id = f"cd-{uuid.uuid4().hex[:12]}"
         args_hash = hashlib.sha256(
@@ -144,6 +145,7 @@ class ConnectorBroker:
                 task_id=task_id,
                 tool_call_id=tool_call_id,
                 invocation_options=invocation_options,
+                trusted_approved=approved,
             )
         except ConnectorError as exc:
             self._emit(EVENT_DENIED, {**base, **_error_payload(exc)}, audit=audit)
@@ -189,6 +191,7 @@ class ConnectorBroker:
         task_id: str,
         tool_call_id: str,
         invocation_options: Mapping[str, Any] | None = None,
+        trusted_approved: bool = False,
     ) -> ConnectorInvocation:
         connector_id = manifest.connector_id
         if not self.config.is_enabled(connector_id):
@@ -221,9 +224,11 @@ class ConnectorBroker:
         requires_approval = self.config.requires_approval(manifest) or tool.requires_approval
         approved = False
         if requires_approval:
+            # Invocation options are caller-controlled and never authority.
+            # `trusted_approved` is set only by ToolBroker after durable
+            # ApprovalService consumption (SD0.C).
             approved = bool(
-                (invocation_options or {}).get("_approval_binding_verified")
-                or (self.approvals is not None and self.approvals(manifest, tool))
+                trusted_approved or (self.approvals is not None and self.approvals(manifest, tool))
             )
             if not approved:
                 raise ConnectorPolicyDenied(
