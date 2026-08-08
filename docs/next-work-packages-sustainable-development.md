@@ -1,6 +1,6 @@
 # Sustainable development program
 
-**Status:** `[~]` — program defined; implementation has not started.  
+**Status:** `[~]` — Baseline + SD0/G0 hermetic gate landed; SD1+ not started.  
 **Source:** [Sustainable-development handover](handover_sustainable_development.md).  
 **Scope:** make the existing single-user, private-network, SQLite-based product supportable and honestly executable. This program does not add workflow packs, connector authority, deployment targets, multi-tenancy, distributed scheduling, a replacement CLI, or a backend-for-frontend.
 
@@ -51,8 +51,8 @@ SD3 Durability      SD4 Protocol      SD5 Build / CI
 
 | Package | Status | Findings | Gate | Playbook |
 | --- | --- | --- | --- | --- |
-| Baseline | `[ ]` | F-01–F-26 | entry | this tracker |
-| SD0 — Trust boundaries | `[ ]` | F-01–F-04 | G0 | [SD0](next-work-packages-sd0-trust-boundaries.md) |
+| Baseline | `[x]` | F-01–F-26 | entry | this tracker |
+| SD0 — Trust boundaries | `[x]` | F-01–F-04 | G0 | [SD0](next-work-packages-sd0-trust-boundaries.md) |
 | SD1 — Executor truth | `[ ]` | F-05–F-07 | G1 | [SD1](next-work-packages-sd1-executor-truth.md) |
 | SD2 — Kernel decomposition | `[ ]` | F-06–F-08, F-22 | G2 | [SD2](next-work-packages-sd2-kernel-decomposition.md) |
 | SD3 — Durability | `[ ]` | F-09–F-12 | G3 | [SD3](next-work-packages-sd3-durability.md) |
@@ -78,14 +78,14 @@ Finding IDs refer to the handover. Assignment is ownership, not the only possibl
 
 ### Baseline
 
-- [ ] Capture starting commit, dependency graph, database schema, route list, pack registry, and active client versions.
-- [ ] Archive baseline results and warnings for the commands below.
-- [ ] Create evidence directories and name code/test/documentation owners before parallel streams.
-- [ ] Freeze empty DB, current pre-SD0 DB, host/v1, dashboard package, and OpenCode plugin compatibility fixtures.
+- [x] Capture starting commit, dependency graph, database schema, route list, pack registry, and active client versions. Evidence: [`docs/evidence/sustainable-development/baseline/`](evidence/sustainable-development/baseline/).
+- [x] Archive baseline results and warnings for the commands below. Evidence: [`baseline/verification/`](evidence/sustainable-development/baseline/verification/) (ruff/pyright archived; full pytest/npm ladder deferred to G0 re-run — see `verification/NOTES.md`).
+- [x] Create evidence directories and name code/test/documentation owners before parallel streams. Evidence: [`baseline/ownership.md`](evidence/sustainable-development/baseline/ownership.md).
+- [x] Freeze empty DB, current pre-SD0 DB, host/v1, dashboard package, and OpenCode plugin compatibility fixtures. Evidence: [`baseline/fixtures.md`](evidence/sustainable-development/baseline/fixtures.md).
 
 ### Gate checklists
 
-- [ ] **G0:** forged handoffs/approvals fail before spend or connector calls; repository context is safe; remote streams are authenticated; deployment is disabled without the new verifier.
+- [x] **G0:** forged handoffs/approvals fail before spend or connector calls; repository context is safe; remote streams are authenticated; deployment is disabled without the new verifier. Evidence: [`docs/evidence/sustainable-development/sd0/`](evidence/sustainable-development/sd0/).
 - [ ] **G1:** each capability has a real executor path and cannot succeed from a stub or caller-supplied evidence-shaped field.
 - [ ] **G2:** `RunCoordinator` is a compatibility lifecycle facade; registry/pack policy drives extensibility.
 - [ ] **G3:** storage/recovery, clients, packages, and CI support unattended, diagnosable operation.

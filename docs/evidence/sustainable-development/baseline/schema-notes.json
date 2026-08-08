@@ -1,0 +1,27 @@
+{
+  "schema_source": "src/product_factory/persistence/database.py SCHEMA_SQL + migrate()/_ensure_column",
+  "versioned_migrations": false,
+  "schema_migrations_table": false,
+  "tables_in_SCHEMA_SQL": [
+    "runs",
+    "tasks",
+    "worker_leases",
+    "task_dependencies",
+    "model_invocations",
+    "tool_calls",
+    "artifacts",
+    "artifact_instances",
+    "findings",
+    "validator_results",
+    "approvals",
+    "model_catalog_cache",
+    "evaluation_runs",
+    "events"
+  ],
+  "unused_approvals_table": true,
+  "notes": [
+    "No schema_migrations ledger; migrate() runs CREATE IF NOT EXISTS + additive _ensure_column.",
+    "approvals table exists in SCHEMA_SQL but has no Database methods / runtime authority.",
+    "EvalStore adds evaluation_* tables separately."
+  ]
+}

@@ -1,0 +1,105 @@
+[
+  {
+    "id": "change_intake",
+    "version": "1.0.0",
+    "accepted_handoff_schemas": [],
+    "accepted_handoff_states": [],
+    "authority": "read_only"
+  },
+  {
+    "id": "deployment_execution",
+    "version": "1.0.0",
+    "accepted_handoff_schemas": [
+      "release_plan.v1"
+    ],
+    "accepted_handoff_states": [
+      "approved"
+    ],
+    "authority": "external_write"
+  },
+  {
+    "id": "feasibility_discovery",
+    "version": "1.0.0",
+    "accepted_handoff_schemas": [],
+    "accepted_handoff_states": [],
+    "authority": "read_only"
+  },
+  {
+    "id": "incident_triage",
+    "version": "1.0.0",
+    "accepted_handoff_schemas": [],
+    "accepted_handoff_states": [],
+    "authority": "external_read"
+  },
+  {
+    "id": "quality_gate",
+    "version": "2.0.0",
+    "accepted_handoff_schemas": [
+      "change_set.v1",
+      "technical_plan.document.v1",
+      "technical_plan.document.v2",
+      "validation_evidence.v1"
+    ],
+    "accepted_handoff_states": [
+      "approved",
+      "evidence_complete"
+    ],
+    "authority": "read_only"
+  },
+  {
+    "id": "release_readiness",
+    "version": "1.0.0",
+    "accepted_handoff_schemas": [],
+    "accepted_handoff_states": [],
+    "authority": "external_read"
+  },
+  {
+    "id": "repository_change",
+    "version": "2.0.0",
+    "accepted_handoff_schemas": [
+      "technical_plan.document.v1",
+      "change_brief.v1",
+      "technical_plan.document.v2"
+    ],
+    "accepted_handoff_states": [
+      "approved"
+    ],
+    "authority": "isolated_write"
+  },
+  {
+    "id": "repository_investigation",
+    "version": "2.0.0",
+    "accepted_handoff_schemas": [
+      "change_brief.v1",
+      "feasibility_dossier.v1"
+    ],
+    "accepted_handoff_states": [],
+    "authority": "read_only"
+  },
+  {
+    "id": "service_health_review",
+    "version": "1.0.0",
+    "accepted_handoff_schemas": [],
+    "accepted_handoff_states": [],
+    "authority": "external_read"
+  },
+  {
+    "id": "technical_plan",
+    "version": "2.0.0",
+    "accepted_handoff_schemas": [
+      "change_brief.v1",
+      "evidence_report.document.v2",
+      "feasibility_dossier.v1",
+      "evidence_report.document.v1"
+    ],
+    "accepted_handoff_states": [],
+    "authority": "external_read"
+  },
+  {
+    "id": "technical_spike",
+    "version": "1.0.0",
+    "accepted_handoff_schemas": [],
+    "accepted_handoff_states": [],
+    "authority": "isolated_write"
+  }
+]

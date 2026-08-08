@@ -1,0 +1,7 @@
+{
+  "product_factory": "0.1.0",
+  "requires_python": ">=3.13,<3.14",
+  "dashboard": "0.1.0",
+  "opencode_plugin": "0.1.0",
+  "api_fastapi_version_field": "1.0.0"
+}
