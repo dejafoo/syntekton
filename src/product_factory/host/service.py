@@ -99,6 +99,9 @@ class HostService:
             data_dir=data_dir,
             use_deterministic_planner=self.use_deterministic_planner,
         )
+        # SR2: command facade is constructed with the application graph; Host
+        # mutations still go through coord for API stability this cut.
+        self.commands = self.coord.commands
         self.pf_root = self.coord.pf_root
         self.query = ObservabilityQueryService(self.coord.db, data_dir=self.pf_root)
         self.supervisor = WorkerSupervisor(

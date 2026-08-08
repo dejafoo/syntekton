@@ -1,7 +1,8 @@
 # Sustainable development program
 
-**Status:** `[~]` — Baseline + SD0–SD5 + **G3** closed; **SD6 hermetic foundation** on `sd/sd6-evaluation` (**G4 operational deferred**); **SD7/SD8 scaffolding** on `sd/sd7-sd8-simplify` (SD8 baselines only; AMD tuning deferred).  
-**Source:** [Sustainable-development handover](handover_sustainable_development.md).  
+**Status:** `[~]` — Baseline + SD0–SD5 + **G3 hermetic platform** closed; **SD6 hermetic foundation** on `sd/sd6-evaluation` (**G4 operational deferred**); **SD7/SD8 scaffolding** on `sd/sd7-sd8-simplify` (SD8 baselines only; AMD tuning deferred).  
+**Evidence honesty (SR5):** G3 proves hermetic platform legs (durability / protocol / CI foundations). It does **not** claim Playwright browser coverage, AMD operational proof, SBOM automation, or required live Docker/backup drills. Those remain open under remediation package SR5/SR6 — see [`docs/evidence/sustainable-remediation/sr5/`](evidence/sustainable-remediation/sr5/).  
+**Source:** [Sustainable-development handover](handover_sustainable_development.md) (**historical**).  
 **Scope:** make the existing single-user, private-network, SQLite-based product supportable and honestly executable. This program does not add workflow packs, connector authority, deployment targets, multi-tenancy, distributed scheduling, a replacement CLI, or a backend-for-frontend.
 
 ## Tracker semantics
@@ -110,7 +111,10 @@ bash scripts/package_smoke.sh
 uv build
 ```
 
-G0–G3 also require their targeted security, migration, package, restart, and browser suites. G4 requires real AMD scorecards and an external-suite subset.
+G0–G3 require their targeted hermetic security, migration, package, and
+restart-oriented unit suites. **Browser (Playwright) suites are not part of
+G3 proof** — they remain deferred to SR5.A. G4 requires real AMD scorecards
+and an external-suite subset (still deferred).
 
 SD5 foundations evidence: [`docs/evidence/sustainable-development/sd5/`](evidence/sustainable-development/sd5/).
 ## Common PR contract

@@ -45,7 +45,23 @@ describe("dashboard API compatibility helpers", () => {
     expect(message.toLowerCase()).not.toMatch(/bearer/);
     expect(message.toLowerCase()).not.toMatch(/localstorage/);
     expect(isUnsupportedRemoteDashboard({
+      remote_mode: true,
       dashboard: { remote_browser: "unsupported", deployment_support: "loopback_monitor_only" },
     })).toBe(true);
+  });
+
+  it("treats advertised loopback policy alone as supported, not an active remote failure", () => {
+    expect(isUnsupportedRemoteDashboard({
+      remote_mode: false,
+      dashboard: { remote_browser: "unsupported", deployment_support: "loopback_monitor_only" },
+    })).toBe(false);
+    expect(unsupportedRemoteDashboardMessage({
+      remote_mode: false,
+      dashboard: {
+        remote_browser: "unsupported",
+        deployment_support: "loopback_monitor_only",
+        notes: "Dashboard is loopback/monitor-only.",
+      },
+    })).toMatch(/loopback\/monitor-only/);
   });
 });

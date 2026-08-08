@@ -20,8 +20,10 @@
 ## Deferred / not claimed
 
 - Host OpenAPI / generated-client drift: **SD4** (no canonical API snapshots yet).
-- Playwright browser suite: later PR-gate expansion.
-- Live Docker restart / backup / worker drain: soft-skip stubs only; SD3 owns durable drain proof.
+- Playwright browser suite: later PR-gate expansion (**SR5.A**; not a G3 claim).
+- Live Docker restart / backup / worker drain: **optional** live jobs (gated by
+  `FORCE_SCHEDULED` / `*_INTEGRATION`); hermetic backup remains the required
+  scheduled check. Soft-pass inside default `verify.sh` removed in SR5 first slice.
 - Image digest pinning for release: documented; Dockerfile still uses tag `python3.13-bookworm-slim` until release provenance lands.
 - Full SBOM/provenance automation: process below until release tooling exists.
 - G1 tip format/lint debt in `RunCoordinator` unused imports and long-line wraps in SD1-owned modules: quarantined in `pyproject.toml` (`ruff`/`basedpyright` excludes) so SD5 can expand CI without rewriting those owners. SD2 should clear the quarantine when cleaning the façade.

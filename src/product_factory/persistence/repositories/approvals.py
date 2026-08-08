@@ -37,7 +37,7 @@ class ApprovalRepository(AggregateRepository):
             f"UPDATE action_approvals SET {assignments} WHERE approval_id = ? AND status = ?",
             (*fields.values(), approval_id, expected_status),
         )
-        self._conn.commit()
+        self._commit()
         return cur.rowcount == 1
 
     @staticmethod
@@ -76,4 +76,4 @@ class ApprovalRepository(AggregateRepository):
                 json.dumps(approval.get("reconciliation") or {}, sort_keys=True, default=str),
             ),
         )
-        self._conn.commit()
+        self._commit()

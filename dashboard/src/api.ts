@@ -92,16 +92,25 @@ export async function api<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-/**
- * SD4.D — browser failure copy when the operator tries to treat an authenticated
- * remote control plane as a public dashboard. The UI never stores bearer tokens.
- */
-export function unsupportedRemoteDashboardMessage(meta?: {
-  dashboard?: { remote_browser?: string; deployment_support?: string };
+/** Service metadata from `/api/v1/meta` (and v2 equivalent). */
+export interface ServiceMeta {
   remote_mode?: boolean;
-}): string {
-  const remoteBrowser = meta?.dashboard?.remote_browser;
-  if (remoteBrowser === "unsupported" || meta?.remote_mode) {
+  dashboard?: {
+    remote_browser?: string;
+    deployment_support?: string;
+    mutations?: boolean;
+    bearer_token_storage?: boolean;
+    notes?: string;
+  };
+}
+
+/**
+ * SD4.D / SR5.A — browser failure copy when the operator tries to treat an
+ * authenticated remote control plane as a public dashboard. The UI never
+ * stores bearer tokens.
+ */
+export function unsupportedRemoteDashboardMessage(meta?: ServiceMeta): string {
+  if (isUnsupportedRemoteDashboard(meta)) {
     return (
       "This dashboard is loopback/monitor-only. A remote control token does not " +
       "make the browser UI a public remote surface. Use an operator-managed " +
@@ -109,20 +118,24 @@ export function unsupportedRemoteDashboardMessage(meta?: {
     );
   }
   return (
+    meta?.dashboard?.notes?.trim() ||
     "Dashboard deployment support is loopback_monitor_only. Mutations stay on " +
-    "the CLI/host application service."
+      "the CLI/host application service."
   );
 }
 
-/** True when meta advertises an unsupported authenticated remote browser. */
-export function isUnsupportedRemoteDashboard(meta?: {
-  dashboard?: { remote_browser?: string; deployment_support?: string };
-  remote_mode?: boolean;
-}): boolean {
-  return (
-    meta?.dashboard?.remote_browser === "unsupported" ||
-    meta?.dashboard?.deployment_support === "loopback_monitor_only"
-  );
+/**
+ * True when the observe service is running with remote mode enabled.
+ * Advertising `remote_browser: unsupported` alone is policy, not an active
+ * unsupported configuration — supported loopback always carries that marker.
+ */
+export function isUnsupportedRemoteDashboard(meta?: ServiceMeta): boolean {
+  return meta?.remote_mode === true;
+}
+
+/** Fetch advertised service / dashboard bounds at UI startup. */
+export function fetchServiceMeta(): Promise<ServiceMeta> {
+  return api<ServiceMeta>("/meta");
 }
 
 export function eventItems(value: { items?: StreamEvent[] } | StreamEvent[]): StreamEvent[] {

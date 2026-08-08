@@ -2,6 +2,11 @@
 
 Local-first, SQLite-backed observability for Product Factory runs. The CLI writes durable events while orchestrating; a separate observer process serves REST and cursor-resumable SSE.
 
+> **Evidence level (SR5):** API and dashboard unit coverage are hermetic.
+> Playwright browser guarantees (live SSE latency, capture policy UI, remote
+> unsupported state in a real browser) are **not verified**. See
+> [`docs/evidence/sustainable-remediation/sr5/`](evidence/sustainable-remediation/sr5/).
+
 Operator-facing policy, route, capture, and recovery guidance lives in
 [operator-guide.md](operator-guide.md).
 
@@ -70,7 +75,7 @@ Domain events map to OpenInference span kinds (`AGENT`, `LLM`, `TOOL`, …). The
 ## Dashboard consumer guidance
 
 1. List runs via `GET /api/v1/runs`; open detail via `GET /api/v1/runs/{id}`.
-2. Catch up with `GET /api/v1/runs/{id}/events?after_seq=…`, then subscribe on WS/SSE with the same cursor.
+2. Catch up with `GET /api/v1/runs/{id}/events?after_seq=…`, then subscribe on SSE with the same cursor.
 3. Use projection endpoints (`tasks`, `model-invocations`, `tool-calls`, `artifacts`, `prompts`) for list/detail UIs — do not rebuild them by replaying all events.
 4. Task projections include additive RF6 fields: `effective_policy`, `route_class`,
    `fallback_*`, `stack_profile_digest`, `legacy_policy`, and `next_action`.

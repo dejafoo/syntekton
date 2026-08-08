@@ -150,9 +150,7 @@ class MeasurementSession:
                 for stage, stats in self.stats_by_stage().items()
             },
             "glossary": MEASUREMENT_GLOSSARY,
-            "honesty": (
-                "Baselines recorded; tuning deferred pending G4 operational proof"
-            ),
+            "honesty": ("Baselines recorded; tuning deferred pending G4 operational proof"),
         }
 
 

@@ -30,8 +30,12 @@ def test_tool_schemas_match_small_tool_set() -> None:
     assert "pf_materialize" in names
     assert "pf_materialize_all" in names
     submit = next(tool for tool in tool_schemas() if tool["name"] == "pf_submit")
-    assert "technical_spike" in submit["inputSchema"]["properties"]["workflow"]["description"]
-    assert "release_readiness" in submit["inputSchema"]["properties"]["workflow"]["description"]
+    workflow = submit["inputSchema"]["properties"]["workflow"]
+    assert "enum" in workflow
+    assert "technical_spike" in workflow["enum"]
+    assert "release_readiness" in workflow["enum"]
+    assert "deployment_execution" in workflow["enum"]
+    assert "code_change" in workflow["enum"]  # compatibility alias
 
 
 def test_resolve_mcp_config_root_falls_back_to_package(tmp_path, monkeypatch) -> None:

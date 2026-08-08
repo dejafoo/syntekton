@@ -9,6 +9,7 @@ from product_factory.workflows.inputs import (
 )
 from product_factory.workflows.registry import (
     canonical_workflow_id,
+    list_accepted_workflow_ids,
     list_workflow_packs,
     resolve_workflow_pack,
 )
@@ -16,6 +17,7 @@ from product_factory.workflows.registry import (
 __all__ = [
     "WorkflowPack",
     "canonical_workflow_id",
+    "list_accepted_workflow_ids",
     "list_workflow_packs",
     "parse_pack_input_option",
     "persist_pack_input",

@@ -45,10 +45,12 @@ class SqliteActor:
 
     Transaction policy
     ------------------
-    - Use ``immediate()`` for multi-statement mutations (run/task/event/budget/
-      lease transitions). Rollback on exception.
+    - Use ``immediate()`` / ``UnitOfWork`` for multi-statement mutations
+      (run/task/event/budget/lease transitions). Rollback on exception.
+    - Repository writes call ``commit_if_autonomous()`` so they defer commit
+      when an outer unit of work owns the transaction.
     - Single-statement writes may use ``run()`` which holds the actor lock;
-      callers commit explicitly after successful mutation.
+      callers commit via ``commit_if_autonomous()`` after successful mutation.
     - Lock/retry: SQLite busy_timeout=5000; treat ``sqlite3.OperationalError``
       ("database is locked") as retryable at the service boundary when not
       already inside an immediate transaction.
@@ -59,6 +61,7 @@ class SqliteActor:
         self._lock = threading.RLock()
         self._conn = connect(self.db_path, check_same_thread=False)
         self._closed = False
+        self._tx_depth = 0
         if migrate:
             from product_factory.persistence.migrations import apply_migrations
 
@@ -70,6 +73,11 @@ class SqliteActor:
         if self._closed:
             raise SqliteConnectionError("SqliteActor connection is closed")
         return self._conn
+
+    @property
+    def in_transaction(self) -> bool:
+        """True while an ``immediate()`` / unit-of-work transaction is open."""
+        return self._tx_depth > 0
 
     def close(self) -> None:
         with self._lock:
@@ -84,6 +92,11 @@ class SqliteActor:
 
         return self.run(_check)
 
+    def commit_if_autonomous(self) -> None:
+        """Commit only when no outer unit of work owns the transaction."""
+        if self._tx_depth == 0:
+            self._conn.commit()
+
     def run(self, fn: Callable[[sqlite3.Connection], T]) -> T:
         """Execute ``fn(conn)`` under the actor lock; verify FKs first."""
         with self._lock:
@@ -94,17 +107,37 @@ class SqliteActor:
 
     @contextmanager
     def immediate(self) -> Iterator[sqlite3.Connection]:
-        """BEGIN IMMEDIATE transaction under the actor lock."""
+        """BEGIN IMMEDIATE (or nested SAVEPOINT) under the actor lock.
+
+        Nested ``immediate()`` calls use SAVEPOINTs so a UnitOfWork helper can
+        participate in an already-open outer transaction without committing
+        early. Outer exit commits or rolls back the full unit of work.
+        """
         with self._lock:
             if self._closed:
                 raise SqliteConnectionError("SqliteActor connection is closed")
             ensure_foreign_keys(self._conn)
-            self._conn.execute("BEGIN IMMEDIATE")
+            outer = self._tx_depth == 0
+            savepoint = f"uow_{self._tx_depth}"
+            if outer:
+                self._conn.execute("BEGIN IMMEDIATE")
+            else:
+                self._conn.execute(f"SAVEPOINT {savepoint}")
+            self._tx_depth += 1
             try:
                 yield self._conn
-                self._conn.commit()
+                self._tx_depth -= 1
+                if outer:
+                    self._conn.commit()
+                else:
+                    self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
             except Exception:
-                self._conn.rollback()
+                self._tx_depth -= 1
+                if outer:
+                    self._conn.rollback()
+                else:
+                    self._conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    self._conn.execute(f"RELEASE SAVEPOINT {savepoint}")
                 raise
 
     def thread_local_connection(self) -> sqlite3.Connection:

@@ -14,6 +14,9 @@ from pydantic import BaseModel, Field
 from product_factory.evaluation.cases import (
     SD6_CORPUS_CATEGORIES,
     SD6_FOUNDATION_CASE_IDS,
+    SR6_STABILIZATION_CASE_IDS,
+    SR6_STABILIZATION_CORPUS_ID,
+    SR6_STABILIZATION_SEED_COUNT,
     CorpusCategory,
     EvalCase,
 )
@@ -55,7 +58,7 @@ class CorpusSnapshot(BaseModel):
 
 
 class Sd6CorpusCatalog(BaseModel):
-    """SD6 foundation corpus coverage report."""
+    """SD6 foundation / SR6 stabilization corpus coverage report."""
 
     corpus_id: str
     required_case_ids: list[str]
@@ -64,6 +67,10 @@ class Sd6CorpusCatalog(BaseModel):
     category_counts: dict[str, int]
     complete: bool
     cases: list[EvalCase] = Field(default_factory=list)
+    seed_count: int = 1
+    evidence_level: str = "hermetic"
+    may_promote: bool = False
+    claim: str = ""
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -141,6 +148,44 @@ def build_sd6_corpus_catalog(
         category_counts=counts,
         complete=complete,
         cases=[by_id[cid] for cid in present],
+        seed_count=1,
+        evidence_level="hermetic",
+        may_promote=False,
+        claim="Hermetic foundation/stabilization corpus; not AMD operational proof.",
+    )
+
+
+def build_sr6_stabilization_catalog(
+    *,
+    project_root: Path,
+    cases_dir: Path | None = None,
+) -> Sd6CorpusCatalog:
+    """SR6.A twelve-case, one-seed stabilization catalog (reuses SD6 foundation cases)."""
+    catalog = build_sd6_corpus_catalog(
+        project_root=project_root,
+        cases_dir=cases_dir,
+        corpus_id=SR6_STABILIZATION_CORPUS_ID,
+    )
+    # Keep required ids aligned with the SR6 alias even if foundation grows later.
+    required = list(SR6_STABILIZATION_CASE_IDS)
+    by_id = {c.id: c for c in catalog.cases}
+    present = [cid for cid in required if cid in by_id]
+    missing = [cid for cid in required if cid not in by_id]
+    return catalog.model_copy(
+        update={
+            "corpus_id": SR6_STABILIZATION_CORPUS_ID,
+            "required_case_ids": required,
+            "present_case_ids": present,
+            "missing_case_ids": missing,
+            "complete": not missing and catalog.complete,
+            "seed_count": SR6_STABILIZATION_SEED_COUNT,
+            "evidence_level": "hermetic",
+            "may_promote": False,
+            "claim": (
+                "SR6.A hermetic stabilization only (one seed). "
+                "AMD operational proof deferred to SR6.B+/G5."
+            ),
+        }
     )
 
 

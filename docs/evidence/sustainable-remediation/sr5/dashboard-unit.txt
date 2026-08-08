@@ -1,0 +1,15 @@
+npm warn Unknown env config "devdir". This will stop working in the next major version of npm.
+
+> product-factory-dashboard@0.1.0 test
+> vitest run --run
+
+
+ RUN  v3.2.7 /Users/terolipponen/work/src/git/sandbox/orchestration/dashboard
+
+ ✓ src/api.test.ts (6 tests) 6ms
+
+ Test Files  1 passed (1)
+      Tests  6 passed (6)
+   Start at  16:29:58
+   Duration  599ms (transform 49ms, setup 0ms, collect 44ms, tests 6ms, environment 0ms, prepare 102ms)
+

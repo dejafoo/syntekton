@@ -1,12 +1,13 @@
 ---
 name: durability-state-change
-description: Safely modify Product Factory schema migrations, repositories, events, workers, artifacts, backups, recovery, retention, and budget/state transitions. Use whenever a change persists data or must survive interruption and restart.
+description: Safely modify Product Factory migrations, repositories, units of work, events, workers, artifacts, handoff or approval transitions, backups, recovery, retention, and budget/state changes. Use whenever work persists data, couples multiple records, or must survive interruption and restart.
 ---
 
 # Durability and state change
 
-Define the aggregate owner, transaction boundary, migration order, recovery
-state, and retention consequences before implementation.
+Before editing, list the authoritative records, aggregate owner, transaction
+boundary, migration order, blob ordering, recovery state, and retention
+consequences.
 
 ## Rules
 
@@ -15,10 +16,17 @@ state, and retention consequences before implementation.
   tested migration explicitly changes their meaning.
 - Keep direct database connections inside persistence. Use the aggregate
   repository/serialized actor and verify foreign keys on every connection.
-- Write state/event/budget transitions atomically or make recovery and
-  idempotency explicit. Do not derive authoritative state from JSONL/events.
+- Use one explicit unit of work for coupled run/task/event/budget, artifact/
+  lineage, handoff/consumption, and approval/action-intent transitions.
+  Repositories participating in it must not commit independently.
+- Commit authoritative state and its event together. Publish SSE only after
+  commit. Do not derive authoritative state from JSONL or event replay.
 - Write blobs through same-filesystem temporary files, verify digest/size, and
-  atomically rename. Backups require manifests, checksums, and restore checks.
+  atomically rename before recording the reference; define orphan cleanup and
+  recovery. Backups require manifests, checksums, a high-water mark, and
+  database-to-blob restore checks.
+- Record state-machine decisions in an append-only transition/audit record and
+  update current state in the same transaction.
 - Shutdown stops admissions/recovery scanning first, waits cooperatively,
   persists forced recovery if needed, and closes DB resources last.
 - Maintenance is dry-run first, backed up before material pruning, scoped to
@@ -26,7 +34,9 @@ state, and retention consequences before implementation.
 
 ## Required proof
 
-Provide migration compatibility fixtures and interruption/restart tests for the
-affected execution point. Test transaction races, artifact digest failure,
-backup/restore, and dry-run versus destructive maintenance parity. State
-rollback and operator recovery in the placement note.
+Provide empty/current upgrade fixtures and fault injection before and after the
+affected commit or external boundary. Prove no duplicate action, double budget
+settlement, state/event contradiction, or successful finalization with missing
+evidence. Test races, digest failure, restart, backup/restore, and dry-run versus
+destructive maintenance parity. State rollback and operator recovery in the
+placement note.

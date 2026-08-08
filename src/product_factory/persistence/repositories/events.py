@@ -77,7 +77,7 @@ class EventRepository(AggregateRepository):
             """,
             (now, now, event.run_id),
         )
-        self._conn.commit()
+        self._commit()
         return int(cur.lastrowid or 0)
 
     def count_error_events(self, run_id: str) -> int:

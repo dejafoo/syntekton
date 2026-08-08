@@ -1,5 +1,20 @@
 # Product Factory — Architecture
 
+> **Evidence level (SR5):** This document is a **current-state draft with known
+> staleness**. Treat coordinator-centric diagrams and extension points as
+> **historical compatibility descriptions** unless a linked sustainable-
+> remediation evidence package proves otherwise.
+>
+> | Claim area | Evidence level |
+> | --- | --- |
+> | Registry/host/v2 target direction | Implemented (see SD/SR trackers) |
+> | Dashboard browser / live SSE guarantees | **Not verified** (Playwright deferred to SR5.A) |
+> | AMD local-first product thesis | **Not verified** (deferred to SR6) |
+> | Scheduled Docker/backup live drills | Optional / soft-gated — not required PR proof |
+>
+> Prefer [`docs/next-work-packages-sustainable-remediation.md`](next-work-packages-sustainable-remediation.md)
+> and package evidence under `docs/evidence/` for completion status.
+
 This document describes how Product Factory works: goals, control flow, security boundaries, persistence, and evaluation. It is intended for humans and agents working in this repository.
 
 **Post-SD4 surface (current target):** mutations go through the shared host
@@ -7,7 +22,9 @@ application service; prefer `host/v2` / `/api/v2` for new clients; durable
 authority is SQLite + trusted registries/packs; `RunCoordinator` is a thin
 lifecycle façade. Registry-backed catalogs live under
 [`docs/catalogs/`](catalogs/). Sustainable-development progress is tracked in
-[`next-work-packages-sustainable-development.md`](next-work-packages-sustainable-development.md).
+[`next-work-packages-sustainable-development.md`](next-work-packages-sustainable-development.md)
+(historical program; remediation continues in
+[`next-work-packages-sustainable-remediation.md`](next-work-packages-sustainable-remediation.md)).
 
 For package layout and “where to edit what,” see [Codebase structure](codebase-structure.md). Decision history lives in [ADRs](architecture/). Pre-PM5 hardening contracts for
 effective task policy and run-scoped artifact instances are proposed in
@@ -68,7 +85,12 @@ Separately:
                                                  └──────────────┘
 ```
 
-**Authoritative runtime:** `RunCoordinator` in `orchestration/coordinator.py`. LangGraph (`orchestration/graph.py`) provides a checkpointed *skeleton*; the coordinator owns the real plan → execute → validate → repair → compose loop used by CLI and benchmarks.
+**Authoritative runtime (compatibility surface):** `RunCoordinator` in
+`orchestration/coordinator.py` remains the hosted entry façade used by CLI and
+benchmarks. New lifecycle behavior belongs in owning services (see SR2), not in
+further coordinator growth. LangGraph (`orchestration/graph.py`) provides a
+checkpointed *skeleton*; do not treat the diagram above as the target
+dependency graph.
 
 ---
 

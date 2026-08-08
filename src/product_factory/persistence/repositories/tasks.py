@@ -127,4 +127,4 @@ class TaskRepository(AggregateRepository):
                 """,
                 (run_id, task_id, dep),
             )
-        self._conn.commit()
+        self._commit()

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verification and Release Change"
+  short_description: "Prove CI, package, browser, and release claims."
+  default_prompt: "Use $verification-and-release-change to implement and verify this test, CI, packaging, documentation, or release change."

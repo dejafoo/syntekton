@@ -35,6 +35,18 @@ fail_closed:
   mask_safety_with_aggregate: false
   allow_weaker_category: false
   allow_fallback_policy_mismatch: false
+  # Hermetic/mock/integration scorecards must never promote defaults.
+  allow_hermetic_or_mock_promotion: false
+
+# SR6.A: one-seed stabilization over the twelve-case foundation. Not promotion authority.
+stabilization:
+  corpus_id: sr6-stabilization
+  case_count: 12
+  seed_count: 1
+  may_promote: false
+  evidence_level: hermetic
+  claim: >-
+    Hermetic stabilization corpus only; AMD operational proof deferred (SR6.B+/G5).
 
 external_adapters:
   swe_atlas:

@@ -2,6 +2,11 @@
 
 The dashboard is a bundled React single-page application served by `product-factory observe serve` at `/dashboard/`. It is deliberately local, single-user, and monitor-only. Use the CLI for approval, retry, cancellation, revision, model routing, and deployment actions.
 
+> **Evidence level (SR5):** loopback/monitor-only policy is advertised in
+> `/meta` and surfaced in the UI at startup. **Playwright matrix coverage is
+> deferred** — do not treat dashboard Vitest helpers as browser integration
+> proof. See [`docs/evidence/sustainable-remediation/sr5/`](evidence/sustainable-remediation/sr5/).
+
 See [operator-guide.md](operator-guide.md) for backup/restore, legacy capture,
 local/cloud labels, and the blocked-task walkthrough.
 
@@ -49,3 +54,7 @@ A remote control token authenticates the **host/HTTP/MCP control plane**. It
 does **not** make the browser UI a public remote surface. Laptop viewing of a
 remote host is an operator-managed SSH (or private) tunnel to loopback. The UI
 never stores bearer tokens and never issues mutations.
+
+At startup the dashboard fetches `/api/v1/meta`. When `remote_mode` is true it
+shows the unsupported-remote banner; otherwise it shows the advertised
+loopback/monitor-only guidance from `dashboard.notes`.

@@ -46,7 +46,7 @@ class RunRepository(AggregateRepository):
                 now,
             ),
         )
-        self._conn.commit()
+        self._commit()
 
     def get_model_catalog(self) -> dict[str, Any] | None:
         row = self._conn.execute(
@@ -74,7 +74,7 @@ class RunRepository(AggregateRepository):
                 """,
                 (run_id, task_id, json.dumps(result, default=str)),
             )
-        self._conn.commit()
+        self._commit()
 
     def list_invocations(self, run_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
@@ -111,7 +111,7 @@ class RunRepository(AggregateRepository):
             """,
             (1 if requested else 0, now, run_id),
         )
-        self._conn.commit()
+        self._commit()
 
     def list_tool_calls(self, run_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
@@ -130,7 +130,7 @@ class RunRepository(AggregateRepository):
             """,
             (json.dumps(payload), datetime.now(UTC).isoformat()),
         )
-        self._conn.commit()
+        self._commit()
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         row = self._conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
@@ -185,7 +185,7 @@ class RunRepository(AggregateRepository):
                 now,
             ),
         )
-        self._conn.commit()
+        self._commit()
 
     @synchronized
     def upsert_run(
@@ -254,4 +254,4 @@ class RunRepository(AggregateRepository):
                     budget_json,
                 ),
             )
-        self._conn.commit()
+        self._commit()

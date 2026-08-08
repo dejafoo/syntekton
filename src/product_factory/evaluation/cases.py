@@ -42,6 +42,11 @@ SD6_FOUNDATION_CASE_IDS: tuple[str, ...] = (
     "sd6_ops_slo_breach",
 )
 
+# SR6.A reuses the SD6 twelve-case foundation as the hermetic stabilization corpus.
+SR6_STABILIZATION_CORPUS_ID = "sr6-stabilization"
+SR6_STABILIZATION_SEED_COUNT = 1
+SR6_STABILIZATION_CASE_IDS: tuple[str, ...] = SD6_FOUNDATION_CASE_IDS
+
 
 class CaseBudget(BaseModel):
     max_cost_usd: Decimal = Field(default=Decimal("1.00"))

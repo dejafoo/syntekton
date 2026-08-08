@@ -1,4 +1,4 @@
 interface:
   display_name: "Architectural Review"
-  short_description: "Review a change against repository guardrails."
+  short_description: "Review boundaries, authority, and completion evidence."
   default_prompt: "Use $architectural-review to review this change for architectural guardrail violations."

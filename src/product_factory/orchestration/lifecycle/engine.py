@@ -14,13 +14,14 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from product_factory.application.composition_root import (
+    ApplicationServices,
+    build_application,
+)
 from product_factory.config.loader import AppConfig
 from product_factory.connectors.broker import EVENT_INVOKED as CONNECTOR_EVENT_INVOKED
-from product_factory.connectors.broker import ConnectorBroker
-from product_factory.connectors.defaults import default_connector_registry
 from product_factory.connectors.source_ledger import SourceLedger
 from product_factory.connectors.tavily import CONNECTOR_ID as TAVILY_CONNECTOR_ID
-from product_factory.connectors.tavily import TOOL_WEB_SEARCH
 from product_factory.context.assembler import (
     assemble_context,
     list_repository_paths,
@@ -43,16 +44,17 @@ from product_factory.domain.errors import (
 from product_factory.domain.findings import Finding, ValidatorResult
 from product_factory.domain.plans import CompiledPlan, PlannerOutput
 from product_factory.domain.runs import RunManifest, RunRequest
-from product_factory.domain.tasks import AcceptanceCriterion, TaskResult, TaskSpec
+from product_factory.domain.tasks import (
+    AcceptanceCriterion,
+    TaskResult,
+    TaskSpec,
+    is_terminal_task_status,
+    requires_repair_or_terminal_resolution,
+    satisfies_dependency,
+)
 from product_factory.domain.tools import CapabilityGrant
 from product_factory.domain.usage import UsageMetrics
-from product_factory.executors import TaskExecutionRequest, execute_task
-from product_factory.executors.research_agent import (
-    EVIDENCE_BUILD_TOOL_NAMES as _EVIDENCE_BUILD_TOOL_NAMES,
-)
-from product_factory.executors.research_agent import (
-    SOURCE_READ_TOOL_NAMES as _SOURCE_READ_TOOL_NAMES,
-)
+from product_factory.executors import execute_task
 from product_factory.gateway.base import ModelGateway
 from product_factory.gateway.instrumented import InstrumentedModelGateway
 from product_factory.gateway.mock import MockGateway
@@ -61,17 +63,11 @@ from product_factory.observability.events import EventLog
 from product_factory.observability.otel import maybe_create_otel_bridge
 from product_factory.observability.recorder import TelemetryRecorder
 from product_factory.orchestration.budget_ledger import BudgetLedger, warn_unused_profile_set
-from product_factory.orchestration.composition.service import CompositionService
 from product_factory.orchestration.concurrency import run_wave
 from product_factory.orchestration.effective_policy import (
     EFFECTIVE_TASK_POLICY_SCHEMA,
-    EffectiveTaskPolicy,
-    compute_allowed_tool_names,
-    grantable_connector_names_for_task,
-    resolve_effective_task_policy,
 )
 from product_factory.orchestration.execution_context import RunExecutionContext
-from product_factory.orchestration.finalization.run_finalizer import RunFinalizer
 from product_factory.orchestration.repair import (
     create_repair_tasks,
     patch_fingerprint,
@@ -79,25 +75,20 @@ from product_factory.orchestration.repair import (
     update_no_progress,
 )
 from product_factory.orchestration.skill_grants import enforce_skill_grants
+from product_factory.orchestration.task_preparation import BlockedPreparation
 from product_factory.orchestration.validation_repair.service import (
-    ValidationRepairService,
     changed_files_from_patch,
     resolve_validation_command_ids,
 )
-from product_factory.orchestration.worktree_lineage import WorktreeLineageService
 from product_factory.persistence.artifact_policy import ArtifactInstance
 from product_factory.persistence.artifacts import ArtifactStore
-from product_factory.persistence.database import Database
 from product_factory.planning.compiler import compile_plan
 from product_factory.planning.planner import plan_with_gateway
-from product_factory.policy.composition_gates import evaluate_composition_gates
 from product_factory.policy.domain_packs import resolve_request_domain_packs
 from product_factory.policy.policy_profiles import resolve_request_policy_profiles
 from product_factory.policy.source_policy import resolve_request_source_policy
 from product_factory.registry.capability_descriptors import (
     CAPABILITY_DESCRIPTORS,
-    agent_profile_for,
-    require_descriptor,
 )
 from product_factory.repositories.patches import (
     apply_patch,
@@ -106,15 +97,9 @@ from product_factory.repositories.patches import (
 from product_factory.repositories.snapshot import snapshot_repository
 from product_factory.repositories.worktrees import WorktreeManager
 from product_factory.repository.stack_profile import StackProfile, discover_stack_profile
-from product_factory.scheduling.scheduler import (
-    WaveScheduler,
-    resolve_task_model_profile,
-)
 from product_factory.schemas import validate_write_payload
 from product_factory.skills.profiles import ProfileRegistry
-from product_factory.skills.registry import SkillRegistry
 from product_factory.tools.broker import ToolBroker
-from product_factory.tools.registry import default_tool_registry
 from product_factory.validation.pipeline import (
     has_blocking_failures,
     request_expects_web_citations,
@@ -268,43 +253,37 @@ class RunLifecycleEngine:
         gateway: ModelGateway,
         data_dir: Path | None = None,
         use_deterministic_planner: bool = False,
+        services: ApplicationServices | None = None,
     ) -> None:
-        self.config = config
-        self.allow_deterministic_workers = isinstance(gateway, MockGateway)
-        self.use_deterministic_planner = use_deterministic_planner or isinstance(
-            gateway, MockGateway
+        # SR2: dependency construction lives in the composition root.
+        app = services or build_application(
+            config=config,
+            gateway=gateway,
+            data_dir=data_dir,
+            use_deterministic_planner=use_deterministic_planner,
         )
-        self.pf_root = data_dir or (config.root / ".product-factory")
-        self.pf_root.mkdir(parents=True, exist_ok=True)
-        self.db = Database(self.pf_root / "data" / "product_factory.sqlite")
-        self.skills = SkillRegistry.load(config.root / "skills")
-        self.tool_registry = default_tool_registry()
-        self.connector_registry = default_connector_registry(
-            config.connectors,
-            config_root=config.root,
-            deployment_state_path=self.pf_root / "deployments" / "staging-state.json",
-        )
-        # Connector tools share the one registry so `ToolBroker.execute` resolves
-        # and trust-labels them exactly like built-in tools.
-        for definition in self.connector_registry.tool_definitions():
-            self.tool_registry.register(definition)
-        self.connector_broker = ConnectorBroker(
-            self.connector_registry,
-            config=config.connectors,
-            mock=isinstance(gateway, MockGateway),
-        )
-        # The provider adapter is immutable shared configuration. Instrumented
-        # gateways are constructed per run and live only in RunExecutionContext.
-        self._raw_gateway = (
-            gateway.inner if isinstance(gateway, InstrumentedModelGateway) else gateway
-        )
-        self.composition = CompositionService(config=config, gateway=self._raw_gateway)
-        self.validation_repair = ValidationRepairService(
-            config=config, raw_gateway=self._raw_gateway
-        )
-        self.wave_scheduler = WaveScheduler()
-        self.worktree_lineage = WorktreeLineageService()
-        self.finalizer = RunFinalizer()
+        self._services = app
+        self.config = app.config
+        self.allow_deterministic_workers = app.allow_deterministic_workers
+        self.use_deterministic_planner = app.use_deterministic_planner
+        self.pf_root = app.pf_root
+        self.db = app.db
+        self.skills = app.skills
+        self.tool_registry = app.tool_registry
+        self.connector_registry = app.connector_registry
+        self.connector_broker = app.connector_broker
+        self._raw_gateway = app.raw_gateway
+        self.composition = app.composition
+        self.validation_repair = app.validation_repair
+        self.wave_scheduler = app.wave_scheduler
+        self.worktree_lineage = app.worktree_lineage
+        self.finalizer = app.finalizer
+        self.task_preparation = app.task_preparation
+        self.wave_execution = app.wave_execution
+        # Bind command facade after the engine exists (composition root builds it unbound).
+        app.lifecycle = self
+        app.commands.bind(self)
+        self.commands = app.commands
 
     def _deployment_approval_verified(
         self,
@@ -313,54 +292,20 @@ class RunLifecycleEngine:
         consumer_run_id: str,
         capability: str,
     ) -> bool:
-        """Resolve durable ActionApproval for deployment_execution (SD0.C).
+        """Wire broker flag from trust.approvals (SR1).
 
-        Pack-input booleans and mirrored digest fields are never authority.
-        Temporary on RunCoordinator until the deployment executor owns this
-        (issue: remove-coordinator-approval-verify-2026-08).
+        Ownership is ``trust.approvals.verify_deployment_action_approval``.
+        Lifecycle only sequences the broker flag; temporary until the deployment
+        executor owns consumption (issue: remove-coordinator-approval-verify-2026-08).
         """
-        if capability != "deployment_execution" or request.workflow_type != "deployment_execution":
-            return False
-        binding = request.pack_input.get("approval_binding")
-        if not isinstance(binding, dict):
-            binding = {}
-        approval_id = str(
-            binding.get("approval_id") or request.pack_input.get("approval_id") or ""
-        ).strip()
-        if not approval_id:
-            return False
-        from product_factory.trust.approvals import (
-            ApprovalError,
-            ApprovalService,
-            deployment_action_fingerprint,
-        )
+        from product_factory.trust.approvals import verify_deployment_action_approval
 
-        release_handoff_id = str(
-            binding.get("release_handoff_id") or request.pack_input.get("release_handoff_id") or ""
+        return verify_deployment_action_approval(
+            self.db,
+            request,
+            consumer_run_id=consumer_run_id,
+            capability=capability,
         )
-        release_handoff_digest = str(
-            binding.get("release_handoff_digest")
-            or request.pack_input.get("release_handoff_digest")
-            or ""
-        )
-        try:
-            expected = deployment_action_fingerprint(
-                release_handoff_id=release_handoff_id,
-                release_handoff_digest=release_handoff_digest,
-                release_plan_digest=str(request.pack_input.get("release_plan_digest") or ""),
-                artifact_digest=str(request.pack_input.get("artifact_digest") or ""),
-                target_id=str(request.pack_input.get("target_id") or ""),
-                change_window=request.pack_input.get("change_window"),
-                idempotency_key=str(request.pack_input.get("idempotency_key") or ""),
-            )
-            ApprovalService(self.db).consume_for_execution(
-                approval_id,
-                expected_fingerprint=expected,
-                consumer_run_id=consumer_run_id,
-            )
-        except ApprovalError:
-            return False
-        return True
 
     def _build_execution_context(
         self,
@@ -909,7 +854,7 @@ class RunLifecycleEngine:
                         active_operation=None,
                     )
             task_status[spec.id] = status
-            if status in {"success", "failed", "skipped"} and row.get("result_json"):
+            if is_terminal_task_status(status) and row.get("result_json"):
                 try:
                     result = TaskResult.model_validate(json.loads(row["result_json"]))
                 except Exception:
@@ -962,7 +907,7 @@ class RunLifecycleEngine:
             summary="Run resumed",
             payload={
                 "completed_tasks": sorted(
-                    tid for tid, st in task_status.items() if st in {"success", "skipped"}
+                    tid for tid, st in task_status.items() if satisfies_dependency(st)
                 ),
                 "pending_tasks": sorted(tid for tid, st in task_status.items() if st == "pending"),
             },
@@ -1299,19 +1244,21 @@ class RunLifecycleEngine:
                 raise BudgetExhaustedError("Run budget exhausted")
             ledger.check_wall_clock()
 
-            ready = self.wave_scheduler.select_ready(
+            ready = self.wave_execution.select_ready(
                 live_plan, task_status, max_parallel=request.budget.max_parallel_tasks
             )
             if not ready:
-                if all(task_status[t] in {"success", "failed", "skipped"} for t in live_plan.tasks):
+                if all(is_terminal_task_status(task_status[t]) for t in live_plan.tasks):
                     break
-                # deadlock
+                # deadlock — diagnose terminal unsuccessful deps instead of
+                # reporting an opaque unsatisfiable-scheduler failure when
+                # dependents are blocked on partial/failed/blocked work.
                 pending = [t for t, s in task_status.items() if s == "pending"]
                 if pending:
                     failed = [
                         f"{result.task_id}: {result.summary}"
                         for result in results
-                        if result.status not in {"success", "partial"}
+                        if requires_repair_or_terminal_resolution(result.status)
                     ]
                     if failed:
                         raise RuntimeFailureError("Dependency failed; " + "; ".join(failed))
@@ -1353,7 +1300,7 @@ class RunLifecycleEngine:
                     }
                     for prior in pre_wave_results
                     if prior.task_id
-                    in self.wave_scheduler.transitive_dependencies(live_plan, task.id)
+                    in self.wave_execution.transitive_dependencies(live_plan, task.id)
                 ]
                 for task in ready
             }
@@ -1417,6 +1364,10 @@ class RunLifecycleEngine:
                 task_status[task.id] = "success" if result.status == "success" else result.status
                 results.append(result)
                 findings.extend(result.findings)
+                if result.validator_results:
+                    collected_validator_results.extend(
+                        [v.model_dump(mode="json") for v in result.validator_results]
+                    )
                 recorder.emit(
                     run_id=run_id,
                     event_type="task.completed" if result.status == "success" else "task.failed",
@@ -2171,35 +2122,10 @@ class RunLifecycleEngine:
         request: RunRequest,
         allowed: set[str],
     ) -> tuple[list[str] | None, str | None]:
-        if task.capability == "interface_analysis":
-            interface_tools = {
-                "parse_contract",
-                "contract_inventory",
-                "diff_contracts",
-                "map_capabilities",
-                "generate_synthetic_fixture",
-                "run_contract_simulation",
-            }
-            return (
-                sorted(name for name in allowed if name in interface_tools),
-                "interface_agent_loop_tools",
-            )
-        if task.capability not in _RESEARCH_LOOP_CAPABILITIES:
-            return None, None
-        loop_tool_names = (
-            {
-                TOOL_WEB_SEARCH,
-                "read_file",
-                "list_files",
-                "search_text",
-            }
-            | _SOURCE_READ_TOOL_NAMES
-            | _EVIDENCE_BUILD_TOOL_NAMES
+        """Compat delegate — ownership is TaskPreparationService (SR2)."""
+        return self.task_preparation.research_prompt_tool_names(
+            task=task, request=request, allowed=allowed
         )
-        prompt = sorted(name for name in allowed if name in loop_tool_names)
-        if set(prompt) == allowed:
-            return None, None
-        return prompt, "research_agent_loop_tools"
 
     def _execute_task(
         self,
@@ -2225,21 +2151,6 @@ class RunLifecycleEngine:
         land_map = land_map or ArtifactLandMap()
         validation_evidence_refs = validation_evidence_refs or []
         validator_results = validator_results or []
-        profile = resolve_task_model_profile(task, metadata=request.metadata)
-        agent_profile = agent_profile_for(task.capability)
-
-        skill_policy: dict[str, Any] = {}
-        if is_registered_workflow(request.workflow_type):
-            skill_policy = dict(resolve_workflow_pack(request.workflow_type).skill_policy)
-        skills_disabled = request.metadata.get("disable_skills") == "true"
-        if skills_disabled:
-            skills = []
-        else:
-            skills = self.skills.match(
-                capability=task.capability,
-                required_skills=task.required_skills,
-                skill_policy=skill_policy,
-            )
 
         existing_policy_data: dict[str, Any] | None = None
         existing_row = self.db.get_task(run_id, task.id)
@@ -2257,124 +2168,39 @@ class RunLifecycleEngine:
             existing_policy=existing_policy_data,
         )
 
-        profile_cfg = self.config.models.profiles.get(profile)
-        route_class = profile_cfg.route_class if profile_cfg is not None else "cloud"
-        fallback_cfg = profile_cfg.cloud_fallback if profile_cfg is not None else None
-        fallback_model_profile = (
-            fallback_cfg.profile if fallback_cfg is not None and fallback_cfg.enabled else None
+        prepared = self.task_preparation.prepare_effective_policy(
+            run_id=run_id,
+            request=request,
+            task=task,
+            existing_policy_data=existing_policy_data,
+            profile_digests=profile_digests,
+            stack_digest=stack_digest,
+            stack_sha=stack_sha,
+            stack_version=stack_version,
         )
-        fallback_eligible = bool(fallback_cfg is not None and fallback_cfg.enabled)
-
-        pack_id = None
-        pack_version = None
-        if is_registered_workflow(request.workflow_type):
-            workflow_pack = resolve_workflow_pack(request.workflow_type)
-            pack_id = workflow_pack.id
-            pack_version = getattr(workflow_pack, "version", None)
-
-        if existing_policy_data:
-            effective_policy = EffectiveTaskPolicy.model_validate(existing_policy_data)
-        else:
-            connector_tool_names = self.connector_registry.tool_names()
-            grantable = grantable_connector_names_for_task(
-                task=task,
-                grantable_fn=self.connector_broker.grantable_tool_names,
-            )
-            # Precompute allowed set so research prompt reduction can be recorded.
-            allowed_preview, _, _ = compute_allowed_tool_names(
-                task=task,
-                request=request,
-                tool_registry=self.tool_registry,
-                connector_tool_names=connector_tool_names,
-                grantable_connector_tools=grantable,
-                web_search_tool=TOOL_WEB_SEARCH,
-                denied_tool_names=workflow_pack.execution_policy.denied_tool_names,
-                pack_allowed_tool_classes=(workflow_pack.execution_policy.allowed_tool_classes),
-            )
-            prompt_names, reduction_reason = self._research_prompt_tool_names(
-                task=task,
-                request=request,
-                allowed=allowed_preview,
-            )
-            domain_packs = resolve_request_domain_packs(
-                request, packs_root=self.config.root / "packs"
-            )
-            policy_profiles = resolve_request_policy_profiles(
-                request, profiles_root=self.config.root / "profiles"
-            )
-            composition_gate = evaluate_composition_gates(
-                request=request,
-                domain_packs=domain_packs,
-                policy_profiles=policy_profiles,
-                granted_tool_names=allowed_preview,
-                granted_tool_classes={
-                    t.tool_class for t in self.tool_registry.list() if t.name in allowed_preview
-                },
-                skill_ids=[s.manifest.id for s in skills],
-            )
-            if not composition_gate.ok:
-                conflict_result = TaskResult(
-                    task_id=task.id,
-                    status="failed",
-                    summary="composition_conflict",
-                    validator_results=[
-                        ValidatorResult(
-                            validator_id="composition_conflict",
-                            status="fail",
-                            message="Domain/policy composition conflict detected",
-                            details={"conflicts": composition_gate.conflicts},
-                        )
-                    ],
-                    model_profile=profile,
-                )
-                self.db.upsert_task(
-                    run_id=run_id,
-                    task_id=task.id,
-                    capability=task.capability,
-                    status="failed",
-                    spec=task.model_dump(mode="json"),
-                    result=conflict_result.model_dump(mode="json"),
-                    ended_at=datetime.now(UTC).isoformat(),
-                    active_operation=None,
-                )
-                return conflict_result
-            profile_digests.update(composition_gate.profile_digests)
-            effective_policy = resolve_effective_task_policy(
+        if isinstance(prepared, BlockedPreparation):
+            conflict_result = prepared.result
+            self.db.upsert_task(
                 run_id=run_id,
-                task=task,
-                request=request,
-                tool_registry=self.tool_registry,
-                model_profile=profile,
-                agent_profile=agent_profile,
-                skill_ids=[s.manifest.id for s in skills],
-                pack_id=pack_id,
-                pack_version=pack_version,
-                connector_tool_names=connector_tool_names,
-                grantable_connector_tools=grantable,
-                web_search_tool=TOOL_WEB_SEARCH,
-                stack_profile_digest=stack_digest,
-                stack_profile_artifact_sha256=stack_sha,
-                stack_profile_schema_version=stack_version,
-                reference_pack_ids=composition_gate.reference_pack_ids,
-                profile_ids=[
-                    agent_profile,
-                    *composition_gate.policy_profile_ids,
-                ],
-                route_class=route_class,
-                fallback_model_profile=fallback_model_profile,
-                fallback_eligible=fallback_eligible,
-                validator_ids=resolve_validation_command_ids(request)
-                or list(self.config.policies.registered_commands),
-                prompt_tool_names=prompt_names,
-                prompt_reduction_reason=reduction_reason,
-                denied_tool_names=workflow_pack.execution_policy.denied_tool_names,
-                pack_allowed_tool_classes=(workflow_pack.execution_policy.allowed_tool_classes),
-                executor_mode=(
-                    workflow_pack.execution_policy.executor_mode_for(task.capability)
-                    if is_registered_workflow(request.workflow_type)
-                    else require_descriptor(task.capability).executor_mode
-                ),
+                task_id=task.id,
+                capability=task.capability,
+                status="failed",
+                spec=task.model_dump(mode="json"),
+                result=conflict_result.model_dump(mode="json"),
+                ended_at=datetime.now(UTC).isoformat(),
+                active_operation=None,
             )
+            return conflict_result
+
+        effective_policy = prepared.effective_policy
+        profile = prepared.profile
+        agent_profile = prepared.agent_profile
+        skills = prepared.skills
+        skills_disabled = prepared.skills_disabled
+        profile_digests = prepared.profile_digests
+        profile_cfg = self.config.models.profiles.get(profile)
+
+        if not prepared.reused_existing:
             validate_write_payload(
                 EFFECTIVE_TASK_POLICY_SCHEMA,
                 effective_policy.model_dump(mode="json"),
@@ -2601,8 +2427,8 @@ class RunLifecycleEngine:
             source_policy=resolve_request_source_policy(
                 request, profiles_root=self.config.root / "profiles"
             ),
-            # SD0.C temporary: remove when deployment executor owns ApprovalService
-            # consumption (issue: remove-coordinator-approval-verify-2026-08).
+            # SR1: trust.approvals owns verification; lifecycle only wires the broker flag
+            # (issue: remove-coordinator-approval-verify-2026-08).
             connector_approval_verified=self._deployment_approval_verified(
                 request, consumer_run_id=run_id, capability=task.capability
             ),
@@ -2672,21 +2498,19 @@ class RunLifecycleEngine:
         # SD1: dispatch declared work through the executor registry.
         # SD1 temporary: composition still receives coordinator compose callbacks
         # (issue: remove-coordinator-compose-callbacks-2026-08).
-        descriptor = require_descriptor(task.capability)
-        execution_request = TaskExecutionRequest(
+        # SR2: TaskPreparationService owns request assembly.
+        execution_request = self.task_preparation.assemble_execution_request(
             run_id=run_id,
             run_dir=run_dir,
             request=request,
             task=task,
             effective_policy=effective_policy,
-            descriptor=descriptor,
             agent_profile=agent_profile,
             model_profile=profile,
             broker=broker,
             artifacts=artifacts,
             gateway=gateway,
             raw_gateway=self._raw_gateway,
-            tool_registry=self.tool_registry,
             allow_deterministic_workers=self.allow_deterministic_workers,
             ctx_messages=ctx.messages,
             package_hash=ctx.package_hash,

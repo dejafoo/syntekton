@@ -1,8 +1,18 @@
 # Product Factory — Post-PM5 Sustainability and Simplification Handover
 
-**Status:** implementation handover based on a post-PM5 architecture and code
-review  
-**Review baseline:** repository state at commit `5d12283`  
+> **Historical document (SR5).** This handover records the post-PM5 review and
+> the sustainable-development program that followed. Do **not** treat its
+> baseline counts, CI inventory, or “operationally proven” vocabulary as
+> current architecture or release proof. Current remediation status lives in
+> [`next-work-packages-sustainable-remediation.md`](next-work-packages-sustainable-remediation.md);
+> package evidence is under `docs/evidence/`.
+>
+> In particular: **browser automation**, **AMD local-first product proof**, and
+> **required live scheduled drills** were open findings here and remain
+> deferred or only partially remediated unless a later evidence package says
+> otherwise.
+
+**Status:** historical implementation handover (review baseline commit `5d12283`)  
 **Audience:** humans and AI agents maintaining the orchestration kernel,
 workflow packs, skills, connectors, host integrations, observability,
 evaluation, persistence, and release process  

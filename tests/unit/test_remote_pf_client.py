@@ -275,7 +275,11 @@ def test_repositories_loader_resolves_absolute_paths(tmp_path: Path) -> None:
 def test_remote_client_host_v1_parity(remote_env, monkeypatch) -> None:
     client, _, _, _ = remote_env
     monkeypatch.setenv("PRODUCT_FACTORY_REMOTE_MODE", "true")
-    with RemotePfClient(base_url="http://test", client=_sync_asgi_client(client.app)) as remote:
+    with RemotePfClient(
+        base_url="http://test",
+        client=_sync_asgi_client(client.app),
+        protocol="v1",
+    ) as remote:
         meta = remote.meta()
         assert meta["protocol"] == HOST_PROTOCOL
         assert "sample_api" in meta["repository_ids"]
@@ -303,7 +307,11 @@ def test_remote_client_host_v1_parity(remote_env, monkeypatch) -> None:
 def test_remote_delivery_manifest_blob_and_receipt(remote_env, monkeypatch) -> None:
     client, _, _, _ = remote_env
     monkeypatch.setenv("PRODUCT_FACTORY_REMOTE_MODE", "true")
-    with RemotePfClient(base_url="http://test", client=_sync_asgi_client(client.app)) as remote:
+    with RemotePfClient(
+        base_url="http://test",
+        client=_sync_asgi_client(client.app),
+        protocol="v1",
+    ) as remote:
         submitted = remote.submit(
             request_text="Write a technical plan for health-check coverage.",
             workflow_type="technical_plan",
@@ -337,7 +345,11 @@ def test_remote_client_rejects_repository_path_locally() -> None:
         raise AssertionError("submit must reject repository_path before HTTP")
 
     with (
-        RemotePfClient(base_url="http://test", transport=httpx.MockTransport(handler)) as remote,
+        RemotePfClient(
+            base_url="http://test",
+            transport=httpx.MockTransport(handler),
+            protocol="v1",
+        ) as remote,
         pytest.raises(PfRemoteError, match="rejects repository_path"),
     ):
         remote.submit(request_text="x", repository_path="/Users/me/project")
@@ -359,7 +371,11 @@ def test_remote_client_protocol_mismatch_fails_closed() -> None:
         )
 
     with (
-        RemotePfClient(base_url="http://test", transport=httpx.MockTransport(handler)) as remote,
+        RemotePfClient(
+            base_url="http://test",
+            transport=httpx.MockTransport(handler),
+            protocol="v1",
+        ) as remote,
         pytest.raises(PfProtocolError, match="Unexpected host protocol"),
     ):
         remote.status("run-x")
@@ -370,7 +386,10 @@ def test_remote_client_missing_token_when_required(remote_env, monkeypatch) -> N
     monkeypatch.setenv("PRODUCT_FACTORY_OBSERVE_TOKEN", "secret")
     with (
         RemotePfClient(
-            base_url="http://test", token=None, client=_sync_asgi_client(client.app)
+            base_url="http://test",
+            token=None,
+            client=_sync_asgi_client(client.app),
+            protocol="v1",
         ) as remote,
         pytest.raises(PfRemoteError, match="Unauthorized"),
     ):

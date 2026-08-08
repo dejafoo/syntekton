@@ -1,4 +1,9 @@
-"""MCP tool handlers — call HostService directly; return HostResponse JSON."""
+"""MCP tool handlers — call HostService directly; return HostResponse JSON.
+
+Mutations already route through :class:`~product_factory.host.service.HostService`
+(the shared application service). Workflow ids come from the pack registry.
+host/v2 envelope translation for MCP tool results is deferred (SR4.D remainder).
+"""
 
 from __future__ import annotations
 
@@ -12,6 +17,10 @@ from product_factory.domain.runs import ArtifactOverride, RunRequest
 from product_factory.host.protocol import HostResponse
 from product_factory.host.service import HostService
 from product_factory.workflows.artifacts import ArtifactOverrideError, normalize_overrides
+from product_factory.workflows.registry import (
+    is_registered_workflow,
+    list_accepted_workflow_ids,
+)
 
 TOOL_NAMES = (
     "pf_submit",
@@ -26,21 +35,6 @@ TOOL_NAMES = (
     "pf_materialize_all",
 )
 
-_WORKFLOW_VALUES = {
-    "architecture",
-    "technical_plan",
-    "code_change",
-    "repository_change",
-    "repository_investigation",
-    "quality_gate",
-    "feasibility_discovery",
-    "change_intake",
-    "technical_spike",
-    "release_readiness",
-    "incident_triage",
-    "service_health_review",
-}
-
 
 def _as_json(response: HostResponse) -> dict[str, Any]:
     return response.model_dump(mode="json")
@@ -50,15 +44,21 @@ def _failure(code: str, message: str, **kwargs: Any) -> dict[str, Any]:
     return _as_json(HostResponse.failure(code=code, message=message, **kwargs))
 
 
+def _workflow_enum() -> list[str]:
+    """Pack-registry workflow ids (canonical + compatibility aliases)."""
+    return list_accepted_workflow_ids()
+
+
 def tool_schemas() -> list[dict[str, Any]]:
     """JSON Schema definitions for MCP ``tools/list``."""
+    workflows = _workflow_enum()
     return [
         {
             "name": "pf_submit",
             "description": (
                 "Submit a curated Product Factory request. Returns HostResponse "
                 "with run_id + subscription. Do not dump full chat transcripts — "
-                "pass named request text only."
+                "pass named request text only. Mutations route through HostService."
             ),
             "inputSchema": {
                 "type": "object",
@@ -70,12 +70,10 @@ def tool_schemas() -> list[dict[str, Any]]:
                     "workflow": {
                         "type": "string",
                         "description": (
-                            "Workflow pack id: change_intake, feasibility_discovery, "
-                            "repository_investigation, technical_plan, "
-                            "technical_spike, release_readiness, incident_triage, "
-                            "service_health_review, quality_gate, repository_change, "
-                            "code_change, architecture"
+                            "Workflow pack id from the pack registry "
+                            f"(canonical + aliases): {', '.join(workflows)}"
                         ),
+                        "enum": workflows,
                         "default": "code_change",
                     },
                     "repository_path": {
@@ -303,11 +301,11 @@ def pf_submit(service: HostService, arguments: dict[str, Any]) -> dict[str, Any]
         return _failure("invalid_arguments", "request_text is required")
 
     workflow = arguments.get("workflow") or "code_change"
-    if workflow not in _WORKFLOW_VALUES:
+    if not isinstance(workflow, str) or not is_registered_workflow(workflow):
         return _failure(
             "invalid_arguments",
             f"Unknown workflow {workflow!r}",
-            details={"allowed": sorted(_WORKFLOW_VALUES)},
+            details={"allowed": list_accepted_workflow_ids()},
         )
 
     repo_raw = arguments.get("repository_path")

@@ -30,3 +30,7 @@ class AggregateRepository:
     @property
     def _conn(self) -> sqlite3.Connection:
         return self._actor.connection
+
+    def _commit(self) -> None:
+        """Commit only when not participating in an outer unit of work."""
+        self._actor.commit_if_autonomous()

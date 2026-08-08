@@ -55,7 +55,7 @@ class ScorecardRecord(BaseModel):
     metrics: ScorecardMetrics = Field(default_factory=ScorecardMetrics)
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     notes: str = ""
-    evidence_level: Literal["hermetic", "integration", "operational"] = "hermetic"
+    evidence_level: Literal["mock", "hermetic", "integration", "operational"] = "hermetic"
 
 
 class HarnessManifest(BaseModel):
@@ -231,5 +231,10 @@ def build_deferred_promotion_record(
         rationale=rationale,
         reviewer="hermetic",
         created_at=datetime.now(UTC).isoformat(),
-        metadata={"evidence_level": "hermetic", "g4_operational_proof": False},
+        metadata={
+            "evidence_level": "hermetic",
+            "g4_operational_proof": False,
+            "g5_operational_proof": False,
+            "sr6_stabilization_only": True,
+        },
     )

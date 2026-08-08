@@ -29,7 +29,10 @@ def operator_next_action(
         )
     if status in {"cancelled", "canceled", "cancel_requested"}:
         return "Inspect cancellation with the host CLI/MCP; submit a new run if needed."
-    if task in {"blocked", "failed"} or status in {"blocked", "failed"}:
+    if task in {"blocked", "failed", "partial", "unsupported", "budget_exhausted"} or status in {
+        "blocked",
+        "failed",
+    }:
         if has_validation_failures:
             return (
                 "Inspect validation evidence on the Evidence tab, then revise the "

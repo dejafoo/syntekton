@@ -107,10 +107,12 @@ def docker_remote_env() -> Iterator[dict[str, str]]:
 
 @pytest.fixture
 def remote(docker_remote_env: dict[str, str]) -> Iterator[RemotePfClient]:
+    # Explicit v1: these scenarios still exercise mock-in-body compatibility.
     with RemotePfClient(
         base_url=docker_remote_env["url"],
         token=docker_remote_env["token"],
         timeout=120.0,
+        protocol="v1",
     ) as client:
         yield client
 

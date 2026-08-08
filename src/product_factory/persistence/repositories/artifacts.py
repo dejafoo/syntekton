@@ -80,7 +80,7 @@ class ArtifactRepository(AggregateRepository):
                 now,
             ),
         )
-        self._conn.commit()
+        self._commit()
 
     @synchronized
     def record_artifact(self, artifact: dict[str, Any]) -> None:
@@ -102,7 +102,7 @@ class ArtifactRepository(AggregateRepository):
                 json.dumps(artifact.get("metadata", {})),
             ),
         )
-        self._conn.commit()
+        self._commit()
 
     def list_artifacts(self, *, created_by_task_id: str | None = None) -> list[dict[str, Any]]:
         if created_by_task_id:
