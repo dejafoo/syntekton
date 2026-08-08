@@ -6,27 +6,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from product_factory.domain.artifacts import HandoffRef
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.usage import UsageMetrics
 
-WorkflowType = Literal[
-    "architecture",
-    "technical_plan",
-    "code_change",
-    "repository_change",
-    "repository_investigation",
-    "quality_gate",
-    "feasibility_discovery",
-    "change_intake",
-    "technical_spike",
-    "release_readiness",
-    "incident_triage",
-    "service_health_review",
-    "deployment_execution",
-]
+# SD2: pack ids are registry-validated strings (not a closed Literal).
+# Host/API still accept aliases; durable runs persist canonical pack IDs.
+WorkflowType = str
 
 
 class GitRefWorkspace(BaseModel):
@@ -80,6 +68,15 @@ class RunRequest(BaseModel):
     request_id: str
     workflow_type: WorkflowType
     request_text: str
+
+    @field_validator("workflow_type")
+    @classmethod
+    def _validate_workflow_type(cls, value: str) -> str:
+        from product_factory.workflows.registry import is_registered_workflow
+
+        if not is_registered_workflow(value):
+            raise ValueError(f"Unknown workflow pack: {value!r}")
+        return value
     repository_path: Path | None = None
     # Server-registered repository id (remote mode). Resolved to repository_path
     # on the host before execution; clients never send laptop paths remotely.

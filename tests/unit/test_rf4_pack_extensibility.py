@@ -31,7 +31,23 @@ from product_factory.workflows.registry import (
 
 
 def test_every_canonical_pack_compiles_through_registered_dispatch() -> None:
+    # Ignore dynamic fixture packs registered by other tests in-process.
+    builtin_ids = {
+        "change_intake",
+        "deployment_execution",
+        "feasibility_discovery",
+        "incident_triage",
+        "quality_gate",
+        "release_readiness",
+        "repository_change",
+        "repository_investigation",
+        "service_health_review",
+        "technical_plan",
+        "technical_spike",
+    }
     for pack in list_workflow_packs():
+        if pack.id not in builtin_ids:
+            continue
         handler = handler_for(pack.id)
         proposal = handler.plan_template(f"exercise {pack.id}")
         result = compile_plan(proposal, workflow_pack=pack)
@@ -193,11 +209,13 @@ def test_small_read_only_pack_registers_without_coordinator_branch() -> None:
     assert handler_for(pack.id).pack_id == pack.id
 
 
-def test_coordinator_workflow_branch_constants_are_legacy_allowlisted() -> None:
+def test_coordinator_is_lifecycle_facade_without_workflow_branches() -> None:
+    """SD2/G2: RunCoordinator must stay a thin façade (no named workflow branches)."""
     coordinator = (
         Path(__file__).parents[2] / "src" / "product_factory" / "orchestration" / "coordinator.py"
     )
-    tree = ast.parse(coordinator.read_text(encoding="utf-8"))
+    source = coordinator.read_text(encoding="utf-8")
+    tree = ast.parse(source)
     declared = {
         target.id
         for node in tree.body
@@ -205,9 +223,31 @@ def test_coordinator_workflow_branch_constants_are_legacy_allowlisted() -> None:
         for target in node.targets
         if isinstance(target, ast.Name) and target.id.endswith("_WORKFLOW_TYPES")
     }
-    assert declared == {
-        "_CODE_CHANGE_WORKFLOW_TYPES",
-        "_TECHNICAL_PLAN_WORKFLOW_TYPES",
-    }
-    source = coordinator.read_text(encoding="utf-8")
-    assert "is_registered_workflow(request.workflow_type)" in source
+    assert declared == set()
+    assert "RunLifecycleEngine" in source
+    assert "_compose_architecture" not in source
+    assert "class RunCoordinator" in source
+    assert "return self._engine._execute_task(*args, **kwargs)" in source
+
+
+def test_lifecycle_engine_forbids_new_named_workflow_type_constants() -> None:
+    """Architecture guard: no new *_WORKFLOW_TYPES frozensets in shared lifecycle code."""
+    root = Path(__file__).parents[2] / "src" / "product_factory"
+    offenders: list[str] = []
+    for path in [
+        root / "orchestration" / "lifecycle" / "engine.py",
+        root / "orchestration" / "coordinator.py",
+        root / "scheduling" / "scheduler.py",
+        root / "orchestration" / "finalization" / "run_finalizer.py",
+        root / "orchestration" / "validation_repair" / "service.py",
+    ]:
+        if not path.exists():
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id.endswith("_WORKFLOW_TYPES"):
+                    offenders.append(f"{path.name}:{target.id}")
+    assert offenders == []

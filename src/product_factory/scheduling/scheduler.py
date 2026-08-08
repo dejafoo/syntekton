@@ -52,3 +52,38 @@ def runnable_tasks(
             available.append(task)
     slots = max(0, max_parallel - len(running))
     return available[:slots]
+
+
+class WaveScheduler:
+    """Owns runnable selection and concurrency slot accounting (SD2)."""
+
+    def select_ready(
+        self,
+        plan: CompiledPlan,
+        task_status: dict[str, str],
+        *,
+        max_parallel: int,
+    ) -> list[TaskSpec]:
+        return runnable_tasks(plan, task_status, max_parallel=max_parallel)
+
+    def resolve_profile(
+        self,
+        task: TaskSpec,
+        *,
+        metadata: dict[str, Any] | None = None,
+        originating_profile: str | None = None,
+    ) -> str:
+        return resolve_task_model_profile(
+            task, metadata=metadata, originating_profile=originating_profile
+        )
+
+    def transitive_dependencies(self, plan: CompiledPlan, task_id: str) -> set[str]:
+        found: set[str] = set()
+        pending = list(plan.tasks[task_id].dependencies)
+        while pending:
+            dependency = pending.pop()
+            if dependency in found or dependency not in plan.tasks:
+                continue
+            found.add(dependency)
+            pending.extend(plan.tasks[dependency].dependencies)
+        return found

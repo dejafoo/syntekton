@@ -60,7 +60,7 @@ class CompositionExecutor:
         dependency_outputs = request.dependency_outputs or []
         validation_evidence_refs = request.validation_evidence_refs
         validator_results = request.validator_results
-        services = request.services
+        services = request.services  # non-compose helpers only
         execution_mode = (
             "deterministic_mock" if request.allow_deterministic_workers else "live"
         )
@@ -84,14 +84,12 @@ class CompositionExecutor:
             )
             use_mock = isinstance(request.raw_gateway, MockGateway)
             gen_usage_box: list[UsageMetrics] = []
-            generate_architecture = services.get("generate_architecture_document")
+            composition = request.composition
+            if composition is None:
+                raise RuntimeError("composition executor requires CompositionService")
 
             def _generate() -> tuple[str, UsageMetrics]:
-                if not callable(generate_architecture):
-                    raise RuntimeError(
-                        "composition requires generate_architecture_document service"
-                    )
-                text, usage = generate_architecture(  # type: ignore[misc]
+                text, usage = composition.generate_architecture_document(
                     request=run_request,
                     task=task,
                     ctx_messages=request.ctx_messages,
@@ -111,12 +109,13 @@ class CompositionExecutor:
                 findings=task_findings,
                 dependency_outputs=dependency_outputs,
                 use_mock=use_mock,
+                composition=composition,
                 generate_architecture=_generate if not use_mock else None,
-                compose_architecture=services.get("compose_architecture"),
-                compose_evidence_report=services.get("compose_evidence_report"),
-                compose_feasibility_dossier=services.get("compose_feasibility_dossier"),
-                compose_change_intake=services.get("compose_change_intake"),
-                compose_quality_document=services.get("compose_quality_document"),
+                compose_architecture=composition.compose_architecture,
+                compose_evidence_report=composition.compose_evidence_report,
+                compose_feasibility_dossier=composition.compose_feasibility_dossier,
+                compose_change_intake=composition.compose_change_intake,
+                compose_quality_document=composition.compose_quality_document,
                 task=task,
                 ctx_messages=request.ctx_messages,
                 run_id=request.run_id,
