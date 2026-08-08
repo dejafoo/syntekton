@@ -1,3 +1,5 @@
+# Deprecated (SD7): non-authoritative mirror. Pack registry is the source of truth.
+# Retained for bootstrap/compatibility only; do not use for admission or validation.
 default_workflow: code_change
 workflows:
   code_change:

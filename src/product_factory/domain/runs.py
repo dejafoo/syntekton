@@ -84,10 +84,12 @@ class RunRequest(BaseModel):
     repository_id: str | None = None
     workspace: GitRefWorkspace | None = None
     workspace_provenance: WorkspaceProvenance | None = None
-    project_profile: str = "default"
+    # Deprecated (SD7): ignored; capability routing owns profiles. Retained on
+    # RunRequest for host/v1 compatibility until the v1 removal window.
     model_profile_set: str = "local-target"
     validation_commands: list[str] = Field(default_factory=list)
-    # Deprecated one-release alias for `artifact_overrides`, as `ROLE=dest/path.md`.
+    # Deprecated (SD7): prefer `artifact_overrides`. Still accepted for one
+    # compatibility window; host/v2 rejects this field.
     requested_artifacts: list[str] = Field(default_factory=list)
     artifact_overrides: dict[str, ArtifactOverride] = Field(default_factory=dict)
     handoff_refs: list[HandoffRef] = Field(default_factory=list)

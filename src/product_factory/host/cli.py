@@ -407,7 +407,7 @@ def host_tail_cmd(
     follow: bool = typer.Option(True, "--follow/--no-follow"),
     once: bool = typer.Option(False, "--once", help="Emit one batch and exit"),
 ) -> None:
-    """Stream events by after_seq; falls back to SQLite/events.jsonl if observe is down."""
+    """Stream events by after_seq; uses observe HTTP then durable SQLite."""
     _tail_cmd(run_id, after_seq=after_seq, follow=follow, once=once)
 
 

@@ -115,7 +115,7 @@ def test_host_submit_status_loop_with_mock(tmp_path: Path) -> None:
     )
     assert first.ok
     assert first.data is not None
-    assert first.data["source"] in {"sqlite", "jsonl"}
+    assert first.data["source"] in {"sqlite", "observe"}
     cursor = int(first.data.get("after_seq") or 0)
     if first.events:
         cursor = int(first.events[-1]["seq"])

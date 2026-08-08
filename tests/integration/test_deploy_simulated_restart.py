@@ -8,7 +8,7 @@ import pytest
 from product_factory.connectors.deploy import (
     DeploymentTarget,
     DeploymentTargetRegistry,
-    StagingDeployAdapter,
+    SimulatedStagingAdapter,
 )
 
 pytestmark = pytest.mark.integration
@@ -21,18 +21,18 @@ pytestmark = pytest.mark.integration
 def test_staging_restart_reconciles_without_duplicate_effect(tmp_path: Path) -> None:
     state = tmp_path / "staging-state.json"
     registry = DeploymentTargetRegistry(
-        [DeploymentTarget(target_id="staging-live", environment="staging")]
+        [DeploymentTarget(target_id="simulated-restart", environment="staging")]
     )
-    first = StagingDeployAdapter(registry, state_path=state).start(
-        target_id="staging-live",
+    first = SimulatedStagingAdapter(registry, state_path=state).start(
+        target_id="simulated-restart",
         release_plan_digest="a" * 64,
         artifact_digest="b" * 64,
         idempotency_key="live-smoke-1",
         change_window={"start": "now"},
         approved=True,
     )
-    reconciled = StagingDeployAdapter(registry, state_path=state).start(
-        target_id="staging-live",
+    reconciled = SimulatedStagingAdapter(registry, state_path=state).start(
+        target_id="simulated-restart",
         release_plan_digest="a" * 64,
         artifact_digest="b" * 64,
         idempotency_key="live-smoke-1",

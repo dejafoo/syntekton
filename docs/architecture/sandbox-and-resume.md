@@ -118,9 +118,9 @@ already gets written during a normal run:
    enforcement, concurrency, and approval gate are identical code paths for a
    fresh run and a resumed one.
 
-The CLI's `product-factory resume <run_id>` calls this directly (the previous
-LangGraph checkpoint demo is still reachable behind `--graph-demo` for
-comparison, but is no longer the default).
+The CLI's `product-factory resume <run_id>` calls this through `HostService`.
+The LangGraph checkpoint demo (`--graph-demo`) was removed in SD7; ADR-001 is
+superseded.
 
 Tests: `tests/graph/test_resume.py` — a task crashing mid-run is retried
 exactly once on resume with no duplicate `model_invocations`/`tool_calls` rows

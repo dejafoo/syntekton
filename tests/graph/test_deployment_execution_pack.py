@@ -15,7 +15,7 @@ def test_mock_deployment_executes_staging_and_emits_record(tmp_path: Path) -> No
     root = Path(__file__).resolve().parents[2]
     config = load_config(root)
     settings = dict(config.connectors.connectors)
-    settings["staging_deploy"] = ConnectorSettings(enabled=True)
+    settings["simulated_staging"] = ConnectorSettings(enabled=True)
     config = config.model_copy(
         update={
             "connectors": config.connectors.model_copy(
@@ -33,7 +33,7 @@ def test_mock_deployment_executes_staging_and_emits_record(tmp_path: Path) -> No
         "release_plan": {"outcome": "ready"},
         "release_plan_digest": "a" * 64,
         "artifact_digest": "b" * 64,
-        "target_id": "staging-local",
+        "target_id": "simulated-local",
         "change_window": {"start": "2026-01-01T00:00:00Z"},
         "idempotency_key": "graph-release-happy",
         "release_handoff_id": "handoff-release-happy",
@@ -56,7 +56,7 @@ def test_mock_deployment_executes_staging_and_emits_record(tmp_path: Path) -> No
     )
     service = ApprovalService(coordinator.db)
     approval = service.create_pending(
-        action_type="staging_deploy",
+        action_type="simulated_staging",
         subject_run_id="subject-release-happy",
         action_fingerprint=fingerprint,
         actor="operator",
