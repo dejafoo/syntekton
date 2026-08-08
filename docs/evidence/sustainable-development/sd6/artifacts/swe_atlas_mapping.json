@@ -1,0 +1,27 @@
+{
+  "adapter_id": "swe_atlas",
+  "adapter_version": "0.1.0",
+  "atlas_release": "fixture-0.0.1",
+  "schema_version": "sd6.swe_atlas.v1",
+  "case_mappings": [
+    {
+      "atlas_case_id": "atlas-fixture-refactor-1",
+      "eval_case_id": "swe_atlas_atlas-fixture-refactor-1",
+      "task_class": "refactoring",
+      "atlas_version": "fixture-0.0.1",
+      "native_metrics": [
+        "task_success"
+      ],
+      "notes": ""
+    }
+  ],
+  "content_sha256": "79896dc8e7ba5d8b670b752d9bd0d69b031fc0669da51f5d6fe8563d43a3e424",
+  "license_note": "Caller must record the SWE Atlas license and subset scope.",
+  "live_run": false,
+  "created_at": "2026-08-08T20:07:26.434546+00:00",
+  "metadata": {
+    "status": "minimal",
+    "terminal_bench": "next",
+    "deepswe": "deferred"
+  }
+}

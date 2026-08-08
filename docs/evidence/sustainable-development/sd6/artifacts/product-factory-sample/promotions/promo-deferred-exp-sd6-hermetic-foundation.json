@@ -1,0 +1,28 @@
+{
+  "record_id": "promo-deferred-exp-sd6-hermetic-foundation",
+  "experiment_id": "exp-sd6-hermetic-foundation",
+  "decision": "deferred",
+  "candidate_arm": "local_first_fallback",
+  "baseline_arm": "cloud",
+  "corpus_id": "sd6-foundation",
+  "corpus_sha256": "8d7e6f79cf1d8572be0dc1ab234a69edcad1edcc8384bb01e3ed5b5d6802bbdc",
+  "harness_version": "0.1.0",
+  "scorecard_ids": [
+    "sc-sd6-hermetic-local_only",
+    "sc-sd6-hermetic-local_first_fallback",
+    "sc-sd6-hermetic-cloud",
+    "sc-sd6-hermetic-single_agent_baseline",
+    "sc-sd6-hermetic-skills_enabled",
+    "sc-sd6-hermetic-skills_disabled"
+  ],
+  "gate_failures": [
+    "operational AMD-owned multi-seed promotion run not available; local-first default remains deferred"
+  ],
+  "rationale": "G4 operational proof DEFERRED: environment lacks AMD-owned 30-case × 3-seed promotion runs and live scorecards. Hermetic SD6 foundation (12 sanitized cases, arms/gate config, harness+promotion records, SWE Atlas mapping stub) is complete. Decision: deferred (not promote).",
+  "reviewer": "hermetic",
+  "created_at": "2026-08-08T20:07:26.431385+00:00",
+  "metadata": {
+    "evidence_level": "hermetic",
+    "g4_operational_proof": false
+  }
+}

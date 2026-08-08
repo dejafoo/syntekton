@@ -1,0 +1,32 @@
+id: sd6_discovery_sparse_evidence
+workflow_type: feasibility_discovery
+corpus_category: discovery
+request: |
+  Sanitized clinic intake: should we adopt a vendor EHR appointment-sync API for
+  a single private clinic? Available evidence is one undated marketing page and
+  an anonymous forum post. No primary API docs, contracts, or regulator material
+  are in scope.
+tags: ['sd6', 'discovery', 'sanitized']
+expected_status:
+  - completed
+  - awaiting_approval
+acceptance_criteria:
+  - Outcome is insufficient_evidence or needs_expert_review
+  - Marketing claims are labeled unsupported when cited
+  - Next step is evidence gathering, not implementation
+must_cover:
+  - EHR
+  - appointment sync
+  - insufficient evidence
+expected_source_classes:
+  - secondary_commentary
+reference_hints: |
+  Correct outcome refuses a go-decision from sparse secondary commentary.
+isolation_targets:
+  - domain_research
+  - decision_analysis
+metadata:
+  sd6_corpus: true
+  sanitization: synthetic_private_clinic_no_customer_data
+  min_cited_sources: 1
+  expected_recommendation: insufficient_evidence

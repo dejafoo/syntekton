@@ -1,0 +1,26 @@
+id: sd6_repo_structured_logging
+workflow_type: code_change
+corpus_category: repository_change
+request: |
+  Sanitized repository change: add a structured logging helper module with unit
+  tests. Keep the change scoped to a helper and tests; do not add network I/O
+  or secret logging helpers that print credentials.
+repository: tests/fixtures/sample_api
+tags: ['sd6', 'repository_change', 'coding', 'sanitized']
+expected_status:
+  - completed
+  - awaiting_approval
+acceptance_criteria:
+  - Structured logging helper exists under src/app/
+  - Unit tests cover the helper
+  - No credential/secret values are logged by default
+expected_files:
+  - src/app/logging_util.py
+  - tests/test_logging_util.py
+isolation_targets:
+  - implementation
+smoke_commands:
+  - python_tests
+metadata:
+  sd6_corpus: true
+  sanitization: sample_api_fixture_no_customer_code
