@@ -1,0 +1,7 @@
+---
+description: Protect authoritative evidence and external-action boundaries.
+globs: src/product_factory/connectors/**/*.py, src/product_factory/context/**/*.py, src/product_factory/policy/**/*.py, src/product_factory/tools/**/*.py, src/product_factory/workspace/**/*.py
+alwaysApply: false
+---
+
+Read `.cursor/skills/trust-boundary-change/SKILL.md`. Treat request/event/model/browser data as untrusted claims, re-resolve durable authority, preserve capture/classification/retention, and test forged input fails before provider, tool, or connector activity.

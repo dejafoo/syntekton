@@ -1,0 +1,4 @@
+interface:
+  display_name: "Registry-First Extension"
+  short_description: "Add capabilities and packs through trusted registries."
+  default_prompt: "Use $registry-first-extension to add this capability or workflow extension."
