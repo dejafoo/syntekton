@@ -1,6 +1,6 @@
 # Sustainable development program
 
-**Status:** `[~]` — Baseline + SD0/G0 hermetic gate landed; SD1+ not started.  
+**Status:** `[~]` — Baseline + SD0/G0 + SD1/G1 hermetic gates landed; SD2+ not started.  
 **Source:** [Sustainable-development handover](handover_sustainable_development.md).  
 **Scope:** make the existing single-user, private-network, SQLite-based product supportable and honestly executable. This program does not add workflow packs, connector authority, deployment targets, multi-tenancy, distributed scheduling, a replacement CLI, or a backend-for-frontend.
 
@@ -53,7 +53,7 @@ SD3 Durability      SD4 Protocol      SD5 Build / CI
 | --- | --- | --- | --- | --- |
 | Baseline | `[x]` | F-01–F-26 | entry | this tracker |
 | SD0 — Trust boundaries | `[x]` | F-01–F-04 | G0 | [SD0](next-work-packages-sd0-trust-boundaries.md) |
-| SD1 — Executor truth | `[ ]` | F-05–F-07 | G1 | [SD1](next-work-packages-sd1-executor-truth.md) |
+| SD1 — Executor truth | `[x]` | F-05–F-07 | G1 | [SD1](next-work-packages-sd1-executor-truth.md) |
 | SD2 — Kernel decomposition | `[ ]` | F-06–F-08, F-22 | G2 | [SD2](next-work-packages-sd2-kernel-decomposition.md) |
 | SD3 — Durability | `[ ]` | F-09–F-12 | G3 | [SD3](next-work-packages-sd3-durability.md) |
 | SD4 — Protocol and clients | `[ ]` | F-13–F-18 | G3 | [SD4](next-work-packages-sd4-protocol-clients.md) |

@@ -4,38 +4,21 @@ from __future__ import annotations
 
 from typing import Any
 
+from product_factory.domain.errors import ConfigurationError
 from product_factory.domain.plans import CompiledPlan
 from product_factory.domain.tasks import TaskSpec
+from product_factory.registry.capability_descriptors import model_role_for
 
 
 def select_model(task: TaskSpec, *, originating_profile: str | None = None) -> str:
     if task.preferred_model_profile:
         return task.preferred_model_profile
-    if task.capability in {"architecture", "composition"}:
-        return "supervisor"
-    if task.capability == "implementation":
-        return "coding_worker"
-    if task.capability == "independent_review":
-        return "local_target_reviewer"
-    if task.capability in {
-        "requirements",
-        "repository_analysis",
-        "security_review",
-        "test_design",
-        "test_execution",
-        "documentation",
-        "domain_research",
-        "decision_analysis",
-        "interface_analysis",
-        "release_analysis",
-        "operations_analysis",
-    }:
-        return "fast_worker"
-    if task.capability == "deployment_execution":
-        return "supervisor"
     if task.capability == "repair":
         return originating_profile or "coding_worker"
-    raise ValueError(f"Unsupported capability: {task.capability}")
+    try:
+        return model_role_for(task.capability)
+    except ConfigurationError as exc:
+        raise ValueError(f"Unsupported capability: {task.capability}") from exc
 
 
 def resolve_task_model_profile(

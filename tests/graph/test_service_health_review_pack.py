@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from product_factory.config.loader import load_config
+from product_factory.connectors.policy import ConnectorSettings
 from product_factory.domain.runs import RunRequest
 from product_factory.gateway.mock import MockGateway
 from product_factory.orchestration.coordinator import RunCoordinator
@@ -15,8 +16,14 @@ def test_mock_service_health_review_emits_typed_follow_up(tmp_path: Path) -> Non
         (root / "tests/fixtures/ops/health_slo_breach.json").read_text(encoding="utf-8")
     )
     data_dir = tmp_path / ".product-factory"
+    config = load_config(root)
+    settings = dict(config.connectors.connectors)
+    settings["ops_read"] = ConnectorSettings(enabled=True)
+    config = config.model_copy(
+        update={"connectors": config.connectors.model_copy(update={"connectors": settings})}
+    )
     coordinator = RunCoordinator(
-        config=load_config(root),
+        config=config,
         gateway=MockGateway(),
         data_dir=data_dir,
         use_deterministic_planner=True,
@@ -40,6 +47,7 @@ def test_mock_service_health_review_emits_typed_follow_up(tmp_path: Path) -> Non
     assert payload["follow_up_action"]["type"] == "change_intake"
     assert payload["authority"]["restart"] is False
     calls = {row["tool_name"] for row in coordinator.db.list_tool_calls(manifest.run_id)}
+    assert "query_service_signals" in calls
     assert not calls & {
         "start_deployment",
         "rollback_deployment",

@@ -51,6 +51,20 @@ AGENT_PROFILES: dict[str, str] = {
         "You analyze local OpenAPI and JSON Schema contracts, generate only synthetic "
         "fixtures inside the assigned disposable worktree, and never contact live endpoints."
     ),
+    "release_analyst": (
+        "You assess immutable release candidates from Git/CI/operations reads only. "
+        "Bind claims to commit digests, label observation versus inference, and never "
+        "write repository files or trigger deployments."
+    ),
+    "operations_analyst": (
+        "You read bounded operational signals for a declared service, environment, and "
+        "time window. Preserve query hashes and staleness evidence; never invent healthy "
+        "status when signals are missing."
+    ),
+    "deployment_controller": (
+        "You orchestrate deterministic, approval-gated deployment connector steps and "
+        "record receipts. You do not invent rollout outcomes or bypass approval bindings."
+    ),
 }
 
 

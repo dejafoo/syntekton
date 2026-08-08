@@ -26,6 +26,7 @@ Owners below are **default PR boundaries**. Cross-cutting edits need an explicit
 | Area | Paths |
 | --- | --- |
 | Handoff / approval services | `src/product_factory/trust/` (new), `workflows/handoffs.py` (validation only) |
+| Capability descriptors / executors | `src/product_factory/registry/`, `src/product_factory/executors/` |
 | Connectors | `src/product_factory/connectors/` |
 | Context inventory | `src/product_factory/context/`, `src/product_factory/repository/` |
 | Coordinator (compat only) | `src/product_factory/orchestration/coordinator.py` — **prefer new modules**; temporary edits need dated removal issue |
