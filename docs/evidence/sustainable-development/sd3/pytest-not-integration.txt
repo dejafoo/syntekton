@@ -1,0 +1,5 @@
+Command: uv run pytest -q -m "not integration"
+Result: 974 passed, 3 skipped, 14 deselected, 1 warning in 203.30s
+Branch: sd/sd3-durability
+Worktree: .worktrees/sd3-durability
+Date: 2026-08-08
