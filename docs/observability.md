@@ -1,6 +1,6 @@
 # Observability API
 
-Local-first, SQLite-backed observability for Product Factory runs. The CLI writes durable events while orchestrating; a separate observer process serves REST, WebSocket, and SSE.
+Local-first, SQLite-backed observability for Product Factory runs. The CLI writes durable events while orchestrating; a separate observer process serves REST and cursor-resumable SSE.
 
 Operator-facing policy, route, capture, and recovery guidance lives in
 [operator-guide.md](operator-guide.md).
@@ -27,17 +27,11 @@ curl -s http://127.0.0.1:8765/api/v1/health | jq
 curl -s http://127.0.0.1:8765/api/v1/runs | jq
 curl -s "http://127.0.0.1:8765/api/v1/runs/<run_id>/events?after_seq=0" | jq
 
-# SSE
+# SSE (sole live protocol; reconnect with after_seq)
 curl -N "http://127.0.0.1:8765/api/v1/runs/<run_id>/events/stream?after_seq=0"
 ```
 
-WebSocket: connect to `ws://127.0.0.1:8765/api/v1/events/ws`, then send:
-
-```json
-{"run_ids": ["<run_id>"], "after_seq": 0, "types": null}
-```
-
-Frames: `subscribed`, `event`, `heartbeat`, `error` (including `slow_consumer` with a resumable `after_seq`). Delivery is at-least-once; clients deduplicate by `event_id`.
+Delivery is at-least-once; clients deduplicate by `event_id`. The unauthenticated WebSocket route was removed in SD0.D.
 
 ## Security and content capture
 

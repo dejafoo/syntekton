@@ -144,7 +144,7 @@ uv sync --extra observability
 product-factory observe serve --host 127.0.0.1 --port 8765
 ```
 
-Open [http://127.0.0.1:8765/dashboard/](http://127.0.0.1:8765/dashboard/) for the bundled, monitor-only run dashboard. It uses the same REST + WebSocket/SSE event store as CLI runs; mutations go through `product-factory host …`, HTTP control routes on serve, or MCP — not the dashboard.
+Open [http://127.0.0.1:8765/dashboard/](http://127.0.0.1:8765/dashboard/) for the bundled, monitor-only run dashboard. It uses the same REST + SSE event store as CLI runs; mutations go through `product-factory host …`, HTTP control routes on serve, or MCP — not the dashboard.
 See [Observability](docs/observability.md) and [Host integration](docs/host-integration.md).
 
 ## Docs

@@ -1,4 +1,4 @@
-"""Shared event streaming helpers for WebSocket and SSE."""
+"""Shared event streaming helpers for cursor-resumable SSE."""
 
 from __future__ import annotations
 

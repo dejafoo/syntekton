@@ -47,6 +47,8 @@ observe_app = typer.Typer(help="Observability API commands")
 app.add_typer(observe_app, name="observe")
 ops_app = typer.Typer(help="Operator backup/restore commands (PM5.E)")
 app.add_typer(ops_app, name="ops")
+handoff_app = typer.Typer(help="Durable cross-run handoff operations")
+app.add_typer(handoff_app, name="handoff")
 app.add_typer(host_app, name="host")
 app.add_typer(remote_app, name="remote")
 console = Console()
@@ -343,6 +345,55 @@ def approve_cmd(
         console.print(f"[red]{exc.message}[/red]")
         raise typer.Exit(exc.exit_code) from exc
     console.print_json(data=result)
+
+
+@handoff_app.command("approve")
+def handoff_approve_cmd(handoff_id: str = typer.Argument(...)) -> None:
+    """Promote one evidence-complete handoff after explicit operator confirmation."""
+    if not typer.confirm(f"Approve handoff {handoff_id}?"):
+        raise typer.Abort()
+    config = load_config()
+    from product_factory.persistence.database import Database
+    from product_factory.trust.handoffs import HandoffError, HandoffService
+
+    db = Database(config.root / ".product-factory" / "data" / "product_factory.sqlite")
+    try:
+        record = HandoffService(db, config.root / ".product-factory").approve(
+            handoff_id, actor="local_cli_operator"
+        )
+    except HandoffError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+    finally:
+        db.close()
+    console.print_json(data=record.model_dump(mode="json"))
+
+
+@handoff_app.command("supersede")
+def handoff_supersede_cmd(
+    handoff_id: str = typer.Argument(...),
+    successor_handoff_id: str | None = typer.Option(None, "--successor"),
+) -> None:
+    """Terminally supersede an approved handoff after confirmation."""
+    if not typer.confirm(f"Supersede handoff {handoff_id}?"):
+        raise typer.Abort()
+    config = load_config()
+    from product_factory.persistence.database import Database
+    from product_factory.trust.handoffs import HandoffError, HandoffService
+
+    db = Database(config.root / ".product-factory" / "data" / "product_factory.sqlite")
+    try:
+        record = HandoffService(db, config.root / ".product-factory").supersede(
+            handoff_id,
+            successor_handoff_id=successor_handoff_id,
+            actor="local_cli_operator",
+        )
+    except HandoffError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+    finally:
+        db.close()
+    console.print_json(data=record.model_dump(mode="json"))
 
 
 @app.command("reject")
@@ -698,7 +749,7 @@ def observe_serve_cmd(
         help="Comma-separated CORS origins (empty = disabled)",
     ),
 ) -> None:
-    """Serve the local observability + host control REST/WebSocket API."""
+    """Serve the local observability + host control REST/SSE API."""
     _serve_api(host=host, port=port, data_dir=data_dir, cors=cors)
 
 

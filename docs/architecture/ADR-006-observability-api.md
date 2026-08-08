@@ -6,7 +6,7 @@ Accepted
 
 ## Decision
 
-Product Factory uses a **domain event store in SQLite** as the authoritative operational observability log, exposed through a **read-only REST + WebSocket/SSE API**.
+Product Factory uses a **domain event store in SQLite** as the authoritative operational observability log, exposed through a **read-only REST + cursor-resumable SSE API** (WebSocket removed in SD0.D).
 
 1. Instrumentation lives in `RunCoordinator`, the model gateway, and the tool broker — not in LangGraph stub nodes.
 2. Events are versioned `ObservabilityEvent` envelopes with monotonic `seq` cursors.

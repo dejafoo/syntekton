@@ -277,17 +277,14 @@ def test_sse_stream_replay(api_env) -> None:
     assert "data:" in buf
 
 
-def test_websocket_subscribe_and_replay(api_env) -> None:
+def test_websocket_route_removed(api_env) -> None:
     client, _, _ = api_env
-    with client.websocket_connect("/api/v1/events/ws") as ws:
-        ws.send_json({"run_ids": ["run-api"], "after_seq": 0})
-        first = ws.receive_json()
-        assert first["type"] == "subscribed"
-        seen = []
-        for _ in range(5):
-            frame = ws.receive_json()
-            if frame.get("type") == "event":
-                seen.append(frame["event"]["type"])
-            if len(seen) >= 3:
-                break
-        assert "task.started" in seen
+    routes = {
+        (getattr(r, "path", None), tuple(sorted(getattr(r, "methods", None) or [])))
+        for r in client.app.routes
+    }
+    assert not any(path == "/api/v1/events/ws" for path, _ in routes)
+    # Starlette may still expose websocket routes separately.
+    assert not any(
+        getattr(r, "path", None) == "/api/v1/events/ws" for r in client.app.routes
+    )
