@@ -98,9 +98,10 @@ connectors:
         - error_budget
         - incident_context
 
-  # Controlled in-process staging deployment. Enabling requires both this entry
-  # and allow_write_connectors=true; effects additionally require approval.
-  staging_deploy:
+  # Hermetic in-process simulated staging fixture. Enabling requires both this
+  # entry and allow_write_connectors=true; effects additionally require approval.
+  # Legacy config key `staging_deploy` is still accepted by settings_for().
+  simulated_staging:
     enabled: false
     require_approval: false
     max_timeout_seconds: 30

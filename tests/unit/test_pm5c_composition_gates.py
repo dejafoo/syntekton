@@ -138,7 +138,7 @@ def test_deployment_composition_policy_defaults_for_deploy_pack() -> None:
             "release_plan": {"outcome": "ready"},
             "release_plan_digest": "a" * 64,
             "artifact_digest": "b" * 64,
-            "target_id": "staging-local",
+            "target_id": "simulated-local",
             "change_window": {
                 "start": "2026-08-01T00:00:00Z",
                 "end": "2026-08-01T01:00:00Z",

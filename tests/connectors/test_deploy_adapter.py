@@ -7,19 +7,19 @@ import pytest
 from product_factory.connectors.deploy import (
     DeploymentTarget,
     DeploymentTargetRegistry,
-    StagingDeployAdapter,
+    SimulatedStagingAdapter,
 )
 from product_factory.connectors.errors import ConnectorPolicyDenied
 
 
-def _adapter(path: Path) -> StagingDeployAdapter:
+def _adapter(path: Path) -> SimulatedStagingAdapter:
     registry = DeploymentTargetRegistry(
         [DeploymentTarget(target_id="staging-a", environment="staging")]
     )
-    return StagingDeployAdapter(registry, state_path=path)
+    return SimulatedStagingAdapter(registry, state_path=path)
 
 
-def _start(adapter: StagingDeployAdapter, *, key: str = "release-1"):
+def _start(adapter: SimulatedStagingAdapter, *, key: str = "release-1"):
     return adapter.start(
         target_id="staging-a",
         release_plan_digest="a" * 64,

@@ -1,6 +1,7 @@
-# Controlled deployment targets. Production is intentionally unsupported.
+# Hermetic simulated deployment targets. Production is intentionally unsupported.
+# Legacy target id `staging-local` resolves to `simulated-local` via alias.
 targets:
-  - target_id: staging-local
+  - target_id: simulated-local
     environment: staging
     adapter: in_process
     enabled: true

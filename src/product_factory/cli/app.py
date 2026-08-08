@@ -28,7 +28,6 @@ from product_factory.host.cli import host_app
 from product_factory.host.registry import get_host_service
 from product_factory.host.service import HostService
 from product_factory.observability.logging import setup_logging
-from product_factory.orchestration.graph import build_graph
 from product_factory.remote.cli import remote_app
 from product_factory.workflows.inputs import parse_pack_input_option
 
@@ -324,31 +323,8 @@ def resume_cmd(
     run_id: str = typer.Argument(...),
     mock: bool = typer.Option(False, "--mock"),
     json_out: bool = typer.Option(False, "--json"),
-    graph_demo: bool = typer.Option(
-        False, "--graph-demo", help="Use the legacy graph-level checkpoint demo instead"
-    ),
 ) -> None:
     """Resume an interrupted product-factory run via HostService."""
-    if graph_demo:
-        graph = build_graph()
-        result = graph.invoke(
-            {
-                "run_id": run_id,
-                "final_status": "executing",
-                "workflow_type": "code_change",
-                "compiler_errors": [],
-                "validation_results": [],
-                "plan_attempt": 1,
-                "repair_count": 0,
-                "task_results": [],
-                "findings": [],
-                "events": [],
-            },
-            config={"configurable": {"thread_id": run_id}},
-        )
-        console.print_json(data={"final_status": result.get("final_status"), "run_id": run_id})
-        return
-
     service = _local_host_service(mock=mock)
     try:
         response = service.resume(run_id)

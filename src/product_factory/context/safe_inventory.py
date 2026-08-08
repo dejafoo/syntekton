@@ -2,7 +2,8 @@
 
 One inventory per repository root + policy digest. Symlinks, path escapes,
 prohibited/binary/oversize files, and ceiling breaches never enter prompt
-context. Caching is deferred to SD8 (key on snapshot + policy digest).
+context. SD8 may cache by snapshot revision + policy digest only when
+invalidation safety is proven.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
@@ -373,3 +375,84 @@ def _looks_binary(path: Path, *, sample_size: int = 8192) -> bool:
     except UnicodeDecodeError:
         return True
     return False
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryCacheKey:
+    """Cache key is snapshot revision + policy digest only (SD8)."""
+
+    snapshot_revision: str
+    policy_digest: str
+
+    def as_tuple(self) -> tuple[str, str]:
+        return (self.snapshot_revision, self.policy_digest)
+
+
+class SafeInventoryCache:
+    """Process-local inventory cache keyed by snapshot + policy digest.
+
+    Entries are never reused across different revisions or policies. Changing
+    either key forces a rebuild so prohibited/stale paths cannot leak.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._entries: dict[tuple[str, str], SafeRepositoryInventory] = {}
+        self.hits = 0
+        self.misses = 0
+
+    def get(self, key: InventoryCacheKey) -> SafeRepositoryInventory | None:
+        with self._lock:
+            inventory = self._entries.get(key.as_tuple())
+            if inventory is None:
+                self.misses += 1
+                return None
+            self.hits += 1
+            return inventory
+
+    def put(self, key: InventoryCacheKey, inventory: SafeRepositoryInventory) -> None:
+        if inventory.policy_digest != key.policy_digest:
+            raise ValueError("inventory policy digest does not match cache key")
+        with self._lock:
+            self._entries[key.as_tuple()] = inventory
+
+    def invalidate(self, *, snapshot_revision: str | None = None) -> None:
+        with self._lock:
+            if snapshot_revision is None:
+                self._entries.clear()
+                return
+            doomed = [key for key in self._entries if key[0] == snapshot_revision]
+            for key in doomed:
+                del self._entries[key]
+
+    def get_or_build(
+        self,
+        *,
+        root: Path,
+        snapshot_revision: str,
+        policy: InventoryPolicy | None = None,
+    ) -> SafeRepositoryInventory:
+        policy = policy or InventoryPolicy()
+        key = InventoryCacheKey(
+            snapshot_revision=snapshot_revision,
+            policy_digest=policy.digest(),
+        )
+        cached = self.get(key)
+        if cached is not None:
+            return cached
+        inventory = build_safe_repository_inventory(root, policy=policy)
+        self.put(key, inventory)
+        return inventory
+
+
+__all__ = [
+    "DEFAULT_EXCLUDED_DIR_NAMES",
+    "DEFAULT_PROHIBITED_GLOBS",
+    "InventoryCacheKey",
+    "InventoryEntry",
+    "InventoryExclusion",
+    "InventoryPolicy",
+    "SafeInventoryCache",
+    "SafeRepositoryInventory",
+    "build_safe_repository_inventory",
+]

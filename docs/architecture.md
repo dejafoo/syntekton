@@ -2,10 +2,18 @@
 
 This document describes how Product Factory works: goals, control flow, security boundaries, persistence, and evaluation. It is intended for humans and agents working in this repository.
 
+**Post-SD4 surface (current target):** mutations go through the shared host
+application service; prefer `host/v2` / `/api/v2` for new clients; durable
+authority is SQLite + trusted registries/packs; `RunCoordinator` is a thin
+lifecycle façade. Registry-backed catalogs live under
+[`docs/catalogs/`](catalogs/). Sustainable-development progress is tracked in
+[`next-work-packages-sustainable-development.md`](next-work-packages-sustainable-development.md).
+
 For package layout and “where to edit what,” see [Codebase structure](codebase-structure.md). Decision history lives in [ADRs](architecture/). Pre-PM5 hardening contracts for
 effective task policy and run-scoped artifact instances are proposed in
 [ADR-007](architecture/ADR-007-effective-policy-and-artifact-instances.md).
-Performance measurement work is tracked in
+Performance measurement scaffolding is in
+`product_factory.observability.performance` (SD8); historical planning notes remain in
 [orchestration-performance-plan.md](orchestration-performance-plan.md).
 
 ---

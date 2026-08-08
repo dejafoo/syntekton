@@ -1,0 +1,272 @@
+[
+  {
+    "agent_profile": "composer",
+    "capability_id": "architecture",
+    "evaluation_category": "planning",
+    "executor_adapter": "research_agent",
+    "executor_mode": "research_agent_loop",
+    "model_role": "supervisor",
+    "result_schema": "technical_plan.document.v1",
+    "tool_classes": [
+      "artifact_write",
+      "ci_read",
+      "mcp_filesystem_read",
+      "ops_read",
+      "repository_read",
+      "web_read"
+    ],
+    "version": "1"
+  },
+  {
+    "agent_profile": "composer",
+    "capability_id": "composition",
+    "evaluation_category": "composition",
+    "executor_adapter": "composition",
+    "executor_mode": "composition",
+    "model_role": "supervisor",
+    "result_schema": "change_set.patch.v1",
+    "tool_classes": [
+      "artifact_write",
+      "git_read",
+      "repository_read"
+    ],
+    "version": "1"
+  },
+  {
+    "agent_profile": "decision_analyst",
+    "capability_id": "decision_analysis",
+    "evaluation_category": "research",
+    "executor_adapter": "research_agent",
+    "executor_mode": "research_agent_loop",
+    "model_role": "fast_worker",
+    "result_schema": "decision_record.v1",
+    "tool_classes": [
+      "artifact_write",
+      "evidence_build"
+    ],
+    "version": "1"
+  },
+  {
+    "agent_profile": "deployment_controller",
+    "capability_id": "deployment_execution",
+    "evaluation_category": "operations",
+    "executor_adapter": "deployment_state_machine",
+    "executor_mode": "deterministic",
+    "model_role": "supervisor",
+    "result_schema": "deployment_record.v1",
+    "tool_classes": [
+      "artifact_write",
+      "deployment_read",
+      "deployment_write"
+    ],
+    "version": "1"
+  },
+  {
+    "agent_profile": "composer",
+    "capability_id": "documentation",
+    "evaluation_category": "documentation",
+    "executor_adapter": "documentation",
+    "executor_mode": "model_draft",
+    "model_role": "fast_worker",
+    "result_schema": "technical_plan.document.v1",
+    "tool_classes": [
+      "artifact_write",
+      "repository_read"
+    ],
+    "version": "1"
+  },
+  {
+    "agent_profile": "researcher",
+    "capability_id": "domain_research",
+    "evaluation_category": "research",
+    "executor_adapter": "research_agent",
+    "executor_mode": "research_agent_loop",
+    "model_role": "fast_worker",
+    "result_schema": "evidence_report.document.v2",
+    "tool_classes": [
+      "artifact_write",
+      "evidence_build",
+      "repository_read",
+      "source_read",
+      "web_read"
+    ],
+    "version": "1"
+  },
+  {
+    "agent_profile": "implementation_worker",
+    "capability_id": "implementation",
+    "evaluation_category": "implementation",
+    "executor_adapter": "repository_agent",
+    "executor_mode": "repository_agent_loop",
+    "model_role": "coding_worker",
+    "result_schema": "change_set.patch.v1",
+    "tool_classes": [
+      "git_read",
+      "git_write",
+      "repository_read",
+      "repository_write",
+      "validation_command"
+    ],
+    "version": "1"
+  },
+  {
+    "agent_profile": "independent_reviewer",
+    "capability_id": "independent_review",
+    "evaluation_category": "review",
+    "executor_adapter": "independent_review",
+    "executor_mode": "model_draft",
+    "model_role": "local_target_reviewer",
+    "result_schema": "quality_findings.document.v1",
+    "tool_classes": [
+      "git_read",
+      "repository_read"
+    ],
+    "version": "1"
+  },
+  {
+    "agent_profile": "interface_analyst",
+    "capability_id": "interface_analysis",
+    "evaluation_category": "research",
+    "executor_adapter": "interface_agent",
+    "executor_mode": "interface_agent_loop",
+    "model_role": "fast_worker",
+    "result_schema": "spike_result.v1",
+    "tool_classes": [
+      "artifact_write",
+      "interface_analysis",
+      "repository_read",
+      "synthetic_write"
+    ],
+    "version": "1"
+  },
+  {
+    "agent_profile": "operations_analyst",
+    "capability_id": "operations_analysis",
+    "evaluation_category": "operations",
+    "executor_adapter": "operations_analysis",
+    "executor_mode": "model_draft",
+    "model_role": "fast_worker",
+    "result_schema": "operational_record.v1",
+    "tool_classes": [
+      "artifact_write",
+      "ops_read"
+    ],
+    "version": "1"
+  },
+  {
+    "agent_profile": "release_analyst",
+    "capability_id": "release_analysis",
+    "evaluation_category": "operations",
+    "executor_adapter": "release_analysis",
+    "executor_mode": "model_draft",
+    "model_role": "fast_worker",
+    "result_schema": "release_plan.v1",
+    "tool_classes": [
+      "artifact_write",
+      "ci_read",
+      "git_read",
+      "ops_read",
+      "repository_read"
+    ],
+    "version": "1"
+  },
+  {
+    "agent_profile": "implementation_worker",
+    "capability_id": "repair",
+    "evaluation_category": "implementation",
+    "executor_adapter": "repository_agent",
+    "executor_mode": "repository_agent_loop",
+    "model_role": "coding_worker",
+    "result_schema": "change_set.patch.v1",
+    "tool_classes": [
+      "git_read",
+      "git_write",
+      "repository_read",
+      "repository_write",
+      "validation_command"
+    ],
+    "version": "1"
+  },
+  {
+    "agent_profile": "repository_explorer",
+    "capability_id": "repository_analysis",
+    "evaluation_category": "research",
+    "executor_adapter": "repository_inventory",
+    "executor_mode": "deterministic",
+    "model_role": "fast_worker",
+    "result_schema": "repository_analysis.report.v1",
+    "tool_classes": [
+      "ci_read",
+      "git_read",
+      "mcp_filesystem_read",
+      "ops_read",
+      "repository_read",
+      "web_read"
+    ],
+    "version": "1"
+  },
+  {
+    "agent_profile": "repository_explorer",
+    "capability_id": "requirements",
+    "evaluation_category": "planning",
+    "executor_adapter": "research_agent",
+    "executor_mode": "research_agent_loop",
+    "model_role": "fast_worker",
+    "result_schema": "technical_plan.document.v1",
+    "tool_classes": [
+      "repository_read"
+    ],
+    "version": "1"
+  },
+  {
+    "agent_profile": "security_reviewer",
+    "capability_id": "security_review",
+    "evaluation_category": "review",
+    "executor_adapter": "security_review",
+    "executor_mode": "model_draft",
+    "model_role": "fast_worker",
+    "result_schema": "security_evidence.document.v1",
+    "tool_classes": [
+      "ci_read",
+      "git_read",
+      "mcp_filesystem_read",
+      "ops_read",
+      "repository_read",
+      "web_read"
+    ],
+    "version": "1"
+  },
+  {
+    "agent_profile": "test_worker",
+    "capability_id": "test_design",
+    "evaluation_category": "quality",
+    "executor_adapter": "test_design",
+    "executor_mode": "model_draft",
+    "model_role": "fast_worker",
+    "result_schema": "test_plan.document.v1",
+    "tool_classes": [
+      "ci_read",
+      "mcp_filesystem_read",
+      "ops_read",
+      "repository_read",
+      "repository_write",
+      "validation_command",
+      "web_read"
+    ],
+    "version": "1"
+  },
+  {
+    "agent_profile": "test_worker",
+    "capability_id": "test_execution",
+    "evaluation_category": "quality",
+    "executor_adapter": "test_execution",
+    "executor_mode": "validation",
+    "model_role": "fast_worker",
+    "result_schema": "quality_findings.document.v1",
+    "tool_classes": [
+      "repository_read",
+      "validation_command"
+    ],
+    "version": "1"
+  }
+]
