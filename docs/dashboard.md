@@ -35,3 +35,17 @@ grants/route/validation evidence, then use the CLI action in the
 Content is fetched only through run-scoped API endpoints. `off` and `metadata` captures show an explanation instead of a body. `redacted` and `full` show exactly their stored representation; no UI or API de-redacts content, and chain-of-thought is never captured. A hash belonging to another run returns 404.
 
 The dashboard is intended for loopback use. The existing API token and CORS options apply to the API service, but this dashboard is not a remote multi-user deployment target.
+
+## Remote viewing (operator tunnel only)
+
+`/api/v1/meta` and `/api/v2/meta` advertise:
+
+- `dashboard.deployment_support: loopback_monitor_only`
+- `dashboard.mutations: false`
+- `dashboard.bearer_token_storage: false`
+- `dashboard.remote_browser: unsupported`
+
+A remote control token authenticates the **host/HTTP/MCP control plane**. It
+does **not** make the browser UI a public remote surface. Laptop viewing of a
+remote host is an operator-managed SSH (or private) tunnel to loopback. The UI
+never stores bearer tokens and never issues mutations.

@@ -25,8 +25,9 @@ from product_factory.domain.runs import RunRequest
 from product_factory.gateway.factory import gateway_from_config
 from product_factory.gateway.mock import MockGateway
 from product_factory.host.cli import host_app
+from product_factory.host.registry import get_host_service
+from product_factory.host.service import HostService
 from product_factory.observability.logging import setup_logging
-from product_factory.orchestration.coordinator import RunCoordinator
 from product_factory.orchestration.graph import build_graph
 from product_factory.remote.cli import remote_app
 from product_factory.workflows.inputs import parse_pack_input_option
@@ -45,9 +46,14 @@ lessons_app = typer.Typer(help="Human-gated lesson triage and promotion (ADR-007
 app.add_typer(lessons_app, name="lessons")
 observe_app = typer.Typer(help="Observability API commands")
 app.add_typer(observe_app, name="observe")
-ops_app = typer.Typer(help="Operator backup/restore commands (PM5.E)")
+ops_app = typer.Typer(
+    help=(
+        "Administrative database/backup commands (NOT run semantics). "
+        "Mutations go through HostService via run/host/MCP/HTTP — not ops."
+    )
+)
 app.add_typer(ops_app, name="ops")
-handoff_app = typer.Typer(help="Durable cross-run handoff operations")
+handoff_app = typer.Typer(help="Durable cross-run handoff operations (via HostService)")
 app.add_typer(handoff_app, name="handoff")
 app.add_typer(host_app, name="host")
 app.add_typer(remote_app, name="remote")
@@ -56,6 +62,32 @@ console = Console()
 
 def _gateway_from_config(config, *, force_mock: bool = False):
     return gateway_from_config(config, force_mock=force_mock)
+
+
+def _local_host_service(*, mock: bool = False, policy: Path | None = None) -> HostService:
+    """Sole application-service entry for local CLI mutations (SD4.A)."""
+    config = _load_config_with_policy_override(policy)
+    return get_host_service(config=config, force_mock=mock)
+
+
+def _exit_code_for_host_error(code: str | None) -> int:
+    """Map HostResponse error codes (exception class names) to CLI exit codes."""
+    from product_factory.domain import errors as domain_errors
+
+    if not code:
+        return 4
+    cls = getattr(domain_errors, code, None)
+    if isinstance(cls, type) and issubclass(cls, ProductFactoryError):
+        return int(cls.exit_code)
+    return 4
+
+
+def _print_host_failure(response) -> int:
+    err = response.error
+    message = err.message if err else "request failed"
+    code = err.code if err else "error"
+    console.print(f"[red]{code}:[/red] {message}")
+    return _exit_code_for_host_error(code)
 
 
 @app.callback()
@@ -124,8 +156,10 @@ def models_refresh() -> None:
     config = load_config()
     gateway = _gateway_from_config(config)
     payload = gateway.refresh_catalog()
-    coord = RunCoordinator(config=config, gateway=gateway)
-    coord.db.cache_model_catalog(payload)
+    service = get_host_service(
+        config=config, gateway=gateway, force_mock=isinstance(gateway, MockGateway)
+    )
+    service.coord.db.cache_model_catalog(payload)
     console.print(f"Refreshed {len(payload.get('models', []))} models")
 
 
@@ -137,17 +171,15 @@ def plan_cmd(
     mock: bool = typer.Option(False, "--mock"),
 ) -> None:
     """Generate and compile a plan without full execution."""
-    from product_factory.planning.compiler import compile_plan
-    from product_factory.workflows.handlers import handler_for
-
     text = request.read_text(encoding="utf-8")
-    config = load_config()
-    gateway = _gateway_from_config(config, force_mock=mock)
-    RunCoordinator(config=config, gateway=gateway, use_deterministic_planner=mock)
-    proposal = handler_for(workflow).plan_template(text)
-    result = compile_plan(proposal)
-    console.print_json(data=result.model_dump(mode="json"))
-    if not result.ok:
+    service = _local_host_service(mock=mock)
+    response = service.plan_preview(text, workflow_type=workflow)
+    if not response.ok:
+        console.print(f"[red]{response.error.message if response.error else 'plan failed'}[/red]")
+        raise typer.Exit(3)
+    console.print_json(data=response.model_dump(mode="json"))
+    compiler = (response.data or {}).get("compiler") or {}
+    if not compiler.get("ok", True):
         raise typer.Exit(3)
 
 
@@ -207,25 +239,21 @@ def run_cmd(
     mock: bool = typer.Option(False, "--mock"),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
-    """Execute a product-factory run."""
+    """Execute a product-factory run through the shared HostService."""
     try:
         pack_input_payload = parse_pack_input_option(pack_input)
     except ProductFactoryError as exc:
         console.print(f"[red]{exc.__class__.__name__}:[/red] {exc.message}")
         raise typer.Exit(exc.exit_code) from exc
-    config = _load_config_with_policy_override(policy)
-    gateway = _gateway_from_config(config, force_mock=mock)
-    coord = RunCoordinator(
-        config=config,
-        gateway=gateway,
-        use_deterministic_planner=mock or isinstance(gateway, MockGateway),
-    )
+    service = _local_host_service(mock=mock, policy=policy)
+    # profile retained for CLI compatibility; HostService/lifecycle emit deprecation.
+    _ = profile
     budget_kwargs: dict[str, Any] = {}
     if max_wall_clock_seconds is not None:
         budget_kwargs["max_wall_clock_seconds"] = max_wall_clock_seconds
     run_request = RunRequest(
         request_id=f"req-{uuid.uuid4().hex[:8]}",
-        workflow_type=workflow,  # type: ignore[arg-type]
+        workflow_type=workflow,
         request_text=request.read_text(encoding="utf-8"),
         repository_path=repo.resolve() if repo else None,
         model_profile_set=profile,
@@ -233,52 +261,62 @@ def run_cmd(
         pack_input=pack_input_payload,
         budget=run_budget_from_policy(
             max_cost_usd=Decimal(str(budget_usd)),
-            budgets=config.policies.budgets,
+            budgets=service.config.policies.budgets,
             **budget_kwargs,
         ),
     )
     try:
-        manifest = coord.run(run_request)
+        submitted = service.submit(run_request, mock=mock, detach=False, inline_thread=False)
     except ProductFactoryError as exc:
         console.print(f"[red]{exc.__class__.__name__}:[/red] {exc.message}")
         raise typer.Exit(exc.exit_code) from exc
+    if not submitted.ok:
+        raise typer.Exit(_print_host_failure(submitted))
+    assert submitted.run_id is not None
+    final = service.status(submitted.run_id)
+    status = final.status or "unknown"
+    usage = ((final.data or {}).get("usage") if final.data else None) or {}
     if json_out:
-        console.print_json(data=json.loads(manifest.model_dump_json()))
+        console.print_json(
+            data={
+                "run_id": submitted.run_id,
+                "final_status": status,
+                "usage": usage,
+            }
+        )
     else:
-        console.print(f"Run [bold]{manifest.run_id}[/bold] → {manifest.final_status}")
-        console.print(f"Cost: ${manifest.usage.estimated_cost_usd}")
-    if manifest.final_status in {"failed", "plan_rejected", "budget_exhausted", "blocked"}:
+        console.print(f"Run [bold]{submitted.run_id}[/bold] → {status}")
+        if usage.get("estimated_cost_usd") is not None:
+            console.print(f"Cost: ${usage['estimated_cost_usd']}")
+    if status == "budget_exhausted":
+        console.print("[red]BudgetExhaustedError:[/red] run exhausted its budget")
+        raise typer.Exit(6)
+    if status in {"failed", "plan_rejected", "blocked"}:
         raise typer.Exit(4)
 
 
 @app.command("status")
 def status_cmd(run_id: str | None = typer.Argument(None)) -> None:
-    config = load_config()
-    coord = RunCoordinator(config=config, gateway=MockGateway())
+    service = _local_host_service()
     if run_id:
-        row = coord.db.get_run(run_id)
-        if not row:
+        response = service.status(run_id)
+        if not response.ok:
             console.print(f"Unknown run {run_id}")
             raise typer.Exit(1)
-        console.print_json(data=dict(row))
+        console.print_json(data=response.model_dump(mode="json"))
     else:
-        for row in coord.db.list_runs():
+        listed = service.list_runs()
+        for row in (listed.data or {}).get("runs", []):
             console.print(f"{row['run_id']}\t{row['status']}\t{row['workflow_type']}")
 
 
 @app.command("inspect")
 def inspect_cmd(run_id: str = typer.Argument(...)) -> None:
-    config = load_config()
-    run_dir = config.root / ".product-factory" / "runs" / run_id
-    manifest = run_dir / "run-manifest.json"
-    if not manifest.exists():
-        # also search under pf root used by coordinator
-        alt = Path(".product-factory") / "runs" / run_id / "run-manifest.json"
-        manifest = alt if alt.exists() else manifest
-    if not manifest.exists():
+    response = _local_host_service().inspect(run_id)
+    if not response.ok:
         console.print("Manifest not found")
         raise typer.Exit(1)
-    console.print_json(data=json.loads(manifest.read_text(encoding="utf-8")))
+    console.print_json(data=response.model_dump(mode="json"))
 
 
 @app.command("resume")
@@ -290,7 +328,7 @@ def resume_cmd(
         False, "--graph-demo", help="Use the legacy graph-level checkpoint demo instead"
     ),
 ) -> None:
-    """Resume an interrupted product-factory run (coordinator + SQLite + run dir, P1.B)."""
+    """Resume an interrupted product-factory run via HostService."""
     if graph_demo:
         graph = build_graph()
         result = graph.invoke(
@@ -311,24 +349,30 @@ def resume_cmd(
         console.print_json(data={"final_status": result.get("final_status"), "run_id": run_id})
         return
 
-    config = load_config()
-    gateway = _gateway_from_config(config, force_mock=mock)
-    coord = RunCoordinator(
-        config=config,
-        gateway=gateway,
-        use_deterministic_planner=mock or isinstance(gateway, MockGateway),
-    )
+    service = _local_host_service(mock=mock)
     try:
-        manifest = coord.resume(run_id)
+        response = service.resume(run_id)
     except ProductFactoryError as exc:
         console.print(f"[red]{exc.__class__.__name__}:[/red] {exc.message}")
         raise typer.Exit(exc.exit_code) from exc
+    if not response.ok:
+        raise typer.Exit(_print_host_failure(response))
     if json_out:
-        console.print_json(data=json.loads(manifest.model_dump_json()))
+        console.print_json(
+            data={
+                "run_id": response.run_id,
+                "final_status": response.status,
+                "usage": (response.data or {}).get("usage") or {},
+            }
+        )
     else:
-        console.print(f"Run [bold]{manifest.run_id}[/bold] → {manifest.final_status}")
-        console.print(f"Cost: ${manifest.usage.estimated_cost_usd}")
-    if manifest.final_status in {"failed", "plan_rejected", "budget_exhausted", "blocked"}:
+        console.print(f"Run [bold]{response.run_id}[/bold] → {response.status}")
+        usage = (response.data or {}).get("usage") or {}
+        if usage.get("estimated_cost_usd") is not None:
+            console.print(f"Cost: ${usage['estimated_cost_usd']}")
+    if response.status == "budget_exhausted":
+        raise typer.Exit(6)
+    if response.status in {"failed", "plan_rejected", "blocked"}:
         raise typer.Exit(4)
 
 
@@ -337,14 +381,10 @@ def approve_cmd(
     run_id: str = typer.Argument(...),
     apply: bool = typer.Option(False, "--apply"),
 ) -> None:
-    config = load_config()
-    coord = RunCoordinator(config=config, gateway=MockGateway())
-    try:
-        result = coord.approve(run_id, apply=apply)
-    except ProductFactoryError as exc:
-        console.print(f"[red]{exc.message}[/red]")
-        raise typer.Exit(exc.exit_code) from exc
-    console.print_json(data=result)
+    response = _local_host_service().approve(run_id, apply=apply)
+    if not response.ok:
+        raise typer.Exit(_print_host_failure(response))
+    console.print_json(data=(response.data or {}).get("approval") or response.model_dump(mode="json"))
 
 
 @handoff_app.command("approve")
@@ -352,21 +392,10 @@ def handoff_approve_cmd(handoff_id: str = typer.Argument(...)) -> None:
     """Promote one evidence-complete handoff after explicit operator confirmation."""
     if not typer.confirm(f"Approve handoff {handoff_id}?"):
         raise typer.Abort()
-    config = load_config()
-    from product_factory.persistence.database import Database
-    from product_factory.trust.handoffs import HandoffError, HandoffService
-
-    db = Database(config.root / ".product-factory" / "data" / "product_factory.sqlite")
-    try:
-        record = HandoffService(db, config.root / ".product-factory").approve(
-            handoff_id, actor="local_cli_operator"
-        )
-    except HandoffError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(2) from exc
-    finally:
-        db.close()
-    console.print_json(data=record.model_dump(mode="json"))
+    response = _local_host_service().approve_handoff(handoff_id, actor="local_cli_operator")
+    if not response.ok:
+        raise typer.Exit(_print_host_failure(response))
+    console.print_json(data=(response.data or {}).get("handoff") or response.model_dump(mode="json"))
 
 
 @handoff_app.command("supersede")
@@ -377,47 +406,30 @@ def handoff_supersede_cmd(
     """Terminally supersede an approved handoff after confirmation."""
     if not typer.confirm(f"Supersede handoff {handoff_id}?"):
         raise typer.Abort()
-    config = load_config()
-    from product_factory.persistence.database import Database
-    from product_factory.trust.handoffs import HandoffError, HandoffService
-
-    db = Database(config.root / ".product-factory" / "data" / "product_factory.sqlite")
-    try:
-        record = HandoffService(db, config.root / ".product-factory").supersede(
-            handoff_id,
-            successor_handoff_id=successor_handoff_id,
-            actor="local_cli_operator",
-        )
-    except HandoffError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(2) from exc
-    finally:
-        db.close()
-    console.print_json(data=record.model_dump(mode="json"))
+    response = _local_host_service().supersede_handoff(
+        handoff_id,
+        successor_handoff_id=successor_handoff_id,
+        actor="local_cli_operator",
+    )
+    if not response.ok:
+        raise typer.Exit(_print_host_failure(response))
+    console.print_json(data=(response.data or {}).get("handoff") or response.model_dump(mode="json"))
 
 
 @app.command("reject")
 def reject_cmd(run_id: str = typer.Argument(...)) -> None:
-    config = load_config()
-    coord = RunCoordinator(config=config, gateway=MockGateway())
-    try:
-        result = coord.reject(run_id)
-    except ProductFactoryError as exc:
-        console.print(f"[red]{exc.message}[/red]")
-        raise typer.Exit(exc.exit_code) from exc
-    console.print_json(data=result)
+    response = _local_host_service().reject(run_id)
+    if not response.ok:
+        raise typer.Exit(_print_host_failure(response))
+    console.print_json(data=(response.data or {}).get("approval") or response.model_dump(mode="json"))
 
 
 @app.command("apply")
 def apply_cmd(run_id: str = typer.Argument(...)) -> None:
-    config = load_config()
-    coord = RunCoordinator(config=config, gateway=MockGateway())
-    try:
-        result = coord.apply_patch(run_id)
-    except ProductFactoryError as exc:
-        console.print(f"[red]{exc.message}[/red]")
-        raise typer.Exit(exc.exit_code) from exc
-    console.print_json(data=result)
+    response = _local_host_service().apply(run_id)
+    if not response.ok:
+        raise typer.Exit(_print_host_failure(response))
+    console.print_json(data=(response.data or {}).get("apply") or response.model_dump(mode="json"))
 
 
 @app.command("land")
@@ -770,7 +782,7 @@ def ops_backup_cmd(
     dest: Path = typer.Option(..., "--dest", help="Output .tar.gz path"),
     data_dir: Path | None = typer.Option(None, "--data-dir"),
 ) -> None:
-    """Create a consistent SQLite + runs/ops snapshot archive."""
+    """Administrative: create a SQLite + runs/ops snapshot (not a HostService mutation)."""
     from product_factory.persistence.backup import create_backup
 
     root = _resolve_data_dir(data_dir)
@@ -789,7 +801,7 @@ def ops_restore_cmd(
         help="Move aside a non-empty target data directory before restore",
     ),
 ) -> None:
-    """Restore a backup archive into the data root."""
+    """Administrative: restore a backup archive (not a HostService mutation)."""
     from product_factory.persistence.backup import restore_backup
 
     root = _resolve_data_dir(data_dir)
@@ -802,7 +814,7 @@ def ops_restore_cmd(
 def ops_backup_status_cmd(
     data_dir: Path | None = typer.Option(None, "--data-dir"),
 ) -> None:
-    """Summarize the local data root for backup planning."""
+    """Administrative: summarize the local data root for backup planning."""
     from product_factory.persistence.backup import backup_status
 
     console.print_json(data=backup_status(_resolve_data_dir(data_dir)))
@@ -858,9 +870,12 @@ def mcp_cmd(
 
 @app.command("costs")
 def costs_cmd(run_id: str | None = typer.Argument(None)) -> None:
-    config = load_config()
-    coord = RunCoordinator(config=config, gateway=MockGateway())
-    rows = [coord.db.get_run(run_id)] if run_id else coord.db.list_runs()
+    service = _local_host_service()
+    if run_id:
+        row = service.coord.db.get_run(run_id)
+        rows = [row] if row else []
+    else:
+        rows = list(service.coord.db.list_runs())
     total = Decimal("0")
     for row in rows:
         if not row:

@@ -17,6 +17,7 @@ from product_factory.api.remote_mode import (
 )
 from product_factory.api.streaming import encode_sse, iter_events
 from product_factory.host.protocol import HOST_PROTOCOL
+from product_factory.host.protocol_v2 import protocol_metadata
 from product_factory.observability.contracts import (
     ArtifactView,
     ContentView,
@@ -52,7 +53,7 @@ def meta(request: Request) -> dict:
     repos = repositories_for_root(root)
     base = canonical_observe_base(request_base=str(request.base_url))
     ingress = state.ingress_config()
-    return {
+    payload = {
         "protocol": HOST_PROTOCOL,
         "api_version": "v1",
         "schema_version": 1,
@@ -70,6 +71,9 @@ def meta(request: Request) -> dict:
             "upload_bounds": upload_bounds_summary(ingress),
         },
     }
+    # SD4: advertise multi-protocol support and dashboard deployment bounds.
+    payload.update(protocol_metadata())
+    return payload
 
 
 @router.get("/runs", response_model=list[RunSummary])

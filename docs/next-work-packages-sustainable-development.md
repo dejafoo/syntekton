@@ -56,7 +56,7 @@ SD3 Durability      SD4 Protocol      SD5 Build / CI
 | SD1 — Executor truth | `[x]` | F-05–F-07 | G1 | [SD1](next-work-packages-sd1-executor-truth.md) |
 | SD2 — Kernel decomposition | `[x]` | F-06–F-08, F-22 | G2 | [SD2](next-work-packages-sd2-kernel-decomposition.md) |
 | SD3 — Durability | `[ ]` | F-09–F-12 | G3 | [SD3](next-work-packages-sd3-durability.md) |
-| SD4 — Protocol and clients | `[ ]` | F-13–F-18 | G3 | [SD4](next-work-packages-sd4-protocol-clients.md) |
+| SD4 — Protocol and clients | `[x]` branch `sd/sd4-protocol-clients` | F-13–F-18 | G3 (merge pending) | [SD4](next-work-packages-sd4-protocol-clients.md) |
 | SD5 — Release engineering | `[ ]` | F-17, F-23, F-24 | G3 | [SD5](next-work-packages-sd5-release-engineering.md) |
 | SD6 — Evaluation | `[ ]` | F-19, F-20 | G4 | [SD6](next-work-packages-sd6-evaluation.md) |
 | SD7 — Simplification/governance | `[ ]` | F-03, F-05, F-13, F-21, F-22, F-25, F-26 | post-G4 | [SD7/SD8](next-work-packages-sd7-sd8-simplification-performance.md) |

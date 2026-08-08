@@ -1,0 +1,13 @@
+{
+  "request": {
+    "request_text": "Add a validated health-check endpoint with tests.",
+    "workflow_type": "code_change",
+    "validation_commands": [],
+    "artifact_overrides": {},
+    "pack_input": {},
+    "handoffs": [],
+    "budget_usd": 3.0,
+    "metadata": {}
+  },
+  "notes": "Cross-language golden: no dead v1 fields; handoffs use {handoff_id, expected_digest} when present."
+}

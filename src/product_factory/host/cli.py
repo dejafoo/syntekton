@@ -17,23 +17,21 @@ from product_factory.domain.artifacts import HandoffRef
 from product_factory.domain.budgets import run_budget_from_policy
 from product_factory.domain.errors import ProductFactoryError
 from product_factory.domain.runs import ArtifactOverride, RunRequest
-from product_factory.gateway.factory import gateway_from_config
-from product_factory.gateway.mock import MockGateway
 from product_factory.host.protocol import HostResponse
+from product_factory.host.registry import get_host_service
 from product_factory.host.service import HostService
 from product_factory.host_mcp.factory import resolve_mcp_config_root
 from product_factory.workflows.inputs import parse_pack_input_option
 
 host_app = typer.Typer(
     name="host",
-    help="Machine host protocol (product-factory.host/v1). JSON output by default.",
+    help=(
+        "Machine host protocol (product-factory.host/v1 compatibility; "
+        "prefer host/v2 via /api/v2). JSON output by default."
+    ),
     no_args_is_help=True,
     add_completion=False,
 )
-
-
-def _gateway_from_config(config, *, force_mock: bool = False):
-    return gateway_from_config(config, force_mock=force_mock)
 
 
 def _parse_validation_commands(
@@ -101,12 +99,10 @@ def _service(
     if data_dir is None and os.environ.get("PRODUCT_FACTORY_DATA_DIR"):
         data_dir = Path(os.environ["PRODUCT_FACTORY_DATA_DIR"]).expanduser()
     force_mock = mock or bool(os.environ.get("PRODUCT_FACTORY_FORCE_MOCK"))
-    gateway = _gateway_from_config(config, force_mock=force_mock)
-    return HostService(
+    return get_host_service(
         config=config,
-        gateway=gateway,
         data_dir=data_dir,
-        use_deterministic_planner=force_mock or isinstance(gateway, MockGateway),
+        force_mock=force_mock,
     )
 
 

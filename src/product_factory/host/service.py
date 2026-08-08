@@ -545,6 +545,45 @@ class HostService:
             data={"approval": result},
         )
 
+    def resume(self, run_id: str) -> HostResponse:
+        """Resume an interrupted run through the shared application service."""
+        try:
+            manifest = self.coord.resume(run_id)
+        except ProductFactoryError as exc:
+            return HostResponse.failure(
+                code=exc.__class__.__name__,
+                message=exc.message,
+                run_id=run_id,
+                details=exc.details,
+            )
+        return HostResponse.success(
+            run_id=manifest.run_id,
+            status=manifest.final_status,
+            data={"usage": json.loads(manifest.usage.model_dump_json())},
+        )
+
+    def apply(self, run_id: str) -> HostResponse:
+        """Apply an approved patch through the shared application service."""
+        try:
+            result = self.coord.apply_patch(run_id)
+        except ProductFactoryError as exc:
+            return HostResponse.failure(
+                code=exc.__class__.__name__,
+                message=exc.message,
+                run_id=run_id,
+                details=exc.details,
+            )
+        row = self.coord.db.get_run(run_id)
+        return HostResponse.success(
+            run_id=run_id,
+            status=row["status"] if row else "completed",
+            data={"apply": result},
+        )
+
+    def list_runs(self, *, limit: int = 50) -> HostResponse:
+        rows = [dict(row) for row in self.coord.db.list_runs(limit=limit)]
+        return HostResponse.success(data={"runs": rows})
+
     def cancel(self, run_id: str) -> HostResponse:
         try:
             result = self.coord.cancel(run_id)
