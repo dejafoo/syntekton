@@ -1,0 +1,83 @@
+[
+  {
+    "connector_id": "filesystem_mcp",
+    "description": "Read-only filesystem access to configured roots via a local MCP server",
+    "egress_mode": "none",
+    "permissions": [
+      "read"
+    ],
+    "tool_class": "mcp_filesystem_read",
+    "tools": [
+      "mcp_read_file",
+      "mcp_list_directory",
+      "mcp_search_files"
+    ]
+  },
+  {
+    "connector_id": "git_ci_read",
+    "description": "Read-only GitHub-Actions-shaped checks and artifacts",
+    "egress_mode": "domains",
+    "permissions": [
+      "read"
+    ],
+    "tool_class": "ci_read",
+    "tools": [
+      "get_commit_checks",
+      "get_build_artifacts"
+    ]
+  },
+  {
+    "connector_id": "ops_read",
+    "description": "Bounded observability and incident read plane",
+    "egress_mode": "domains",
+    "permissions": [
+      "read"
+    ],
+    "tool_class": "ops_read",
+    "tools": [
+      "query_service_signals",
+      "get_incident"
+    ]
+  },
+  {
+    "connector_id": "simulated_staging",
+    "description": "In-process simulated staging fixture (not production deploy)",
+    "egress_mode": "none",
+    "permissions": [
+      "read",
+      "write"
+    ],
+    "tool_class": "deployment_write",
+    "tools": [
+      "resolve_deployment_target",
+      "start_deployment",
+      "get_rollout_status",
+      "verify_health",
+      "rollback_deployment"
+    ]
+  },
+  {
+    "connector_id": "source_fetch",
+    "description": "Retrieve a search-gated public source without returning its raw body inline",
+    "egress_mode": "domains",
+    "permissions": [
+      "read"
+    ],
+    "tool_class": "source_read",
+    "tools": [
+      "fetch_source"
+    ]
+  },
+  {
+    "connector_id": "tavily_web_search",
+    "description": "Read-only web search via the Tavily Search API",
+    "egress_mode": "domains",
+    "permissions": [
+      "read"
+    ],
+    "tool_class": "web_read",
+    "tools": [
+      "web_search"
+    ]
+  }
+]

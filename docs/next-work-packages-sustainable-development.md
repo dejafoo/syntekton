@@ -1,6 +1,6 @@
 # Sustainable development program
 
-**Status:** `[~]` — Baseline + SD0–SD5 + **G3** closed; **SD6 hermetic foundation** on `sd/sd6-evaluation` (**G4 operational deferred**).  
+**Status:** `[~]` — Baseline + SD0–SD5 + **G3** closed; **SD6 hermetic foundation** on `sd/sd6-evaluation` (**G4 operational deferred**); **SD7/SD8 scaffolding** on `sd/sd7-sd8-simplify` (SD8 baselines only; AMD tuning deferred).  
 **Source:** [Sustainable-development handover](handover_sustainable_development.md).  
 **Scope:** make the existing single-user, private-network, SQLite-based product supportable and honestly executable. This program does not add workflow packs, connector authority, deployment targets, multi-tenancy, distributed scheduling, a replacement CLI, or a backend-for-frontend.
 
@@ -59,8 +59,8 @@ SD3 Durability      SD4 Protocol      SD5 Build / CI
 | SD4 — Protocol and clients | `[x]` | F-13–F-18 | G3 | [SD4](next-work-packages-sd4-protocol-clients.md) |
 | SD5 — Release engineering | `[x]` | F-17, F-23, F-24 | G3 | [SD5](next-work-packages-sd5-release-engineering.md) |
 | SD6 — Evaluation | `[~]` hermetic / G4 deferred | F-19, F-20 | G4 | [SD6](next-work-packages-sd6-evaluation.md) |
-| SD7 — Simplification/governance | `[ ]` | F-03, F-05, F-13, F-21, F-22, F-25, F-26 | post-G4 | [SD7/SD8](next-work-packages-sd7-sd8-simplification-performance.md) |
-| SD8 — Performance | `[ ]` | F-04, F-12, F-19, F-20 | post-G4 | [SD7/SD8](next-work-packages-sd7-sd8-simplification-performance.md) |
+| SD7 — Simplification/governance | `[~]` scaffolding | F-03, F-05, F-13, F-21, F-22, F-25, F-26 | post-G4 | [SD7/SD8](next-work-packages-sd7-sd8-simplification-performance.md) |
+| SD8 — Performance | `[~]` baselines only; AMD tuning deferred | F-04, F-12, F-19, F-20 | post-G4 | [SD7/SD8](next-work-packages-sd7-sd8-simplification-performance.md) |
 
 Finding IDs refer to the handover. Assignment is ownership, not the only possible dependency.
 
