@@ -1,0 +1,4 @@
+interface:
+  display_name: "Trust Boundary Change"
+  short_description: "Protect durable authority and untrusted inputs."
+  default_prompt: "Use $trust-boundary-change to implement this handoff, approval, or external action change."

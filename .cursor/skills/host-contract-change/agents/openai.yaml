@@ -1,0 +1,4 @@
+interface:
+  display_name: "Host Contract Change"
+  short_description: "Safely evolve host, API, MCP, and client contracts."
+  default_prompt: "Use $host-contract-change to evolve this host or client contract."

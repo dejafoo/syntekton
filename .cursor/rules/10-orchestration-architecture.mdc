@@ -1,0 +1,7 @@
+---
+description: Enforce ownership boundaries for orchestration changes.
+globs: src/product_factory/orchestration/**/*.py, src/product_factory/planning/**/*.py, src/product_factory/scheduling/**/*.py, src/product_factory/validation/**/*.py, src/product_factory/workflows/**/*.py
+alwaysApply: false
+---
+
+Classify behavior as lifecycle, executor, pack policy, composition, scheduler/lineage, validation/repair, finalization, or projection before editing. Do not place it in `RunCoordinator`; do not use named workflow/capability branches in shared lifecycle code. Read `.cursor/skills/orchestration-architecture-change/SKILL.md` and add a test proving the selected boundary.

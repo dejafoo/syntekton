@@ -1,0 +1,7 @@
+---
+description: Preserve migration, transaction, worker, artifact, and recovery safety.
+globs: src/product_factory/persistence/**/*.py, src/product_factory/repositories/**/*.py, src/product_factory/workers/**/*.py, src/product_factory/observability/**/*.py
+alwaysApply: false
+---
+
+Read `.cursor/skills/durability-state-change/SKILL.md`. Specify aggregate ownership, transaction, migration fixture, interruption/recovery behavior, and retention impact. Keep direct DB access inside repositories and verify durable state rather than inferring it from events.

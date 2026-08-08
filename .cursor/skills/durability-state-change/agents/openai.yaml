@@ -1,0 +1,4 @@
+interface:
+  display_name: "Durability and State Change"
+  short_description: "Safely change durable state, workers, and storage."
+  default_prompt: "Use $durability-state-change to implement this persistence or worker change."

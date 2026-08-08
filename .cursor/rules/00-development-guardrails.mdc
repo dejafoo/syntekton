@@ -1,0 +1,16 @@
+---
+description: Universal Product Factory development guardrails.
+alwaysApply: true
+---
+
+# Development guardrails
+
+This repository's target architecture is in `docs/handover_sustainable_development.md` and SD0–SD8 playbooks. Existing `RunCoordinator` and host/v1 shapes are compatibility surfaces, not examples for new code.
+
+- Keep one authoritative source for policy, lifecycle state, and access decisions.
+- Do not add behavior to `RunCoordinator`; use an owning lifecycle service, executor, registry/pack, repository, adapter, or projection.
+- Do not add named workflow/capability branches in shared runtime code; extend registries and pack policy.
+- Do not return success for unimplemented or unverified work.
+- Do not bypass shared host service, persistence repositories, capture policy, or versioned contracts.
+
+For a substantial change, include concern, owning boundary, authoritative source, compatibility, guardrail test, and any ADR-backed temporary exception in the hand-off.

@@ -1,0 +1,7 @@
+---
+description: Require registry-backed capability and workflow extensions.
+globs: src/product_factory/domain/**/*.py, src/product_factory/workflows/**/*.py, src/product_factory/planning/**/*.py, src/product_factory/gateway/**/*.py, src/product_factory/policy/**/*.py
+alwaysApply: false
+---
+
+Read `.cursor/skills/registry-first-extension/SKILL.md`. Capabilities require a canonical descriptor, executor/adapter, profile/model role, tool authority, budget, parser/result schema, and evaluation category. Packs narrow authority only; unknown entries fail before admission. Never duplicate mappings in clients or shared named-workflow branches.

@@ -1,0 +1,7 @@
+---
+description: Require architectural review before completing substantial code changes.
+globs: src/product_factory/**/*.py
+alwaysApply: false
+---
+
+Before considering a substantial change complete, read `.cursor/skills/architectural-review/SKILL.md`. Review the actual diff for coordinator growth, duplicate policy, named branches, placeholder success, unauthoritative evidence, persistence bypasses, and client-boundary violations. Record concrete findings or an explicit clean review.

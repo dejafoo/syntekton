@@ -1,0 +1,7 @@
+---
+description: Preserve shared host service and versioned client contracts.
+globs: src/product_factory/api/**/*.py, src/product_factory/cli/**/*.py, src/product_factory/delivery/**/*.py, src/product_factory/host/**/*.py, src/product_factory/host_mcp/**/*.py, src/product_factory/remote/**/*.py, dashboard/**/*.ts, dashboard/**/*.tsx, integrations/opencode-plugin/**/*.ts
+alwaysApply: false
+---
+
+Read `.cursor/skills/host-contract-change/SKILL.md`. Route mutations through the shared application service, version and strictly validate contracts, use resumable SSE only, and keep the dashboard monitor-only and loopback-only.

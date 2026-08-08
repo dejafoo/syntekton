@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orchestration Architecture Change"
+  short_description: "Place orchestration changes in the correct boundary."
+  default_prompt: "Use $orchestration-architecture-change to plan and implement this orchestration change."
