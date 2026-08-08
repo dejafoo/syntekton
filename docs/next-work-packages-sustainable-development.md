@@ -1,6 +1,6 @@
 # Sustainable development program
 
-**Status:** `[~]` — Baseline + SD0/G0 + SD1/G1 + SD2/G2 hermetic gates landed; SD3–SD5 platform in parallel.  
+**Status:** `[~]` — Baseline + SD0/G0 + SD1/G1 + SD2/G2 hermetic; SD3 durability + SD4 protocol on `sd/g3-platform` merge; SD5 still to merge.  
 **Source:** [Sustainable-development handover](handover_sustainable_development.md).  
 **Scope:** make the existing single-user, private-network, SQLite-based product supportable and honestly executable. This program does not add workflow packs, connector authority, deployment targets, multi-tenancy, distributed scheduling, a replacement CLI, or a backend-for-frontend.
 
@@ -55,7 +55,7 @@ SD3 Durability      SD4 Protocol      SD5 Build / CI
 | SD0 — Trust boundaries | `[x]` | F-01–F-04 | G0 | [SD0](next-work-packages-sd0-trust-boundaries.md) |
 | SD1 — Executor truth | `[x]` | F-05–F-07 | G1 | [SD1](next-work-packages-sd1-executor-truth.md) |
 | SD2 — Kernel decomposition | `[x]` | F-06–F-08, F-22 | G2 | [SD2](next-work-packages-sd2-kernel-decomposition.md) |
-| SD3 — Durability | `[ ]` | F-09–F-12 | G3 | [SD3](next-work-packages-sd3-durability.md) |
+| SD3 — Durability | `[~]` | F-09–F-12 | G3 | [SD3](next-work-packages-sd3-durability.md) |
 | SD4 — Protocol and clients | `[x]` branch `sd/sd4-protocol-clients` | F-13–F-18 | G3 (merge pending) | [SD4](next-work-packages-sd4-protocol-clients.md) |
 | SD5 — Release engineering | `[ ]` | F-17, F-23, F-24 | G3 | [SD5](next-work-packages-sd5-release-engineering.md) |
 | SD6 — Evaluation | `[ ]` | F-19, F-20 | G4 | [SD6](next-work-packages-sd6-evaluation.md) |

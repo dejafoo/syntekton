@@ -41,3 +41,15 @@ Owners below are **default PR boundaries**. Cross-cutting edits need an explicit
 ## Conflict rule
 
 Do not land persistence schema changes in the same PR as host/v2 or coordinator decomposition. SD0 slices stay short and sequential where the playbook requires ordering (A before B/C tables).
+
+
+## SD3 durability owners (parallel with SD2/SD5)
+
+| Area | Paths |
+| --- | --- |
+| Connection actor / aggregate repos | `src/product_factory/persistence/connection.py`, `persistence/repositories/` |
+| Artifacts / backup / retention | `persistence/artifacts.py`, `backup.py`, `retention.py` |
+| Worker drain | `src/product_factory/workers/supervisor.py` (+ minimal `host/service.py` close hook) |
+| Eval store (no db.conn) | `src/product_factory/evaluation/store.py` |
+| Ops maintain CLI | `cli/app.py` `ops` commands only |
+| Tests / evidence | `tests/unit/test_sd3_*.py`, `docs/evidence/sustainable-development/sd3/` |

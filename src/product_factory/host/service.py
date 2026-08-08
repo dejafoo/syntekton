@@ -117,8 +117,15 @@ class HostService:
             self.supervisor.start()
 
     def close(self) -> None:
-        """Stop service background activity and close its coordinator database."""
-        self.supervisor.stop()
+        """Graceful drain then close the coordinator database last (SD3.B).
+
+        Temporary host hook: shutdown ownership should move to a dedicated
+        lifecycle service in SD2; removal issue: ``remove-host-drain-hook-2026-08``.
+        """
+        import os
+
+        grace = float(os.environ.get("PRODUCT_FACTORY_SHUTDOWN_GRACE_SECONDS", "15"))
+        self.supervisor.drain(grace_seconds=grace, close_database=False)
         self.coord.db.close()
 
     def subscription_for(self, run_id: str, *, after_seq: int = 0) -> HostSubscription:

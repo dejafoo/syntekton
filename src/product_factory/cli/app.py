@@ -48,7 +48,7 @@ observe_app = typer.Typer(help="Observability API commands")
 app.add_typer(observe_app, name="observe")
 ops_app = typer.Typer(
     help=(
-        "Administrative database/backup commands (NOT run semantics). "
+        "Administrative database/backup/retention commands (NOT run semantics). "
         "Mutations go through HostService via run/host/MCP/HTTP — not ops."
     )
 )
@@ -818,6 +818,79 @@ def ops_backup_status_cmd(
     from product_factory.persistence.backup import backup_status
 
     console.print_json(data=backup_status(_resolve_data_dir(data_dir)))
+
+
+
+@ops_app.command("maintain")
+def ops_maintain_cmd(
+    data_dir: Path | None = typer.Option(None, "--data-dir"),
+    dry_run: bool = typer.Option(True, "--dry-run/--execute", help="Dry-run first (default)"),
+    prune_run: list[str] = typer.Option(None, "--prune-run", help="Explicit run ID to prune"),
+    max_age_days: float | None = typer.Option(None, "--max-age-days"),
+    backup_ref: Path | None = typer.Option(None, "--backup-ref", help="Eligible backup archive"),
+    vacuum: bool = typer.Option(False, "--vacuum", help="VACUUM after checkpoint (execute only)"),
+) -> None:
+    """Dry-run-first retention/maintenance inventory and optional prune/GC (SD3.D)."""
+    from product_factory.persistence.database import Database
+    from product_factory.persistence.retention import MaintenanceService
+
+    root = _resolve_data_dir(data_dir)
+    db = Database(root / "data" / "product_factory.sqlite")
+    try:
+        svc = MaintenanceService(data_dir=root, db=db)
+        plan = svc.plan(
+            dry_run=dry_run,
+            prune_run_ids=list(prune_run or []),
+            max_age_days=max_age_days,
+            backup_ref=str(backup_ref) if backup_ref else None,
+        )
+        if vacuum:
+            plan.notes.append("vacuum:requested")
+        result = svc.execute(plan, require_backup=True)
+        console.print_json(data=result.to_dict())
+    finally:
+        db.close()
+
+
+@ops_app.command("pin")
+def ops_pin_cmd(
+    target_id: str = typer.Argument(...),
+    kind: str = typer.Option("run", "--kind"),
+    reason: str = typer.Option("", "--reason"),
+    data_dir: Path | None = typer.Option(None, "--data-dir"),
+) -> None:
+    """Pin a run or experiment so retention cannot prune it."""
+    from product_factory.persistence.database import Database
+    from product_factory.persistence.retention import MaintenanceService
+
+    root = _resolve_data_dir(data_dir)
+    db = Database(root / "data" / "product_factory.sqlite")
+    try:
+        MaintenanceService(data_dir=root, db=db).pin(
+            target_kind=kind, target_id=target_id, reason=reason
+        )
+        console.print(f"[green]pinned[/green] {kind}:{target_id}")
+    finally:
+        db.close()
+
+
+@ops_app.command("unpin")
+def ops_unpin_cmd(
+    target_id: str = typer.Argument(...),
+    kind: str = typer.Option("run", "--kind"),
+    data_dir: Path | None = typer.Option(None, "--data-dir"),
+) -> None:
+    """Remove a retention pin."""
+    from product_factory.persistence.database import Database
+    from product_factory.persistence.retention import MaintenanceService
+
+    root = _resolve_data_dir(data_dir)
+    db = Database(root / "data" / "product_factory.sqlite")
+    try:
+        MaintenanceService(data_dir=root, db=db).unpin(target_kind=kind, target_id=target_id)
+        console.print(f"[green]unpinned[/green] {kind}:{target_id}")
+    finally:
+        db.close()
 
 
 @app.command("serve")
