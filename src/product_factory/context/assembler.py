@@ -144,23 +144,23 @@ def list_repository_paths(
     max_files: int = 80,
 ) -> tuple[list[dict[str, str]], list[str]]:
     """File-list-only context for WP4 ablations (paths without file bodies)."""
+    from product_factory.context.safe_inventory import (
+        InventoryPolicy,
+        build_safe_repository_inventory,
+    )
+
     if not root.exists():
         return [], ["repository root unavailable"]
-    paths: list[str] = []
-    skipped: list[str] = []
-    for path in sorted(root.rglob("*")):
-        if not path.is_file() or ".git" in path.parts:
-            continue
-        rel = str(path.relative_to(root))
-        if any(part in {".env", "secrets", "__pycache__", ".venv"} for part in path.parts):
-            skipped.append(rel)
-            continue
-        paths.append(rel)
-        if len(paths) >= max_files:
-            break
+    inventory = build_safe_repository_inventory(
+        root,
+        policy=InventoryPolicy(max_files=max_files, max_file_bytes=100_000),
+    )
+    paths = inventory.relative_paths()[:max_files]
     omitted: list[str] = ["context_mode=file_list_only"]
-    if skipped:
-        omitted.append(f"excluded {len(skipped)} sensitive/generated paths")
+    if inventory.exclusions:
+        omitted.append(f"excluded {len(inventory.exclusions)} paths via SafeRepositoryInventory")
+    if inventory.truncated:
+        omitted.append("inventory truncated by policy ceilings")
     excerpts = [{"path": rel, "content": "(path only)", "truncated": "false"} for rel in paths]
     return excerpts, omitted
 
@@ -173,41 +173,44 @@ def select_repository_excerpts(
     max_chars: int = 30_000,
 ) -> tuple[list[dict[str, str]], list[str]]:
     """Select deterministic, relevant, line-numbered repository excerpts."""
+    from product_factory.context.safe_inventory import (
+        InventoryPolicy,
+        build_safe_repository_inventory,
+    )
+
     if not root.exists():
         return [], ["repository root unavailable"]
+    inventory = build_safe_repository_inventory(
+        root,
+        policy=InventoryPolicy(max_files=max(max_files * 40, 200), max_file_bytes=100_000),
+    )
     terms = {
         word.lower()
         for word in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", objective)
         if word.lower() not in {"the", "and", "with", "from", "that", "this", "add"}
     }
-    candidates: list[tuple[int, str, Path]] = []
-    skipped: list[str] = []
-    for path in root.rglob("*"):
-        if not path.is_file() or ".git" in path.parts:
-            continue
-        rel = str(path.relative_to(root))
-        if any(part in {".env", "secrets", "__pycache__", ".venv"} for part in path.parts):
-            skipped.append(rel)
-            continue
-        if path.stat().st_size > 100_000:
-            continue
+    candidates: list[tuple[int, str]] = []
+    for entry in inventory.entries:
+        rel = entry.relative_path
         score = sum(term in rel.lower() for term in terms) * 10
-        if path.suffix in {".py", ".ts", ".tsx", ".js", ".go", ".rs"}:
+        suffix = Path(rel).suffix
+        if suffix in {".py", ".ts", ".tsx", ".js", ".go", ".rs"}:
             score += 3
-        if path.name.lower().startswith(("readme", "pyproject", "package.json")):
+        name = Path(rel).name.lower()
+        if name.startswith(("readme", "pyproject", "package.json")):
             score += 2
-        candidates.append((-score, rel, path))
+        candidates.append((-score, rel))
     excerpts: list[dict[str, str]] = []
     consumed = 0
-    for _, rel, path in sorted(candidates):
-        try:
-            raw = path.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue
-        numbered = "\n".join(f"{i}: {line}" for i, line in enumerate(raw.splitlines(), 1))
+    for _, rel in sorted(candidates):
         remaining = max_chars - consumed
         if remaining <= 0 or len(excerpts) >= max_files:
             break
+        try:
+            raw = inventory.read_text(rel)
+        except (UnicodeDecodeError, OSError, PermissionError, FileNotFoundError):
+            continue
+        numbered = "\n".join(f"{i}: {line}" for i, line in enumerate(raw.splitlines(), 1))
         content = numbered[:remaining]
         excerpts.append(
             {
@@ -217,11 +220,13 @@ def select_repository_excerpts(
             }
         )
         consumed += len(content)
-    omitted = []
+    omitted: list[str] = []
     if len(candidates) > len(excerpts):
         omitted.append(f"omitted {len(candidates) - len(excerpts)} repository files")
-    if skipped:
-        omitted.append(f"excluded {len(skipped)} sensitive/generated paths")
+    if inventory.exclusions:
+        omitted.append(f"excluded {len(inventory.exclusions)} paths via SafeRepositoryInventory")
+    if inventory.truncated:
+        omitted.append("inventory truncated by policy ceilings")
     return excerpts, omitted
 
 
