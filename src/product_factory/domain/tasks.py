@@ -69,6 +69,7 @@ class TaskResult(BaseModel):
         "blocked",
         "failed",
         "budget_exhausted",
+        "unsupported",
     ]
     summary: str
     artifact_refs: list[ArtifactRef] = Field(default_factory=list)
@@ -82,3 +83,10 @@ class TaskResult(BaseModel):
     prompt_package_hash: str = ""
     tool_call_ids: list[str] = Field(default_factory=list)
     usage: UsageMetrics = Field(default_factory=UsageMetrics)
+    # SD1.B executor receipts — identify who worked and whether it was live.
+    executor_mode: str | None = None
+    executor_adapter_id: str | None = None
+    agent_profile_id: str | None = None
+    parser_id: str | None = None
+    execution_mode: Literal["live", "deterministic_mock"] | None = None
+    activity_receipt: dict[str, Any] = Field(default_factory=dict)
