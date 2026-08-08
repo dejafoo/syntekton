@@ -41,7 +41,8 @@ class TaskExecutionRequest:
     composer_role: str | None = None
     validation_evidence_refs: list[str] = field(default_factory=list)
     validator_results: list[dict[str, Any]] = field(default_factory=list)
-    # Coordinator-owned helpers still required by composition (removal: SD2).
+    # Typed composition boundary (SD2); services bag only for non-compose helpers.
+    composition: Any | None = None
     services: dict[str, Any] = field(default_factory=dict)
 
 

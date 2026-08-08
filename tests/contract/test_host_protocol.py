@@ -242,7 +242,7 @@ def test_host_cancel_mid_mock_run(tmp_path: Path) -> None:
     )
     gate = threading.Event()
     released = threading.Event()
-    original = service.coord._raise_if_cancelled
+    original = service.coord._engine._raise_if_cancelled
 
     def gated_raise(run_id: str) -> None:
         row = service.coord.db.get_run(run_id)
@@ -251,7 +251,7 @@ def test_host_cancel_mid_mock_run(tmp_path: Path) -> None:
             assert released.wait(timeout=10), "cancel was not signalled in time"
         original(run_id)
 
-    service.coord._raise_if_cancelled = gated_raise  # type: ignore[method-assign]
+    service.coord._engine._raise_if_cancelled = gated_raise  # type: ignore[method-assign]
 
     submitted = service.submit(
         RunRequest(

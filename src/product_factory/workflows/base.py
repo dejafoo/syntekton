@@ -234,10 +234,11 @@ class WorkflowPack:
     output_schema: dict[str, Any]
     allowed_capabilities: frozenset[str]
     default_planner_mode: str
-    validation_policy: dict[str, Any]
-    skill_policy: dict[str, Any]
-    routing_defaults: dict[str, Any]
     execution_policy: PackExecutionPolicy
+    # Deprecated identity-only fields (SD2). PackExecutionPolicy is authoritative.
+    validation_policy: dict[str, Any] = field(default_factory=dict)
+    skill_policy: dict[str, Any] = field(default_factory=dict)
+    routing_defaults: dict[str, Any] = field(default_factory=dict)
     description: str = ""
     # Deliverables keyed by stable role; names are defaults hosts may override.
     artifacts: tuple[ArtifactLandSpec, ...] = field(default_factory=tuple)
