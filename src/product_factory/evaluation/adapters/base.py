@@ -1,13 +1,30 @@
-"""Extensibility adapters for future public evaluation suites."""
+"""Extensibility adapters for public evaluation suites."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from product_factory.evaluation.adapters.swe_atlas import (
+    ExternalAdapterStore,
+    SweAtlasAdapterRecord,
+    SweAtlasCaseLoader,
+    SweAtlasCaseMapping,
+)
 from product_factory.evaluation.cases import EvalCase
 from product_factory.evaluation.subjects import SubjectArtifact, SubjectConfig
 from product_factory.gateway.base import ModelGateway
+
+__all__ = [
+    "CaseLoader",
+    "ExternalAdapterStore",
+    "ExternalSuiteCaseLoader",
+    "LocalYamlCaseLoader",
+    "SubjectRunner",
+    "SweAtlasAdapterRecord",
+    "SweAtlasCaseLoader",
+    "SweAtlasCaseMapping",
+]
 
 
 @runtime_checkable
@@ -53,10 +70,10 @@ class LocalYamlCaseLoader:
 
 
 class ExternalSuiteCaseLoader:
-    """Stub adapter proving foreign cases can map into EvalCase.
+    """Generic foreign-case mapper retained for non-Atlas stubs.
 
-    Public suites (DeepSWE, SWE Atlas) should implement CaseLoader by converting
-    their native records into EvalCase without changing the judge.
+    Prefer ``SweAtlasCaseLoader`` for SWE Atlas. Terminal-Bench is next;
+    DeepSWE is deferred (licensing/compatibility), not claimed here.
     """
 
     suite_name = "external"

@@ -86,13 +86,16 @@ def test_feasibility_fixtures_load() -> None:
     root = Path(__file__).resolve().parents[2]
     cases = load_eval_cases(root / "tests" / "eval_cases")
     feas = [c for c in cases if c.workflow_type == "feasibility_discovery"]
-    assert {c.id for c in feas} == {
+    ids = {c.id for c in feas}
+    required = {
         "feas_unfamiliar_integration",
         "feas_conflicting_sources",
         "feas_incomplete_jurisdiction",
         "feas_stale_vendor",
         "feas_insufficient_evidence",
     }
+    assert required <= ids
+    assert {"sd6_discovery_sparse_evidence", "sd6_discovery_jurisdiction_gap"} <= ids
     assert all(c.must_cover or c.expected_source_classes for c in feas)
 
 

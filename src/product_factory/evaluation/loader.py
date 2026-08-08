@@ -11,6 +11,7 @@ from product_factory.evaluation.cases import (
     EvalCase,
     validate_behavioral_contract,
     validate_discovery_contract,
+    validate_sd6_corpus_contract,
 )
 
 
@@ -46,5 +47,6 @@ def load_eval_cases(cases_dir: Path) -> list[EvalCase]:
         case = EvalCase.model_validate(data)
         validate_behavioral_contract(case)
         validate_discovery_contract(case)
+        validate_sd6_corpus_contract(case)
         cases.append(case)
     return cases

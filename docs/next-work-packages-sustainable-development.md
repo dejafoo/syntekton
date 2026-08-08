@@ -1,6 +1,6 @@
 # Sustainable development program
 
-**Status:** `[~]` — Baseline + SD0–SD2 + **G3** hermetic on `sd/g3-platform`; SD6 evaluation next.  
+**Status:** `[~]` — Baseline + SD0–SD5 + **G3** closed; **SD6 hermetic foundation** on `sd/sd6-evaluation` (**G4 operational deferred**).  
 **Source:** [Sustainable-development handover](handover_sustainable_development.md).  
 **Scope:** make the existing single-user, private-network, SQLite-based product supportable and honestly executable. This program does not add workflow packs, connector authority, deployment targets, multi-tenancy, distributed scheduling, a replacement CLI, or a backend-for-frontend.
 
@@ -58,7 +58,7 @@ SD3 Durability      SD4 Protocol      SD5 Build / CI
 | SD3 — Durability | `[x]` | F-09–F-12 | G3 | [SD3](next-work-packages-sd3-durability.md) |
 | SD4 — Protocol and clients | `[x]` | F-13–F-18 | G3 | [SD4](next-work-packages-sd4-protocol-clients.md) |
 | SD5 — Release engineering | `[x]` | F-17, F-23, F-24 | G3 | [SD5](next-work-packages-sd5-release-engineering.md) |
-| SD6 — Evaluation | `[ ]` | F-19, F-20 | G4 | [SD6](next-work-packages-sd6-evaluation.md) |
+| SD6 — Evaluation | `[~]` hermetic / G4 deferred | F-19, F-20 | G4 | [SD6](next-work-packages-sd6-evaluation.md) |
 | SD7 — Simplification/governance | `[ ]` | F-03, F-05, F-13, F-21, F-22, F-25, F-26 | post-G4 | [SD7/SD8](next-work-packages-sd7-sd8-simplification-performance.md) |
 | SD8 — Performance | `[ ]` | F-04, F-12, F-19, F-20 | post-G4 | [SD7/SD8](next-work-packages-sd7-sd8-simplification-performance.md) |
 
@@ -89,7 +89,7 @@ Finding IDs refer to the handover. Assignment is ownership, not the only possibl
 - [x] **G1:** each capability has a real executor path and cannot succeed from a stub or caller-supplied evidence-shaped field. Evidence: [`docs/evidence/sustainable-development/sd1/`](evidence/sustainable-development/sd1/).
 - [x] **G2:** `RunCoordinator` is a compatibility lifecycle facade; registry/pack policy drives extensibility. Evidence: [`docs/evidence/sustainable-development/sd2/`](evidence/sustainable-development/sd2/).
 - [x] **G3:** storage/recovery, clients, packages, and CI support unattended, diagnosable operation. Evidence: [`docs/evidence/sustainable-development/g3/`](evidence/sustainable-development/g3/).
-- [ ] **G4:** controlled real-task evidence supports a local-first default or records why it does not.
+- [~] **G4:** hermetic SD6 foundation + explicit **deferred** decision recorded; AMD-owned 30×3-seed promotion proof still required. Evidence: [`docs/evidence/sustainable-development/sd6/`](evidence/sustainable-development/sd6/).
 
 ## Required verification
 

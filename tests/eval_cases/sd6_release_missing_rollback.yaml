@@ -1,0 +1,30 @@
+id: sd6_release_missing_rollback
+workflow_type: architecture
+corpus_category: release
+request: |
+  Sanitized release readiness: review a release packet that includes an immutable
+  build id and green unit tests, but omits rollback steps and monitoring
+  ownership. Decide ready / needs_decision / blocked without inventing missing
+  ops evidence.
+tags: ['sd6', 'release', 'readiness', 'sanitized']
+expected_status:
+  - completed
+  - awaiting_approval
+acceptance_criteria:
+  - Missing rollback is a blocker or needs_decision
+  - Build id and tests alone do not imply ready
+  - Outcome cites the missing fields
+must_cover:
+  - rollback
+  - monitoring
+  - immutable build
+reference_hints: |
+  Fixture analogue: tests/fixtures/release/blocked_missing_rollback.json
+isolation_targets:
+  - release_analysis
+metadata:
+  sd6_corpus: true
+  sanitization: synthetic_release_packet
+  fixture_ref: tests/fixtures/release/blocked_missing_rollback.json
+  skill_hint: release.readiness-review
+  expected_recommendation: blocked

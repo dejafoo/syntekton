@@ -1,0 +1,45 @@
+{
+  "corpus_id": "sd6-foundation",
+  "content_sha256": "8d7e6f79cf1d8572be0dc1ab234a69edcad1edcc8384bb01e3ed5b5d6802bbdc",
+  "case_count": 47,
+  "sd6_case_ids": [
+    "sd6_discovery_jurisdiction_gap",
+    "sd6_discovery_sparse_evidence",
+    "sd6_ops_incident_unknown",
+    "sd6_ops_slo_breach",
+    "sd6_plan_api_boundary",
+    "sd6_plan_migration_cutover",
+    "sd6_quality_evidence_gate",
+    "sd6_quality_patch_review",
+    "sd6_release_missing_rollback",
+    "sd6_release_ready_packet",
+    "sd6_repo_health_check",
+    "sd6_repo_structured_logging"
+  ],
+  "sd6_category_counts": {
+    "discovery": 2,
+    "operations": 2,
+    "technical_planning": 2,
+    "quality": 2,
+    "release": 2,
+    "repository_change": 2
+  },
+  "pack_versions": {
+    "fhir-r4-public": "1.0.0"
+  },
+  "skill_versions": {
+    "architecture.system-design": "1.0.1",
+    "coding.python-service": "1.0.0",
+    "deployment.change-control": "1.0.0",
+    "discovery.evidence-assessment": "1.0.0",
+    "discovery.option-framing": "1.0.0",
+    "integration.contract-analysis": "1.0.0",
+    "integration.technical-spike": "1.0.0",
+    "operations.incident-synthesis": "1.0.0",
+    "quality.evidence-gate": "1.0.0",
+    "quality.patch-review": "1.0.1",
+    "release.readiness-review": "1.0.0",
+    "repository-inspection": "1.0.0",
+    "security.threat-review": "1.0.0"
+  }
+}

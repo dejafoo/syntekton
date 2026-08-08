@@ -1,0 +1,26 @@
+id: sd6_plan_migration_cutover
+workflow_type: architecture
+corpus_category: technical_planning
+request: |
+  Sanitized planning task: propose a cutover plan to migrate a SQLite-backed
+  local app to a dual-write-then-cutover schema migration. Include rollback
+  criteria, verification queries, and what must remain durable across restart.
+tags: ['sd6', 'planning', 'migration', 'sanitized']
+expected_status:
+  - completed
+  - awaiting_approval
+acceptance_criteria:
+  - Cutover steps are ordered and reversible
+  - Rollback criteria are explicit
+  - Durability across restart is addressed
+must_cover:
+  - dual-write or cutover
+  - rollback
+  - restart durability
+reference_hints: |
+  Plans that omit rollback or restart verification are incomplete.
+isolation_targets:
+  - architecture
+metadata:
+  sd6_corpus: true
+  sanitization: synthetic_sqlite_cutover
