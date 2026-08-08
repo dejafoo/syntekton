@@ -8,7 +8,7 @@ local/cloud labels, and the blocked-task walkthrough.
 ## Start it
 
 ```bash
-uv sync --extra observability
+uv sync --frozen --extra observability
 npm --prefix dashboard ci
 npm --prefix dashboard run build
 uv run product-factory observe serve --host 127.0.0.1 --port 8765

@@ -57,7 +57,7 @@ SD3 Durability      SD4 Protocol      SD5 Build / CI
 | SD2 — Kernel decomposition | `[ ]` | F-06–F-08, F-22 | G2 | [SD2](next-work-packages-sd2-kernel-decomposition.md) |
 | SD3 — Durability | `[ ]` | F-09–F-12 | G3 | [SD3](next-work-packages-sd3-durability.md) |
 | SD4 — Protocol and clients | `[ ]` | F-13–F-18 | G3 | [SD4](next-work-packages-sd4-protocol-clients.md) |
-| SD5 — Release engineering | `[ ]` | F-17, F-23, F-24 | G3 | [SD5](next-work-packages-sd5-release-engineering.md) |
+| SD5 — Release engineering | `[~]` | F-17, F-23, F-24 | G3 | [SD5](next-work-packages-sd5-release-engineering.md) |
 | SD6 — Evaluation | `[ ]` | F-19, F-20 | G4 | [SD6](next-work-packages-sd6-evaluation.md) |
 | SD7 — Simplification/governance | `[ ]` | F-03, F-05, F-13, F-21, F-22, F-25, F-26 | post-G4 | [SD7/SD8](next-work-packages-sd7-sd8-simplification-performance.md) |
 | SD8 — Performance | `[ ]` | F-04, F-12, F-19, F-20 | post-G4 | [SD7/SD8](next-work-packages-sd7-sd8-simplification-performance.md) |
@@ -94,20 +94,25 @@ Finding IDs refer to the handover. Assignment is ownership, not the only possibl
 ## Required verification
 
 ```text
+uv sync --frozen --extra dev
 uv run ruff format --check src tests
 uv run ruff check src tests
 uv run basedpyright
 uv run pytest -q -m "not integration"
+npm --prefix dashboard ci
 npm --prefix dashboard test -- --run
 npm --prefix dashboard run check
 npm --prefix dashboard run build
+npm --prefix integrations/opencode-plugin ci
 npm --prefix integrations/opencode-plugin test -- --run
 npm --prefix integrations/opencode-plugin run check
+bash scripts/package_smoke.sh
 uv build
 ```
 
 G0–G3 also require their targeted security, migration, package, restart, and browser suites. G4 requires real AMD scorecards and an external-suite subset.
 
+SD5 foundations evidence: [`docs/evidence/sustainable-development/sd5/`](evidence/sustainable-development/sd5/).
 ## Common PR contract
 
 Every work package PR states its finding(s), non-goals, compatibility surface, pre-change failing/characterization tests, test ownership (unit/contract/security/integration/browser/live), migration fixtures, required events/projections, completion evidence, and rollback/recovery story. `Not applicable` needs a reason.

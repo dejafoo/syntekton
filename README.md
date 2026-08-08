@@ -29,6 +29,10 @@ a host can name any of them per run (e.g. land an architecture document as
 source .venv/bin/activate
 ```
 
+`bootstrap.sh` runs `uv sync --frozen --extra dev` when `uv.lock` is present, then
+`npm ci` + dashboard build. Supported CI and local verify paths use the same
+frozen install (`uv sync --frozen`) and `npm ci` for dashboard / OpenCode plugin.
+
 ## CLI
 
 ```bash
