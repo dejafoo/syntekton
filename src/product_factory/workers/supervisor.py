@@ -133,9 +133,7 @@ class WorkerSupervisor:
 
         with self._lock:
             active = {
-                run_id: worker
-                for run_id, worker in self._workers.items()
-                if worker.is_alive()
+                run_id: worker for run_id, worker in self._workers.items() if worker.is_alive()
             }
         report.active_at_start = sorted(active)
 

@@ -237,7 +237,9 @@ MIGRATIONS: list[Migration] = [
     ),
     Migration(3, "handoff_records", _upgrade_003_handoff_records, source=_HANDOFF_SOURCE),
     Migration(4, "action_approvals", _upgrade_004_action_approvals, source=_ACTION_APPROVAL_SOURCE),
-    Migration(5, "evaluation_aggregate_schema", _upgrade_005_evaluation_schema, source=_EVAL_SOURCE),
+    Migration(
+        5, "evaluation_aggregate_schema", _upgrade_005_evaluation_schema, source=_EVAL_SOURCE
+    ),
     Migration(
         6,
         "retention_pins_and_maintenance_audit",

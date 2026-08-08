@@ -17,13 +17,16 @@ class ApprovalRepository(AggregateRepository):
         ).fetchone()
         return self._decode_action_approval(row)
 
-
     @synchronized
     def update_action_approval(
         self, approval_id: str, *, expected_status: str, values: dict[str, Any]
     ) -> bool:
         allowed = {
-            "status", "actor_json", "decided_at", "consumed_at", "consumed_by_run_id",
+            "status",
+            "actor_json",
+            "decided_at",
+            "consumed_at",
+            "consumed_by_run_id",
             "reconciliation_json",
         }
         fields = {key: value for key, value in values.items() if key in allowed}
@@ -37,7 +40,6 @@ class ApprovalRepository(AggregateRepository):
         self._conn.commit()
         return cur.rowcount == 1
 
-
     @staticmethod
     def _decode_action_approval(row: sqlite3.Row | None) -> dict[str, Any] | None:
         if row is None:
@@ -46,7 +48,6 @@ class ApprovalRepository(AggregateRepository):
         for key in ("actor", "payload", "reconciliation"):
             result[key] = json.loads(result.pop(f"{key}_json") or "{}")
         return result
-
 
     @synchronized
     def insert_action_approval(self, approval: dict[str, Any]) -> None:
@@ -59,14 +60,20 @@ class ApprovalRepository(AggregateRepository):
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                approval["approval_id"], approval["action_type"], approval["subject_run_id"],
-                approval.get("subject_artifact_instance_id"), approval["action_fingerprint"],
-                approval["status"], json.dumps(approval["actor"], sort_keys=True),
+                approval["approval_id"],
+                approval["action_type"],
+                approval["subject_run_id"],
+                approval.get("subject_artifact_instance_id"),
+                approval["action_fingerprint"],
+                approval["status"],
+                json.dumps(approval["actor"], sort_keys=True),
                 json.dumps(approval.get("payload") or {}, sort_keys=True, default=str),
-                approval["created_at"], approval.get("decided_at"), approval.get("expires_at"),
-                approval.get("consumed_at"), approval.get("consumed_by_run_id"),
+                approval["created_at"],
+                approval.get("decided_at"),
+                approval.get("expires_at"),
+                approval.get("consumed_at"),
+                approval.get("consumed_by_run_id"),
                 json.dumps(approval.get("reconciliation") or {}, sort_keys=True, default=str),
             ),
         )
         self._conn.commit()
-

@@ -16,13 +16,11 @@ class TaskRepository(AggregateRepository):
         ).fetchall()
         return [dict(r) for r in rows]
 
-
     def list_task_dependencies(self, run_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             "SELECT * FROM task_dependencies WHERE run_id = ?", (run_id,)
         ).fetchall()
         return [dict(r) for r in rows]
-
 
     def list_tasks_in_creation_order(self, run_id: str) -> list[dict[str, Any]]:
         """Tasks ordered by first-insert (rowid), a valid topological order.
@@ -36,14 +34,12 @@ class TaskRepository(AggregateRepository):
         ).fetchall()
         return [dict(r) for r in rows]
 
-
     @synchronized
     def get_task(self, run_id: str, task_id: str) -> dict[str, Any] | None:
         row = self._conn.execute(
             "SELECT * FROM tasks WHERE run_id = ? AND task_id = ?", (run_id, task_id)
         ).fetchone()
         return dict(row) if row else None
-
 
     @synchronized
     def upsert_task(
@@ -132,4 +128,3 @@ class TaskRepository(AggregateRepository):
                 (run_id, task_id, dep),
             )
         self._conn.commit()
-

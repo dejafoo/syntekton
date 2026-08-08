@@ -86,14 +86,13 @@ def test_wave_scheduler_selects_ready_tasks() -> None:
         risk_classification="low",
         request_acceptance_criteria=[],
     )
-    ready = WaveScheduler().select_ready(
-        plan, {"T1": "pending", "T2": "pending"}, max_parallel=2
-    )
+    ready = WaveScheduler().select_ready(plan, {"T1": "pending", "T2": "pending"}, max_parallel=2)
     assert [t.id for t in ready] == ["T1"]
 
 
 def test_run_request_rejects_unknown_workflow_type() -> None:
     from pydantic import ValidationError
+
     with pytest.raises(ValidationError):
         RunRequest(
             request_id="r1",

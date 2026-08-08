@@ -1,6 +1,6 @@
 # SD4 — Host protocol and client consolidation
 
-**Status:** `[x]` implemented on `sd/sd4-protocol-clients` (G3 protocol leg). **Gate:** G3 (jointly with SD3 and SD5 — still needs merge). **Findings:** F-13–F-18.  
+**Status:** `[x]` hermetic on `sd/g3-platform` (G3 closed). **Gate:** G3 (jointly with SD3 and SD5). **Findings:** F-13–F-18.  
 **Depends on:** SD2 host application-service boundary (`sd/sd2-kernel-decomposition` @ `f84346e`). **Compatibility:** v1 stays through v0.2; v2 is preferred and advertised.
 
 ## Outcome

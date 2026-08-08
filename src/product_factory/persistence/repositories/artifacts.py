@@ -18,11 +18,9 @@ class ArtifactRepository(AggregateRepository):
         ).fetchall()
         return [dict(r) for r in rows]
 
-
     def get_artifact(self, sha256: str) -> dict[str, Any] | None:
         row = self._conn.execute("SELECT * FROM artifacts WHERE sha256 = ?", (sha256,)).fetchone()
         return dict(row) if row else None
-
 
     @synchronized
     def get_artifact_instance(self, run_id: str, sha256: str) -> dict[str, Any] | None:
@@ -37,14 +35,12 @@ class ArtifactRepository(AggregateRepository):
         ).fetchone()
         return dict(row) if row else None
 
-
     @synchronized
     def get_artifact_instance_by_id(self, instance_id: str) -> dict[str, Any] | None:
         row = self._conn.execute(
             "SELECT * FROM artifact_instances WHERE instance_id = ?", (instance_id,)
         ).fetchone()
         return dict(row) if row else None
-
 
     @synchronized
     def record_artifact_instance(self, instance: dict[str, Any]) -> None:
@@ -86,7 +82,6 @@ class ArtifactRepository(AggregateRepository):
         )
         self._conn.commit()
 
-
     @synchronized
     def record_artifact(self, artifact: dict[str, Any]) -> None:
         self._conn.execute(
@@ -109,7 +104,6 @@ class ArtifactRepository(AggregateRepository):
         )
         self._conn.commit()
 
-
     def list_artifacts(self, *, created_by_task_id: str | None = None) -> list[dict[str, Any]]:
         if created_by_task_id:
             rows = self._conn.execute(
@@ -119,4 +113,3 @@ class ArtifactRepository(AggregateRepository):
         else:
             rows = self._conn.execute("SELECT * FROM artifacts").fetchall()
         return [dict(r) for r in rows]
-

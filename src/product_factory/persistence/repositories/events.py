@@ -40,7 +40,6 @@ class EventRepository(AggregateRepository):
         rows = self._conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
-
     @synchronized
     def append_event(self, event: ObservabilityEvent) -> int:
         now = datetime.now(UTC).isoformat()
@@ -81,7 +80,6 @@ class EventRepository(AggregateRepository):
         self._conn.commit()
         return int(cur.lastrowid or 0)
 
-
     def count_error_events(self, run_id: str) -> int:
         row = self._conn.execute(
             "SELECT COUNT(*) AS c FROM events WHERE run_id = ? AND severity = 'error'",
@@ -89,11 +87,9 @@ class EventRepository(AggregateRepository):
         ).fetchone()
         return int(row["c"] if row else 0)
 
-
     def latest_seq(self) -> int:
         row = self._conn.execute("SELECT COALESCE(MAX(seq), 0) AS m FROM events").fetchone()
         return int(row["m"] if row else 0)
-
 
     def latest_seq_for_run(self, run_id: str) -> int:
         row = self._conn.execute(
@@ -102,10 +98,8 @@ class EventRepository(AggregateRepository):
         ).fetchone()
         return int(row["m"] if row else 0)
 
-
     def last_event_at(self) -> str | None:
         row = self._conn.execute(
             "SELECT recorded_at FROM events ORDER BY seq DESC LIMIT 1"
         ).fetchone()
         return row["recorded_at"] if row else None
-

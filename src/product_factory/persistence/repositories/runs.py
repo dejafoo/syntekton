@@ -16,7 +16,6 @@ class RunRepository(AggregateRepository):
             return False
         return bool(int(row.get("cancel_requested") or 0))
 
-
     @synchronized
     def record_tool_call(
         self,
@@ -49,7 +48,6 @@ class RunRepository(AggregateRepository):
         )
         self._conn.commit()
 
-
     def get_model_catalog(self) -> dict[str, Any] | None:
         row = self._conn.execute(
             "SELECT payload_json, refreshed_at FROM model_catalog_cache WHERE id = 1"
@@ -58,13 +56,11 @@ class RunRepository(AggregateRepository):
             return None
         return {"payload": json.loads(row["payload_json"]), "refreshed_at": row["refreshed_at"]}
 
-
     def get_invocation(self, request_id: str) -> dict[str, Any] | None:
         row = self._conn.execute(
             "SELECT * FROM model_invocations WHERE request_id = ?", (request_id,)
         ).fetchone()
         return dict(row) if row else None
-
 
     @synchronized
     def record_validator_results(
@@ -80,7 +76,6 @@ class RunRepository(AggregateRepository):
             )
         self._conn.commit()
 
-
     def list_invocations(self, run_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             "SELECT * FROM model_invocations WHERE run_id = ? ORDER BY created_at",
@@ -88,13 +83,11 @@ class RunRepository(AggregateRepository):
         ).fetchall()
         return [dict(r) for r in rows]
 
-
     def list_validator_results(self, run_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             "SELECT * FROM validator_results WHERE run_id = ? ORDER BY id", (run_id,)
         ).fetchall()
         return [dict(r) for r in rows]
-
 
     def list_runs(self, limit: int = 50, status: str | None = None) -> list[dict[str, Any]]:
         if status:
@@ -108,7 +101,6 @@ class RunRepository(AggregateRepository):
             ).fetchall()
         return [dict(r) for r in rows]
 
-
     @synchronized
     def set_cancel_requested(self, run_id: str, *, requested: bool = True) -> None:
         now = datetime.now(UTC).isoformat()
@@ -121,13 +113,11 @@ class RunRepository(AggregateRepository):
         )
         self._conn.commit()
 
-
     def list_tool_calls(self, run_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             "SELECT * FROM tool_calls WHERE run_id = ? ORDER BY created_at", (run_id,)
         ).fetchall()
         return [dict(r) for r in rows]
-
 
     def cache_model_catalog(self, payload: dict[str, Any]) -> None:
         self._conn.execute(
@@ -142,11 +132,9 @@ class RunRepository(AggregateRepository):
         )
         self._conn.commit()
 
-
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         row = self._conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
         return dict(row) if row else None
-
 
     @synchronized
     def record_invocation(
@@ -198,7 +186,6 @@ class RunRepository(AggregateRepository):
             ),
         )
         self._conn.commit()
-
 
     @synchronized
     def upsert_run(
@@ -268,4 +255,3 @@ class RunRepository(AggregateRepository):
                 ),
             )
         self._conn.commit()
-

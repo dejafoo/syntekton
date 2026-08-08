@@ -94,9 +94,7 @@ class WorktreeLineageService:
             if inherited_artifacts:
                 try:
                     current = create_patch(wt_path, base_commit)
-                    pre_patch_fingerprint = (
-                        patch_fingerprint(current) if current.strip() else None
-                    )
+                    pre_patch_fingerprint = patch_fingerprint(current) if current.strip() else None
                 except ValidationFailureError:
                     pre_patch_fingerprint = None
             (run_dir / "output" / f"{task_id}-lineage.json").write_text(
@@ -120,4 +118,12 @@ class WorktreeLineageService:
         *,
         planned_writes: dict[str, set[str]],
     ) -> list[tuple[str, str, set[str]]]:
-        return detect_writer_conflicts(planned_writes)
+        """Return pairwise (task_a, task_b, overlapping_paths) for planned writers."""
+        pairs: list[tuple[str, str, set[str]]] = []
+        items = list(planned_writes.items())
+        for i, (left_id, left_paths) in enumerate(items):
+            for right_id, right_paths in items[i + 1 :]:
+                overlap = set(left_paths) & set(right_paths)
+                if overlap:
+                    pairs.append((left_id, right_id, overlap))
+        return pairs

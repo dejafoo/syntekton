@@ -214,7 +214,9 @@ class MaintenanceService:
         )
         return plan
 
-    def pin(self, *, target_kind: str, target_id: str, reason: str = "", actor: str = "operator") -> None:
+    def pin(
+        self, *, target_kind: str, target_id: str, reason: str = "", actor: str = "operator"
+    ) -> None:
         if target_kind not in {"run", "experiment"}:
             raise ConfigurationError(f"Unsupported pin kind: {target_kind}")
         if "/" in target_id or ".." in target_id:
@@ -389,5 +391,3 @@ def _dir_size(path: Path) -> int:
 def _disk_free(path: Path) -> int:
     usage = shutil.disk_usage(path)
     return int(usage.free)
-
-

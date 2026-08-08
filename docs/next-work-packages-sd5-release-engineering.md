@@ -1,6 +1,6 @@
 # SD5 — Reproducible builds and CI
 
-**Status:** `[~]` foundations merged onto `sd/g3-platform` with SD3+SD4 (G3 joint verification). **Gate:** G3 (jointly with SD3 and SD4). **Findings:** F-17, F-23, F-24.  
+**Status:** `[x]` foundations merged onto `sd/g3-platform` (G3 closed). **Gate:** G3 (jointly with SD3 and SD4). **Findings:** F-17, F-23, F-24.  
 **Depends on:** G1 for truthful task behavior; may begin CI foundations in parallel with SD2/SD3 after G1.
 
 ## Outcome

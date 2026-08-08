@@ -77,6 +77,7 @@ class RunRequest(BaseModel):
         if not is_registered_workflow(value):
             raise ValueError(f"Unknown workflow pack: {value!r}")
         return value
+
     repository_path: Path | None = None
     # Server-registered repository id (remote mode). Resolved to repository_path
     # on the host before execution; clients never send laptop paths remotely.

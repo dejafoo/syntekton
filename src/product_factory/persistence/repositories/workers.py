@@ -20,7 +20,6 @@ class WorkerRepository(AggregateRepository):
         ).fetchone()
         return WorkerLease.model_validate(dict(row)) if row else None
 
-
     @synchronized
     def acquire_worker_lease(
         self,
@@ -117,7 +116,6 @@ class WorkerRepository(AggregateRepository):
             raise WorkerLeaseLostError(f"Failed to read acquired lease for {run_id}")
         return lease
 
-
     def list_expired_worker_leases(self, *, now: datetime | None = None) -> list[WorkerLease]:
         expires_before = (now or datetime.now(UTC)).isoformat()
         rows = self._conn.execute(
@@ -129,7 +127,6 @@ class WorkerRepository(AggregateRepository):
             (expires_before,),
         ).fetchall()
         return [WorkerLease.model_validate(dict(row)) for row in rows]
-
 
     @synchronized
     def release_worker_lease(
@@ -160,7 +157,6 @@ class WorkerRepository(AggregateRepository):
             raise WorkerLeaseLostError(f"Worker lease for {run_id} disappeared")
         return lease
 
-
     def list_unleased_worker_runs(self) -> list[dict[str, Any]]:
         """Return nonterminal service runs with no active lease."""
         rows = self._conn.execute(
@@ -175,7 +171,6 @@ class WorkerRepository(AggregateRepository):
             """
         ).fetchall()
         return [dict(row) for row in rows]
-
 
     @synchronized
     def heartbeat_worker_lease(
@@ -208,4 +203,3 @@ class WorkerRepository(AggregateRepository):
         if lease is None:  # pragma: no cover - guarded by rowcount
             raise WorkerLeaseLostError(f"Worker lease for {run_id} disappeared")
         return lease
-

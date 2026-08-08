@@ -39,7 +39,6 @@ from product_factory.domain.errors import (
     RuntimeFailureError,
     SkillGrantViolation,
     ToolAuthorizationError,
-    ValidationFailureError,
 )
 from product_factory.domain.findings import Finding, ValidatorResult
 from product_factory.domain.plans import CompiledPlan, PlannerOutput
@@ -102,10 +101,7 @@ from product_factory.registry.capability_descriptors import (
 )
 from product_factory.repositories.patches import (
     apply_patch,
-    apply_patch_check,
-    changed_paths_from_patch,
     create_patch,
-    detect_writer_conflicts,
 )
 from product_factory.repositories.snapshot import snapshot_repository
 from product_factory.repositories.worktrees import WorktreeManager
@@ -184,9 +180,6 @@ _RESEARCH_LOOP_CAPABILITIES = frozenset(
 )
 
 
-
-
-
 # Quality-gate deliverable roles and their fallback names. Keyed by role so a
 # composer task resolves its document from the plan, not from the workflow id.
 _QUALITY_GATE_ROLES: dict[str, str] = {
@@ -262,9 +255,8 @@ def _clamp_proposal_budgets(proposal: PlannerOutput, config: AppConfig) -> Plann
     return proposal.model_copy(update={"tasks": clamped})
 
 
-from product_factory.orchestration.implementation_helpers import (  # noqa: F401,E402
+from product_factory.orchestration.implementation_helpers import (  # noqa: E402
     deterministic_impl_files,
-    extract_unified_diff,
 )
 
 
@@ -1115,7 +1107,11 @@ class RunLifecycleEngine:
                         }
                     )
         proposal = _clamp_proposal_budgets(proposal, self.config)
-        if not self.finalizer.pack_declares_patch_output(resolve_workflow_pack(request.workflow_type) if is_registered_workflow(request.workflow_type) else None):
+        if not self.finalizer.pack_declares_patch_output(
+            resolve_workflow_pack(request.workflow_type)
+            if is_registered_workflow(request.workflow_type)
+            else None
+        ):
             return proposal
         disable_review = request.metadata.get("disable_review") == "true"
         force_review = request.metadata.get("force_review") == "true"
@@ -1356,7 +1352,8 @@ class RunLifecycleEngine:
                         "findings": [finding.model_dump(mode="json") for finding in prior.findings],
                     }
                     for prior in pre_wave_results
-                    if prior.task_id in self.wave_scheduler.transitive_dependencies(live_plan, task.id)
+                    if prior.task_id
+                    in self.wave_scheduler.transitive_dependencies(live_plan, task.id)
                 ]
                 for task in ready
             }
@@ -2136,8 +2133,7 @@ class RunLifecycleEngine:
         stack_profile = discover_stack_profile(
             request.repository_path,
             registered_command_ids=(
-                resolve_validation_command_ids(request)
-                or self.config.policies.registered_commands
+                resolve_validation_command_ids(request) or self.config.policies.registered_commands
             ),
         )
         digests.update(stack_profile.as_manifest_entry())
@@ -2704,7 +2700,10 @@ class RunLifecycleEngine:
             validation_evidence_refs=validation_evidence_refs,
             validator_results=validator_results,
             composition=self.composition,
-            services={"deterministic_impl_files": deterministic_impl_files, "changed_files_from_patch": changed_files_from_patch},
+            services={
+                "deterministic_impl_files": deterministic_impl_files,
+                "changed_files_from_patch": changed_files_from_patch,
+            },
         )
         result = execute_task(execution_request)
 
@@ -2766,9 +2765,6 @@ class RunLifecycleEngine:
             self.db.record_tool_call(run_id=run_id, record=tc.model_dump(mode="json"))
         return result
 
-
-
-
     def _count_connector_invocations(self, run_id: str, *, connector_id: str) -> int:
         """How many successful connector.invoked events this run recorded for a provider."""
         count = 0
@@ -2784,16 +2780,6 @@ class RunLifecycleEngine:
             if str(payload.get("connector_id") or "") == connector_id:
                 count += 1
         return count
-
-
-
-
-
-
-
-
-
-
 
     def approve(self, run_id: str, *, apply: bool = False) -> dict[str, Any]:
         run_dir = self.pf_root / "runs" / run_id

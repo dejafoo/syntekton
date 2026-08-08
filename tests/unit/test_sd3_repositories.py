@@ -102,9 +102,7 @@ def test_migrations_include_eval_and_retention(tmp_path: Path) -> None:
     assert versions == [m.version for m in MIGRATIONS]
     tables = {
         r[0]
-        for r in db.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        for r in db.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     }
     assert "evaluation_scores" in tables
     assert "retention_pins" in tables

@@ -31,7 +31,6 @@ class HandoffRepository(AggregateRepository):
         )
         self._conn.commit()
 
-
     @synchronized
     def list_handoff_consumptions(self, handoff_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
@@ -39,7 +38,6 @@ class HandoffRepository(AggregateRepository):
             (handoff_id,),
         ).fetchall()
         return [dict(row) for row in rows]
-
 
     @synchronized
     def list_handoff_records_by_run(self, run_id: str) -> list[dict[str, Any]]:
@@ -49,14 +47,12 @@ class HandoffRepository(AggregateRepository):
         ).fetchall()
         return [decoded for row in rows if (decoded := self._decode_handoff_record(row))]
 
-
     @synchronized
     def get_handoff_record(self, handoff_id: str) -> dict[str, Any] | None:
         row = self._conn.execute(
             "SELECT * FROM handoff_records WHERE handoff_id = ?", (handoff_id,)
         ).fetchone()
         return self._decode_handoff_record(row)
-
 
     @synchronized
     def find_handoff_record(
@@ -72,7 +68,6 @@ class HandoffRepository(AggregateRepository):
         ).fetchone()
         return self._decode_handoff_record(row)
 
-
     @staticmethod
     def _decode_handoff_record(row: sqlite3.Row | None) -> dict[str, Any] | None:
         if row is None:
@@ -80,7 +75,6 @@ class HandoffRepository(AggregateRepository):
         result = dict(row)
         result["metadata"] = json.loads(result.pop("metadata_json") or "{}")
         return result
-
 
     @synchronized
     def update_handoff_state(
@@ -108,7 +102,6 @@ class HandoffRepository(AggregateRepository):
         self._conn.commit()
         return cur.rowcount == 1
 
-
     @synchronized
     def get_handoff_consumption(
         self, *, consumer_run_id: str, handoff_id: str
@@ -121,7 +114,6 @@ class HandoffRepository(AggregateRepository):
             (consumer_run_id, handoff_id),
         ).fetchone()
         return dict(row) if row else None
-
 
     @synchronized
     def insert_handoff_record(self, record: dict[str, Any]) -> None:
@@ -150,4 +142,3 @@ class HandoffRepository(AggregateRepository):
             ),
         )
         self._conn.commit()
-

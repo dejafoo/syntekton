@@ -35,9 +35,7 @@ class EvalStore:
     def record_pairwise(
         self, *, bench_id: str, case_id: str, seed: int, result: dict[str, Any]
     ) -> None:
-        self._repo.record_pairwise(
-            bench_id=bench_id, case_id=case_id, seed=seed, result=result
-        )
+        self._repo.record_pairwise(bench_id=bench_id, case_id=case_id, seed=seed, result=result)
 
     def list_pairwise(self, bench_id: str) -> list[dict[str, Any]]:
         return self._repo.list_pairwise(bench_id)

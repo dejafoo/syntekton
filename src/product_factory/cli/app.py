@@ -384,7 +384,9 @@ def approve_cmd(
     response = _local_host_service().approve(run_id, apply=apply)
     if not response.ok:
         raise typer.Exit(_print_host_failure(response))
-    console.print_json(data=(response.data or {}).get("approval") or response.model_dump(mode="json"))
+    console.print_json(
+        data=(response.data or {}).get("approval") or response.model_dump(mode="json")
+    )
 
 
 @handoff_app.command("approve")
@@ -395,7 +397,9 @@ def handoff_approve_cmd(handoff_id: str = typer.Argument(...)) -> None:
     response = _local_host_service().approve_handoff(handoff_id, actor="local_cli_operator")
     if not response.ok:
         raise typer.Exit(_print_host_failure(response))
-    console.print_json(data=(response.data or {}).get("handoff") or response.model_dump(mode="json"))
+    console.print_json(
+        data=(response.data or {}).get("handoff") or response.model_dump(mode="json")
+    )
 
 
 @handoff_app.command("supersede")
@@ -413,7 +417,9 @@ def handoff_supersede_cmd(
     )
     if not response.ok:
         raise typer.Exit(_print_host_failure(response))
-    console.print_json(data=(response.data or {}).get("handoff") or response.model_dump(mode="json"))
+    console.print_json(
+        data=(response.data or {}).get("handoff") or response.model_dump(mode="json")
+    )
 
 
 @app.command("reject")
@@ -421,7 +427,9 @@ def reject_cmd(run_id: str = typer.Argument(...)) -> None:
     response = _local_host_service().reject(run_id)
     if not response.ok:
         raise typer.Exit(_print_host_failure(response))
-    console.print_json(data=(response.data or {}).get("approval") or response.model_dump(mode="json"))
+    console.print_json(
+        data=(response.data or {}).get("approval") or response.model_dump(mode="json")
+    )
 
 
 @app.command("apply")
@@ -818,7 +826,6 @@ def ops_backup_status_cmd(
     from product_factory.persistence.backup import backup_status
 
     console.print_json(data=backup_status(_resolve_data_dir(data_dir)))
-
 
 
 @ops_app.command("maintain")

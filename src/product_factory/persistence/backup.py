@@ -166,9 +166,7 @@ def create_backup(data_dir: Path, dest: Path) -> BackupManifest:
                 size = path.stat().st_size
                 file_count += 1
                 byte_count += size
-                checksums.append(
-                    FileChecksum(relative_path=rel, sha256=digest, size_bytes=size)
-                )
+                checksums.append(FileChecksum(relative_path=rel, sha256=digest, size_bytes=size))
 
         manifest = BackupManifest(
             created_at=datetime.now(UTC).isoformat(),
@@ -211,9 +209,7 @@ def validate_restored_root(target: Path, manifest: BackupManifest) -> RestoreVal
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         try:
-            rows = conn.execute(
-                "SELECT DISTINCT sha256 FROM artifact_instances"
-            ).fetchall()
+            rows = conn.execute("SELECT DISTINCT sha256 FROM artifact_instances").fetchall()
             referenced = {str(r["sha256"]) for r in rows}
         except sqlite3.Error:
             referenced = set()

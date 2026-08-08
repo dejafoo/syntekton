@@ -1,6 +1,6 @@
 # SD3 — Persistence and unattended operation
 
-**Status:** `[~]` in progress (SD3.A–D hermetic on `sd/sd3-durability`). **Gate:** G3 (jointly with SD4 and SD5). **Findings:** F-09–F-12.  
+**Status:** `[x]` hermetic on `sd/g3-platform` (G3 closed). **Gate:** G3 (jointly with SD4 and SD5). **Findings:** F-09–F-12.  
 **Depends on:** G1; coordinate migration work with SD2 and CI foundations with SD5. **Compatibility:** retain host/v1 through SD3.
 
 ## Outcome
