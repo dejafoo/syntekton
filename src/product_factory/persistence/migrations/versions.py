@@ -143,6 +143,90 @@ def _upgrade_004_action_approvals(conn: sqlite3.Connection) -> None:
 _ACTION_APPROVAL_SOURCE = "sd0.c:004:action_approvals"
 
 
+def _upgrade_005_evaluation_schema(conn: sqlite3.Connection) -> None:
+    """Move evaluation DDL into the versioned migration ledger (SD3.A)."""
+    from product_factory.persistence.database import _ensure_column
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS evaluation_cases (
+            case_id TEXT PRIMARY KEY,
+            suite TEXT NOT NULL,
+            case_json TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS evaluation_runs (
+            eval_run_id TEXT PRIMARY KEY,
+            case_id TEXT NOT NULL,
+            config_name TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS evaluation_scores (
+            score_id TEXT PRIMARY KEY,
+            bench_id TEXT NOT NULL,
+            case_id TEXT NOT NULL,
+            subject_id TEXT NOT NULL,
+            seed INTEGER NOT NULL DEFAULT 0,
+            score_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS evaluation_benches (
+            bench_id TEXT PRIMARY KEY,
+            report_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS evaluation_pairwise (
+            pair_id TEXT PRIMARY KEY,
+            bench_id TEXT NOT NULL,
+            case_id TEXT NOT NULL,
+            seed INTEGER NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    _ensure_column(conn, "evaluation_scores", "seed", "INTEGER NOT NULL DEFAULT 0")
+
+
+_EVAL_SOURCE = "sd3.a:005:evaluation_aggregate_schema"
+
+
+def _upgrade_006_retention_and_maintenance(conn: sqlite3.Connection) -> None:
+    """Pin registry and append-only maintenance audit (SD3.D)."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS retention_pins (
+            pin_id TEXT PRIMARY KEY,
+            target_kind TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            pinned_at TEXT NOT NULL,
+            pinned_by TEXT NOT NULL DEFAULT 'operator',
+            UNIQUE (target_kind, target_id)
+        );
+        CREATE INDEX IF NOT EXISTS retention_pins_target
+            ON retention_pins(target_kind, target_id);
+
+        CREATE TABLE IF NOT EXISTS maintenance_audit (
+            audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recorded_at TEXT NOT NULL,
+            action TEXT NOT NULL,
+            dry_run INTEGER NOT NULL DEFAULT 1,
+            actor TEXT NOT NULL DEFAULT 'operator',
+            payload_json TEXT NOT NULL,
+            backup_ref TEXT
+        );
+        """
+    )
+
+
+_RETENTION_SOURCE = "sd3.d:006:retention_pins_and_maintenance_audit"
+
+
 MIGRATIONS: list[Migration] = [
     Migration(1, "baseline_pre_sd0_schema", _upgrade_001_baseline, source=_BASELINE_SOURCE),
     Migration(
@@ -153,4 +237,11 @@ MIGRATIONS: list[Migration] = [
     ),
     Migration(3, "handoff_records", _upgrade_003_handoff_records, source=_HANDOFF_SOURCE),
     Migration(4, "action_approvals", _upgrade_004_action_approvals, source=_ACTION_APPROVAL_SOURCE),
+    Migration(5, "evaluation_aggregate_schema", _upgrade_005_evaluation_schema, source=_EVAL_SOURCE),
+    Migration(
+        6,
+        "retention_pins_and_maintenance_audit",
+        _upgrade_006_retention_and_maintenance,
+        source=_RETENTION_SOURCE,
+    ),
 ]
