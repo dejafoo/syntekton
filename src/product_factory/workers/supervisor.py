@@ -1,11 +1,13 @@
-"""Durable worker supervision with heartbeat and restart recovery."""
+"""Durable worker supervision with heartbeat, restart recovery, and graceful drain."""
 
 from __future__ import annotations
 
 import contextlib
+import json
 import threading
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 from product_factory.persistence.database import Database
@@ -24,6 +26,19 @@ _TERMINAL_RUN_STATUSES = frozenset(
 )
 
 
+@dataclass(slots=True)
+class ShutdownReport:
+    """Outcome of a graceful supervisor drain (SD3.B)."""
+
+    admissions_stopped: bool = True
+    scanner_stopped: bool = False
+    waited_seconds: float = 0.0
+    active_at_start: list[str] = field(default_factory=list)
+    finished: list[str] = field(default_factory=list)
+    forced_recovery: list[str] = field(default_factory=list)
+    database_closed: bool = False
+
+
 class WorkerSupervisor:
     """Run workers under exclusive leases and reclaim expired work after restart."""
 
@@ -38,6 +53,7 @@ class WorkerSupervisor:
         lease_ttl_seconds: float = 30.0,
         heartbeat_seconds: float = 10.0,
         scan_seconds: float = 5.0,
+        shutdown_grace_seconds: float = 15.0,
     ) -> None:
         if heartbeat_seconds >= lease_ttl_seconds:
             raise ValueError("heartbeat_seconds must be shorter than lease_ttl_seconds")
@@ -49,15 +65,23 @@ class WorkerSupervisor:
         self.lease_ttl_seconds = lease_ttl_seconds
         self.heartbeat_seconds = heartbeat_seconds
         self.scan_seconds = scan_seconds
+        self.shutdown_grace_seconds = shutdown_grace_seconds
         self.instance_id = f"host-{uuid.uuid4().hex[:12]}"
         self._stop = threading.Event()
+        self._admissions_open = threading.Event()
+        self._admissions_open.set()
         self._lock = threading.Lock()
         self._workers: dict[str, threading.Thread] = {}
         self._scanner: threading.Thread | None = None
+        self._cooperative_shutdown = threading.Event()
 
     @property
     def running(self) -> bool:
         return bool(self._scanner and self._scanner.is_alive())
+
+    @property
+    def admissions_open(self) -> bool:
+        return self._admissions_open.is_set()
 
     def start(self) -> None:
         """Start the expiry scanner once."""
@@ -65,6 +89,8 @@ class WorkerSupervisor:
             if self.running:
                 return
             self._stop.clear()
+            self._cooperative_shutdown.clear()
+            self._admissions_open.set()
             self._scanner = threading.Thread(
                 target=self._scan_loop,
                 name="pf-worker-lease-scanner",
@@ -72,15 +98,82 @@ class WorkerSupervisor:
             )
             self._scanner.start()
 
-    def stop(self) -> None:
-        """Stop scanning; active daemon workers retain leases until process exit."""
+    def stop(self, *, grace_seconds: float | None = None) -> ShutdownReport:
+        """Graceful drain: stop admissions → wait → forced recovery → leave DB open.
+
+        Database closing is owned by the caller (HostService) and must happen
+        only after this method returns.
+        """
+        return self.drain(grace_seconds=grace_seconds, close_database=False)
+
+    def drain(
+        self,
+        *,
+        grace_seconds: float | None = None,
+        close_database: bool = False,
+    ) -> ShutdownReport:
+        """Stop admissions and recovery scanning, then drain active workers.
+
+        Order (SD3.B):
+        1. Stop new admissions and recovery scanning.
+        2. Signal cooperative shutdown to active workers.
+        3. Wait up to ``grace_seconds`` for workers to finish.
+        4. Persist forced-shutdown / recovery-required outcomes for stragglers.
+        5. Optionally close the database last (normally HostService owns close).
+        """
+        grace = self.shutdown_grace_seconds if grace_seconds is None else max(0.0, grace_seconds)
+        report = ShutdownReport(admissions_stopped=True)
+        self._admissions_open.clear()
+        self._cooperative_shutdown.set()
         self._stop.set()
         scanner = self._scanner
         if scanner and scanner.is_alive():
             scanner.join(timeout=max(1.0, self.scan_seconds + 0.1))
+        report.scanner_stopped = not (scanner and scanner.is_alive())
+
+        with self._lock:
+            active = {
+                run_id: worker for run_id, worker in self._workers.items() if worker.is_alive()
+            }
+        report.active_at_start = sorted(active)
+
+        # Cooperative wait loop.
+        import time
+
+        started = time.monotonic()
+        remaining = dict(active)
+        while remaining and (time.monotonic() - started) < grace:
+            for run_id, worker in list(remaining.items()):
+                worker.join(timeout=0.05)
+                if not worker.is_alive():
+                    report.finished.append(run_id)
+                    remaining.pop(run_id, None)
+            if remaining:
+                time.sleep(0.05)
+        report.waited_seconds = time.monotonic() - started
+
+        # Forced recovery for workers that did not finish.
+        for run_id, worker in remaining.items():
+            self._record_forced_shutdown(run_id)
+            report.forced_recovery.append(run_id)
+            # Do not join forever; durable recovery owns continuation after restart.
+            worker.join(timeout=0.1)
+
+        if close_database:
+            self.db.close()
+            report.database_closed = True
+        return report
 
     def spawn(self, run_id: str, *, recovery: bool = False, recovered_queue: bool = False) -> bool:
         """Start one supervised worker unless this process already has one."""
+        if not self._admissions_open.is_set() and not recovery:
+            return False
+        # During drain, refuse both new admissions and recovery scanning spawns.
+        if self._stop.is_set() and not self._cooperative_shutdown.is_set():
+            return False
+        if self._stop.is_set():
+            # Scanner is stopped; only an explicit in-flight path should reach here.
+            return False
         with self._lock:
             current = self._workers.get(run_id)
             if current and current.is_alive():
@@ -114,6 +207,8 @@ class WorkerSupervisor:
 
     def recover_expired(self) -> list[str]:
         """Dispatch every currently expired lease through durable resume."""
+        if not self._admissions_open.is_set() or self._stop.is_set():
+            return []
         recovered: list[str] = []
         for lease in self.db.list_expired_worker_leases():
             row = self.db.get_run(lease.run_id)
@@ -131,6 +226,8 @@ class WorkerSupervisor:
 
     def recover_unleased(self) -> list[str]:
         """Dispatch queued or interrupted runs left without a lease."""
+        if not self._admissions_open.is_set() or self._stop.is_set():
+            return []
         recovered: list[str] = []
         for row in self.db.list_unleased_worker_runs():
             queued = row["status"] == "queued"
@@ -142,10 +239,49 @@ class WorkerSupervisor:
                 recovered.append(row["run_id"])
         return recovered
 
+    def _record_forced_shutdown(self, run_id: str) -> None:
+        """Persist recovery-required state without closing the DB connection."""
+        lease = self.db.get_worker_lease(run_id)
+        if lease is None or lease.released_at is not None:
+            # Still mark run active_operation for restart scanners.
+            row = self.db.get_run(run_id)
+            if row and row["status"] not in _TERMINAL_RUN_STATUSES:
+                self.db.upsert_run(
+                    run_id=run_id,
+                    workflow_type=row["workflow_type"],
+                    status=row["status"],
+                    request=json.loads(row["request_json"])
+                    if isinstance(row.get("request_json"), str)
+                    else (row.get("request") or {}),
+                    active_operation="forced_shutdown_recovery_required",
+                    touch_progress=False,
+                )
+            return
+        with contextlib.suppress(WorkerLeaseLostError):
+            self.db.release_worker_lease(
+                run_id=run_id,
+                owner=lease.owner,
+                recovery_outcome="forced_shutdown_recovery_required",
+            )
+        row = self.db.get_run(run_id)
+        if row and row["status"] not in _TERMINAL_RUN_STATUSES:
+            request = row.get("request_json")
+            if isinstance(request, str):
+                request = json.loads(request)
+            self.db.upsert_run(
+                run_id=run_id,
+                workflow_type=row["workflow_type"],
+                status=row["status"],
+                request=request or {},
+                active_operation="forced_shutdown_recovery_required",
+                touch_progress=False,
+            )
+
     def _scan_loop(self) -> None:
         while not self._stop.is_set():
-            self.recover_expired()
-            self.recover_unleased()
+            if self._admissions_open.is_set():
+                self.recover_expired()
+                self.recover_unleased()
             self._stop.wait(self.scan_seconds)
 
     def _run(self, *, run_id: str, recovery: bool, recovered_queue: bool) -> None:
@@ -180,6 +316,8 @@ class WorkerSupervisor:
 
         def heartbeat() -> None:
             while not heartbeat_stop.wait(self.heartbeat_seconds):
+                if self._cooperative_shutdown.is_set():
+                    return
                 try:
                     self.db.heartbeat_worker_lease(
                         run_id=run_id,
@@ -200,6 +338,9 @@ class WorkerSupervisor:
             "resumed" if recovery else ("recovered_queued" if recovered_queue else "completed")
         )
         try:
+            if self._cooperative_shutdown.is_set():
+                outcome = "cooperative_shutdown"
+                return None
             result = self.resume(run_id) if recovery else self.execute(run_id)
             final_status = getattr(result, "final_status", None)
             if recovery and final_status == "failed":

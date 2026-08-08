@@ -92,6 +92,13 @@ class PoliciesConfig(BaseModel):
 
 
 class WorkflowsConfig(BaseModel):
+    """Deprecated non-authoritative mirror of workflow metadata (SD7).
+
+    Pack identity and policy come from ``workflows.registry``. This YAML is
+    retained only so existing installs/bootstrap copies keep loading; runtime
+    must not consult it for admission or validation.
+    """
+
     default_workflow: str = "code_change"
     workflows: dict[str, dict[str, Any]] = Field(default_factory=dict)
 

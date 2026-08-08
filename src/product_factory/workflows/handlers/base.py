@@ -62,7 +62,9 @@ class ComposeContext:
     findings: list[Any] = field(default_factory=list)
     dependency_outputs: list[dict[str, Any]] = field(default_factory=list)
     use_mock: bool = True
-    # Coordinator-supplied live generation hooks (optional).
+    # Typed composition service (SD2); callback fields are thin adapters.
+    composition: Any | None = None
+    # Live generation hooks (optional; prefer composition service).
     generate_architecture: Any | None = None
     compose_architecture: Any | None = None
     compose_evidence_report: Any | None = None

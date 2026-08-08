@@ -92,6 +92,39 @@ export async function api<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/**
+ * SD4.D — browser failure copy when the operator tries to treat an authenticated
+ * remote control plane as a public dashboard. The UI never stores bearer tokens.
+ */
+export function unsupportedRemoteDashboardMessage(meta?: {
+  dashboard?: { remote_browser?: string; deployment_support?: string };
+  remote_mode?: boolean;
+}): string {
+  const remoteBrowser = meta?.dashboard?.remote_browser;
+  if (remoteBrowser === "unsupported" || meta?.remote_mode) {
+    return (
+      "This dashboard is loopback/monitor-only. A remote control token does not " +
+      "make the browser UI a public remote surface. Use an operator-managed " +
+      "SSH/private tunnel to 127.0.0.1, or the CLI/host protocol for mutations."
+    );
+  }
+  return (
+    "Dashboard deployment support is loopback_monitor_only. Mutations stay on " +
+    "the CLI/host application service."
+  );
+}
+
+/** True when meta advertises an unsupported authenticated remote browser. */
+export function isUnsupportedRemoteDashboard(meta?: {
+  dashboard?: { remote_browser?: string; deployment_support?: string };
+  remote_mode?: boolean;
+}): boolean {
+  return (
+    meta?.dashboard?.remote_browser === "unsupported" ||
+    meta?.dashboard?.deployment_support === "loopback_monitor_only"
+  );
+}
+
 export function eventItems(value: { items?: StreamEvent[] } | StreamEvent[]): StreamEvent[] {
   return Array.isArray(value) ? value : value.items ?? [];
 }

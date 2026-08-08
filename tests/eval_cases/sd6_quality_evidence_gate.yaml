@@ -1,0 +1,27 @@
+id: sd6_quality_evidence_gate
+workflow_type: architecture
+corpus_category: quality
+request: |
+  Sanitized quality gate: decide whether a change packet may proceed when the
+  verification section cites only "tested locally" with no command, fixture, or
+  receipt. Prefer fail-closed when evidence is absent.
+tags: ['sd6', 'quality', 'evidence', 'sanitized']
+expected_status:
+  - completed
+  - awaiting_approval
+acceptance_criteria:
+  - Missing verification receipts block or escalate
+  - Unsupported "tested locally" claims are labeled
+  - Gate outcome is explicit
+must_cover:
+  - verification evidence
+  - receipt or command
+  - fail closed
+reference_hints: |
+  Evidence gates refuse progress when verification is anecdotal only.
+isolation_targets:
+  - independent_review
+metadata:
+  sd6_corpus: true
+  sanitization: synthetic_change_packet
+  skill_hint: quality.evidence-gate

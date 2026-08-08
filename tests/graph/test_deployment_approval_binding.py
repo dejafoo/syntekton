@@ -17,7 +17,7 @@ def _input(*, approved: bool) -> dict[str, object]:
         "release_plan": {"outcome": "ready"},
         "release_plan_digest": "a" * 64,
         "artifact_digest": "b" * 64,
-        "target_id": "staging-local",
+        "target_id": "simulated-local",
         "change_window": {"start": "2026-01-01T00:00:00Z"},
         "idempotency_key": "graph-release-1",
     }
@@ -26,7 +26,7 @@ def _input(*, approved: bool) -> dict[str, object]:
             "approval_id": "approval-graph-1",
             "release_plan_digest": "a" * 64,
             "artifact_digest": "b" * 64,
-            "target_id": "staging-local",
+            "target_id": "simulated-local",
             "change_window": {"start": "2026-01-01T00:00:00Z"},
         }
     return data
@@ -36,7 +36,7 @@ def _coordinator(tmp_path: Path) -> RunCoordinator:
     root = Path(__file__).resolve().parents[2]
     config = load_config(root)
     settings = dict(config.connectors.connectors)
-    settings["staging_deploy"] = ConnectorSettings(enabled=True)
+    settings["simulated_staging"] = ConnectorSettings(enabled=True)
     config = config.model_copy(
         update={
             "connectors": config.connectors.model_copy(
@@ -108,7 +108,7 @@ def test_durable_action_approval_authorizes_before_connector(tmp_path: Path) -> 
         request={},
     )
     approval = ApprovalService(coordinator.db).create_pending(
-        action_type="staging_deploy",
+        action_type="simulated_staging",
         subject_run_id="subject-release",
         action_fingerprint=fingerprint,
         actor="operator",

@@ -1,0 +1,89 @@
+name: scheduled-recovery
+
+# Environment-owned recovery ladder stubs (SD5). No live secrets in this workflow.
+# Jobs soft-skip when Docker/credentials are absent so the schedule stays green
+# on a fresh fork; set FORCE_SCHEDULED=1 (repository variable) to require them.
+on:
+  schedule:
+    # Mondays 06:15 UTC — keep off the default busy hour.
+    - cron: "15 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: scheduled-recovery
+  cancel-in-progress: false
+
+jobs:
+  hermetic-backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - name: Sync (frozen)
+        run: uv sync --frozen --extra dev
+      - name: Hermetic backup/restore unit coverage
+        run: uv run pytest -q tests/unit/test_backup_restore.py
+
+  docker-remote-restart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - name: Sync (frozen)
+        run: uv sync --frozen --extra dev
+      - name: Docker remote restart/recovery (soft-skip without Docker)
+        env:
+          DOCKER_INTEGRATION: ${{ vars.FORCE_SCHEDULED == '1' && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          if ! command -v docker >/dev/null 2>&1; then
+            if [[ "${DOCKER_INTEGRATION}" == "1" ]]; then
+              echo "FORCE_SCHEDULED requires docker" >&2
+              exit 1
+            fi
+            echo "docker absent — soft-skip docker remote restart job"
+            exit 0
+          fi
+          uv run pytest -q tests/integration/test_remote_docker.py
+
+  backup-restore-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - name: Sync (frozen)
+        run: uv sync --frozen --extra dev
+      - name: Backup/restore integration (soft-skip unless gated)
+        env:
+          BACKUP_INTEGRATION: ${{ vars.FORCE_SCHEDULED == '1' && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          # Module soft-skips when BACKUP_INTEGRATION!=1; FORCE_SCHEDULED flips the gate.
+          uv run pytest -q tests/integration/test_backup_restore.py
+
+  worker-shutdown:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - name: Sync (frozen)
+        run: uv sync --frozen --extra dev
+      - name: Worker shutdown stub (SD3 drain proof owns live drain)
+        run: |
+          set -euo pipefail
+          # Placeholder until SD3 lands durable worker drain integration.
+          uv run product-factory --help
+          uv run pytest -q tests/unit/test_backup_restore.py
+          echo "worker-shutdown: hermetic stub OK (live drain deferred to SD3)"

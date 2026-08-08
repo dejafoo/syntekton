@@ -70,6 +70,13 @@ class ReleaseReadinessHandler:
             key="criterion",
         )
         decisions = _strings(data.get("unresolved_decisions") or data.get("decision_items"))
+        # SD1.E: ready requires analysis-task receipts, not caller pack_input alone.
+        analysis_receipts = 0
+        for dependency in ctx.dependency_outputs or []:
+            for ref in dependency.get("artifact_refs", []) or []:
+                name = str(ref.get("logical_name") or "")
+                if "release-analysis" in name or "operations-analysis" in name:
+                    analysis_receipts += 1
         missing: list[str] = []
         if not input_digests:
             missing.append("input_digests")
@@ -79,6 +86,8 @@ class ReleaseReadinessHandler:
             missing.append("migration_preconditions")
         if not rollback:
             missing.append("rollback_criteria")
+        if analysis_receipts < 1:
+            missing.append("analysis_task_receipts")
         outcome: ReleaseReadinessOutcome
         if missing:
             outcome = "blocked"

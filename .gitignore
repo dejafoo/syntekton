@@ -10,5 +10,6 @@ __pycache__/
 dist/
 build/
 .DS_Store
-uv.lock
+.worktrees/
 dashboard/node_modules/
+integrations/opencode-plugin/node_modules/

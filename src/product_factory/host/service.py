@@ -117,8 +117,15 @@ class HostService:
             self.supervisor.start()
 
     def close(self) -> None:
-        """Stop service background activity and close its coordinator database."""
-        self.supervisor.stop()
+        """Graceful drain then close the coordinator database last (SD3.B).
+
+        Temporary host hook: shutdown ownership should move to a dedicated
+        lifecycle service in SD2; removal issue: ``remove-host-drain-hook-2026-08``.
+        """
+        import os
+
+        grace = float(os.environ.get("PRODUCT_FACTORY_SHUTDOWN_GRACE_SECONDS", "15"))
+        self.supervisor.drain(grace_seconds=grace, close_database=False)
         self.coord.db.close()
 
     def subscription_for(self, run_id: str, *, after_seq: int = 0) -> HostSubscription:
@@ -545,6 +552,45 @@ class HostService:
             data={"approval": result},
         )
 
+    def resume(self, run_id: str) -> HostResponse:
+        """Resume an interrupted run through the shared application service."""
+        try:
+            manifest = self.coord.resume(run_id)
+        except ProductFactoryError as exc:
+            return HostResponse.failure(
+                code=exc.__class__.__name__,
+                message=exc.message,
+                run_id=run_id,
+                details=exc.details,
+            )
+        return HostResponse.success(
+            run_id=manifest.run_id,
+            status=manifest.final_status,
+            data={"usage": json.loads(manifest.usage.model_dump_json())},
+        )
+
+    def apply(self, run_id: str) -> HostResponse:
+        """Apply an approved patch through the shared application service."""
+        try:
+            result = self.coord.apply_patch(run_id)
+        except ProductFactoryError as exc:
+            return HostResponse.failure(
+                code=exc.__class__.__name__,
+                message=exc.message,
+                run_id=run_id,
+                details=exc.details,
+            )
+        row = self.coord.db.get_run(run_id)
+        return HostResponse.success(
+            run_id=run_id,
+            status=row["status"] if row else "completed",
+            data={"apply": result},
+        )
+
+    def list_runs(self, *, limit: int = 50) -> HostResponse:
+        rows = [dict(row) for row in self.coord.db.list_runs(limit=limit)]
+        return HostResponse.success(data={"runs": rows})
+
     def cancel(self, run_id: str) -> HostResponse:
         try:
             result = self.coord.cancel(run_id)
@@ -932,11 +978,12 @@ class HostService:
         after_seq: int = 0,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
-        """Prefer SQLite; fall back to events.jsonl with synthetic seq."""
-        events = self.query.list_events(run_id=run_id, after_seq=after_seq, limit=limit)
-        if events:
-            return events
-        return self._events_from_jsonl(run_id, after_seq=after_seq, limit=limit)
+        """Return durable SQLite events only.
+
+        Per-run ``events.jsonl`` remains an optional diagnostic mirror written by
+        the telemetry recorder; it is never protocol-authoritative (SD7).
+        """
+        return self.query.list_events(run_id=run_id, after_seq=after_seq, limit=limit)
 
     def tail(
         self,
@@ -948,7 +995,7 @@ class HostService:
         max_idle_polls: int | None = None,
         stop_when_terminal: bool = True,
     ) -> Iterator[HostResponse]:
-        """Yield HostResponse batches. Tries observe HTTP, then local SQLite/jsonl."""
+        """Yield HostResponse batches. Tries observe HTTP, then local SQLite."""
         cursor = after_seq
         idle_polls = 0
         while True:
@@ -994,9 +1041,7 @@ class HostService:
         if remote is not None:
             return remote, "observe"
         local = self.query.list_events(run_id=run_id, after_seq=after_seq, limit=limit)
-        if local:
-            return local, "sqlite"
-        return self._events_from_jsonl(run_id, after_seq=after_seq, limit=limit), "jsonl"
+        return local, "sqlite"
 
     def _try_observe_events(
         self, run_id: str, *, after_seq: int, limit: int
@@ -1026,33 +1071,6 @@ class HostService:
         if isinstance(payload, list):
             return payload
         return None
-
-    def _events_from_jsonl(
-        self, run_id: str, *, after_seq: int = 0, limit: int = 200
-    ) -> list[dict[str, Any]]:
-        path = self.pf_root / "runs" / run_id / "events.jsonl"
-        if not path.exists():
-            return []
-        events: list[dict[str, Any]] = []
-        with path.open(encoding="utf-8") as fh:
-            for index, line in enumerate(fh, start=1):
-                if index <= after_seq or not line.strip():
-                    continue
-                raw = json.loads(line)
-                events.append(
-                    {
-                        "seq": index,
-                        "event_id": raw.get("event_id") or f"jsonl-{index}",
-                        "type": raw.get("type") or raw.get("event_type") or "event",
-                        "run_id": raw.get("run_id") or run_id,
-                        "occurred_at": raw.get("timestamp") or raw.get("occurred_at"),
-                        "summary": raw.get("summary") or "",
-                        "payload": raw.get("payload") or {},
-                    }
-                )
-                if len(events) >= limit:
-                    break
-        return events
 
     def _plan_summary(self, run_id: str) -> dict[str, Any] | None:
         plan_path = self.pf_root / "runs" / run_id / "output" / "plan.json"

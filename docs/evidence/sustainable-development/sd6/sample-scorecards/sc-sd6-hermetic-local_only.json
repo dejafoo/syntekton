@@ -1,0 +1,33 @@
+{
+  "scorecard_id": "sc-sd6-hermetic-local_only",
+  "capability": "sd6_foundation",
+  "skill_id": null,
+  "skill_version": null,
+  "model_profile": "coding_worker",
+  "subject_id": "full_orchestration",
+  "corpus_id": "sd6-foundation",
+  "corpus_sha256": "8d7e6f79cf1d8572be0dc1ab234a69edcad1edcc8384bb01e3ed5b5d6802bbdc",
+  "schema_version": "sd6.scorecard.v1",
+  "comparison_arm": "local_only",
+  "harness_version": "0.1.0",
+  "seed_count": 1,
+  "case_count": 12,
+  "metrics": {
+    "quality_score": 0.55,
+    "unsupported_claim_rate": 0.0,
+    "correct_unknown_escalation_rate": null,
+    "latency_ms": 1000.0,
+    "local_fallback_rate": null,
+    "cost_usd": 0.1,
+    "policy_violation_rate": 0.0,
+    "structured_output_pass_rate": null,
+    "validator_pass_rate": 1.0,
+    "accepted_outcome_rate": 0.55,
+    "human_correction_effort": 1.0,
+    "cloud_spend_usd": 0.0,
+    "category_accepted_outcome_rates": {}
+  },
+  "created_at": "2026-08-08T20:07:26.427593+00:00",
+  "notes": "Hermetic mock/fixture scorecard. NOT an AMD operational run.",
+  "evidence_level": "hermetic"
+}

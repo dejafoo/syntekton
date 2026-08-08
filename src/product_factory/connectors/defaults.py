@@ -64,9 +64,9 @@ def default_connector_registry(
     registry.register(git_ci.git_ci_manifest(), git_ci.git_ci_read)
     registry.register(ops_read.ops_read_manifest(), ops_read.ops_read)
     registry.register(
-        deploy.staging_deploy_manifest(),
-        deploy.StagingDeployHandler(
-            deploy.default_staging_adapter(
+        deploy.simulated_staging_manifest(),
+        deploy.SimulatedStagingHandler(
+            deploy.default_simulated_staging_adapter(
                 config_root=config_root,
                 state_path=deployment_state_path,
             )

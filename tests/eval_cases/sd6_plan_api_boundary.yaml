@@ -1,0 +1,27 @@
+id: sd6_plan_api_boundary
+workflow_type: architecture
+corpus_category: technical_planning
+request: |
+  Sanitized planning task: design a small internal HTTP API boundary for a
+  private inventory service. Prefer a typed request/response contract, explicit
+  authn assumption (single-user private network), and a verification plan.
+  Do not invent multi-tenant or public-internet requirements.
+tags: ['sd6', 'planning', 'architecture', 'sanitized']
+expected_status:
+  - completed
+  - awaiting_approval
+acceptance_criteria:
+  - Document names the API boundary and auth assumption
+  - Verification plan is concrete (tests or smoke checks)
+  - Scope stays single-user / private-network
+must_cover:
+  - API boundary
+  - authentication assumption
+  - verification plan
+reference_hints: |
+  A usable plan is specific enough to implement without inventing tenancy.
+isolation_targets:
+  - architecture
+metadata:
+  sd6_corpus: true
+  sanitization: synthetic_inventory_service

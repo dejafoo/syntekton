@@ -4,38 +4,21 @@ from __future__ import annotations
 
 from typing import Any
 
+from product_factory.domain.errors import ConfigurationError
 from product_factory.domain.plans import CompiledPlan
 from product_factory.domain.tasks import TaskSpec
+from product_factory.registry.capability_descriptors import model_role_for
 
 
 def select_model(task: TaskSpec, *, originating_profile: str | None = None) -> str:
     if task.preferred_model_profile:
         return task.preferred_model_profile
-    if task.capability in {"architecture", "composition"}:
-        return "supervisor"
-    if task.capability == "implementation":
-        return "coding_worker"
-    if task.capability == "independent_review":
-        return "local_target_reviewer"
-    if task.capability in {
-        "requirements",
-        "repository_analysis",
-        "security_review",
-        "test_design",
-        "test_execution",
-        "documentation",
-        "domain_research",
-        "decision_analysis",
-        "interface_analysis",
-        "release_analysis",
-        "operations_analysis",
-    }:
-        return "fast_worker"
-    if task.capability == "deployment_execution":
-        return "supervisor"
     if task.capability == "repair":
         return originating_profile or "coding_worker"
-    raise ValueError(f"Unsupported capability: {task.capability}")
+    try:
+        return model_role_for(task.capability)
+    except ConfigurationError as exc:
+        raise ValueError(f"Unsupported capability: {task.capability}") from exc
 
 
 def resolve_task_model_profile(
@@ -69,3 +52,38 @@ def runnable_tasks(
             available.append(task)
     slots = max(0, max_parallel - len(running))
     return available[:slots]
+
+
+class WaveScheduler:
+    """Owns runnable selection and concurrency slot accounting (SD2)."""
+
+    def select_ready(
+        self,
+        plan: CompiledPlan,
+        task_status: dict[str, str],
+        *,
+        max_parallel: int,
+    ) -> list[TaskSpec]:
+        return runnable_tasks(plan, task_status, max_parallel=max_parallel)
+
+    def resolve_profile(
+        self,
+        task: TaskSpec,
+        *,
+        metadata: dict[str, Any] | None = None,
+        originating_profile: str | None = None,
+    ) -> str:
+        return resolve_task_model_profile(
+            task, metadata=metadata, originating_profile=originating_profile
+        )
+
+    def transitive_dependencies(self, plan: CompiledPlan, task_id: str) -> set[str]:
+        found: set[str] = set()
+        pending = list(plan.tasks[task_id].dependencies)
+        while pending:
+            dependency = pending.pop()
+            if dependency in found or dependency not in plan.tasks:
+                continue
+            found.add(dependency)
+            pending.extend(plan.tasks[dependency].dependencies)
+        return found

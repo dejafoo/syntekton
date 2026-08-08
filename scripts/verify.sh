@@ -1,13 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# Keep local verify aligned with the SD5 CI ladder: frozen Python deps and
+# lockfile-faithful npm installs before package checks.
+if [[ -f uv.lock ]]; then
+  uv sync --frozen --extra dev >/dev/null
+fi
+npm --prefix dashboard ci
+npm --prefix dashboard test -- --run
 npm --prefix dashboard run check
 npm --prefix dashboard run build
+npm --prefix integrations/opencode-plugin ci
+npm --prefix integrations/opencode-plugin test -- --run
+npm --prefix integrations/opencode-plugin run check
 uv run ruff format --check src tests
 uv run ruff check src tests
 uv run basedpyright
+bash scripts/check_openapi_drift.sh
 uv run pytest -q -m "not integration"
 uv run product-factory --help
+bash scripts/package_smoke.sh
 
 # Connector policy, injection, and grant harness (P4.B–D). Covered by the run
 # above; kept explicit so a regression here is attributed to connectors rather

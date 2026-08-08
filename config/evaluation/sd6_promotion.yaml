@@ -1,0 +1,48 @@
+# SD6 / G4 promotion thresholds (playbook authoritative).
+# Live AMD promotion remains deferred until operational scorecards exist.
+schema_version: "sd6.promotion.v1"
+harness_id: product-factory-eval
+min_cases_for_promotion: 30
+min_seeds_for_promotion: 3
+foundation_case_count: 12
+
+arms:
+  - local_only
+  - local_first_fallback
+  - cloud
+  - single_agent_baseline
+  - skills_enabled
+  - skills_disabled
+
+local_first_default:
+  max_policy_violation_rate: 0.0
+  # Candidate may be at most this many percentage points below the cloud arm.
+  max_accepted_outcome_deficit_pp: 5.0
+  max_correction_effort_worsening_pct: 10.0
+  max_unsupported_claim_deficit_pp: 2.0
+  # Candidate cloud spend must be at least this fraction lower than cloud arm.
+  min_cloud_spend_reduction_pct: 30.0
+  require_documented_latency_tradeoff: true
+  disallow_unresolved_reliability_regression: true
+
+skill_promotion:
+  min_quality_improvement_pp: 5.0
+  min_correction_effort_reduction_pct: 10.0
+  max_policy_violation_rate: 0.0
+  max_cost_or_latency_increase_pct: 20.0
+
+fail_closed:
+  mask_safety_with_aggregate: false
+  allow_weaker_category: false
+  allow_fallback_policy_mismatch: false
+
+external_adapters:
+  swe_atlas:
+    status: minimal
+    claim: "SWE Atlas CaseLoader + durable version/case mapping; not a live suite run"
+  terminal_bench:
+    status: next
+    claim: "Terminal-Bench/Harbor subset is next; not implemented in this package"
+  deepswe:
+    status: deferred
+    claim: "DeepSWE is a later compatibility/licensing gate; not claimed here"

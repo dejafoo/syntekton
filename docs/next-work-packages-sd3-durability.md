@@ -1,6 +1,6 @@
 # SD3 — Persistence and unattended operation
 
-**Status:** `[ ]` planned. **Gate:** G3 (jointly with SD4 and SD5). **Findings:** F-09–F-12.  
+**Status:** `[x]` hermetic on `sd/g3-platform` (G3 closed). **Gate:** G3 (jointly with SD4 and SD5). **Findings:** F-09–F-12.  
 **Depends on:** G1; coordinate migration work with SD2 and CI foundations with SD5. **Compatibility:** retain host/v1 through SD3.
 
 ## Outcome
@@ -9,21 +9,21 @@ Make the SQLite/artifact system recoverable under restart, interruption, backup/
 
 ## SD3.A — Repository and transaction boundary
 
-- [ ] Extend the SD0 migration runner for all durable changes.
-- [ ] Split access into run/task, event, artifact/handoff, approval, worker, and evaluation aggregate repositories.
-- [ ] Use connection-per-thread or an equivalently explicit serialized database actor; do not share implicit connection state.
-- [ ] Define transaction boundaries for run/task/event/budget transitions and document lock/retry behavior.
-- [ ] Enable and verify foreign keys on every connection.
-- [ ] Remove direct `db.conn` access from evaluation and application services.
+- [x] Extend the SD0 migration runner for all durable changes.
+- [x] Split access into run/task, event, artifact/handoff, approval, worker, and evaluation aggregate repositories.
+- [x] Use connection-per-thread or an equivalently explicit serialized database actor; do not share implicit connection state.
+- [x] Define transaction boundaries for run/task/event/budget transitions and document lock/retry behavior.
+- [x] Enable and verify foreign keys on every connection.
+- [x] Remove direct `db.conn` access from evaluation and application services.
 - [ ] Remove legacy evaluation dual writes only after a compatibility export/reader path has been verified.
 
 **Tests:** connection isolation, FK enforcement, transition atomicity, event/budget consistency, concurrent worker operations, migration compatibility, and legacy export parity.
 
 ## SD3.B — Graceful worker shutdown and recovery
 
-- [ ] Stop admissions and recovery scanning before signalling workers.
-- [ ] Request cooperative shutdown, wait for active workers for a configurable grace period, then record forced-shutdown/recovery-required outcomes.
-- [ ] Close heartbeat threads and database connections only after workers finish or their durable recovery state is written.
+- [x] Stop admissions and recovery scanning before signalling workers.
+- [x] Request cooperative shutdown, wait for active workers for a configurable grace period, then record forced-shutdown/recovery-required outcomes.
+- [x] Close heartbeat threads and database connections only after workers finish or their durable recovery state is written.
 - [ ] Prove exactly-once recovery for planning, model waits, tools, validation, and deployment reconciliation.
 
 **Tests:** controlled shutdown at each named execution point, repeated restart, race with admission, heartbeat termination, budget/attempt idempotence, and durable recovery projection.  
@@ -31,11 +31,11 @@ Make the SQLite/artifact system recoverable under restart, interruption, backup/
 
 ## SD3.C — Artifact and backup integrity
 
-- [ ] Write blobs through same-filesystem temporary files, verify digest/size, fsync as appropriate, and atomically rename.
+- [x] Write blobs through same-filesystem temporary files, verify digest/size, fsync as appropriate, and atomically rename.
 - [ ] Verify handoff bytes at promotion and consumption.
-- [ ] Give backups per-file checksums and a captured high-water mark.
-- [ ] Include explicit manifests for runs, artifacts, content, uploads, ops, and experiments; document configuration/skill/profile backup separately.
-- [ ] Automate restore validation against database references and report missing/orphaned/corrupt records.
+- [x] Give backups per-file checksums and a captured high-water mark.
+- [x] Include explicit manifests for runs, artifacts, content, uploads, ops, and experiments; document configuration/skill/profile backup separately.
+- [x] Automate restore validation against database references and report missing/orphaned/corrupt records.
 
 **Tests:** interrupted write, digest mismatch, atomic visibility, corrupted/missing blob, backup manifest mismatch, restore to clean root, and high-water consistency.
 
@@ -43,14 +43,14 @@ Make the SQLite/artifact system recoverable under restart, interruption, backup/
 
 Add a dry-run-first maintenance service and CLI.
 
-- [ ] Inventory by run, age, retention class, size, and reachability.
-- [ ] Pin/unpin runs and experiments.
-- [ ] Prune explicit run IDs or policy-selected candidates.
-- [ ] Garbage-collect unreachable artifact/content blobs; remove stale scratch, uploads, and worktrees.
-- [ ] Emit disk-warning and stop-admission thresholds.
-- [ ] Perform WAL checkpoint and optional maintenance-window `VACUUM`.
-- [ ] Write an append-only maintenance audit.
-- [ ] Require an eligible backup before material pruning and never accept unresolved filesystem paths as deletion targets.
+- [x] Inventory by run, age, retention class, size, and reachability.
+- [x] Pin/unpin runs and experiments.
+- [x] Prune explicit run IDs or policy-selected candidates.
+- [x] Garbage-collect unreachable artifact/content blobs; remove stale scratch, uploads, and worktrees.
+- [x] Emit disk-warning and stop-admission thresholds.
+- [x] Perform WAL checkpoint and optional maintenance-window `VACUUM`.
+- [x] Write an append-only maintenance audit.
+- [x] Require an eligible backup before material pruning and never accept unresolved filesystem paths as deletion targets.
 
 **Tests:** dry-run versus execute parity, pinned data, reachable content, path validation, backup prerequisite, crash/retry, audit immutability, disk thresholds, and worktree ownership.
 

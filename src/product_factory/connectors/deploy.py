@@ -1,4 +1,10 @@
-"""Controlled non-production deployment connector and durable staging adapter."""
+"""Hermetic simulated staging deployment connector and durable fixture adapter.
+
+This is an in-process simulator for change-control tests. It is not a production
+deployment integration. Prefer the ``simulated_staging`` connector id and
+``simulated-*`` target ids; legacy ``staging_deploy`` / ``staging-local`` names
+remain as compatibility aliases during SD7.
+"""
 
 from __future__ import annotations
 
@@ -24,7 +30,9 @@ from product_factory.connectors.registry import ConnectorInvocation
 from product_factory.connectors.result import ConnectorResult, Provenance
 from product_factory.domain.errors import ConfigurationError
 
-CONNECTOR_ID = "staging_deploy"
+CONNECTOR_ID = "simulated_staging"
+LEGACY_CONNECTOR_ID = "staging_deploy"
+CONNECTOR_ID_ALIASES: frozenset[str] = frozenset({CONNECTOR_ID, LEGACY_CONNECTOR_ID})
 TOOL_CLASS = "deployment_write"
 TOOL_RESOLVE = "resolve_deployment_target"
 TOOL_START = "start_deployment"
@@ -32,6 +40,12 @@ TOOL_STATUS = "get_rollout_status"
 TOOL_HEALTH = "verify_health"
 TOOL_ROLLBACK = "rollback_deployment"
 TOOLS = (TOOL_RESOLVE, TOOL_START, TOOL_STATUS, TOOL_HEALTH, TOOL_ROLLBACK)
+
+# Target id aliases: simulated names are preferred; staging-* remains readable.
+TARGET_ID_ALIASES: dict[str, str] = {
+    "staging-local": "simulated-local",
+    "staging-live": "simulated-restart",
+}
 
 
 def _now() -> str:
@@ -100,7 +114,9 @@ class DeploymentTargetRegistry:
         return cls.from_mapping(raw)
 
     def resolve(self, target_id: str) -> DeploymentTarget:
-        target = self._targets.get((target_id or "").strip())
+        requested = (target_id or "").strip()
+        canonical = TARGET_ID_ALIASES.get(requested, requested)
+        target = self._targets.get(canonical) or self._targets.get(requested)
         if target is None or not target.enabled:
             raise ConnectorPolicyDenied(
                 f"Deployment target {target_id!r} is not enabled and allowlisted",
@@ -161,8 +177,8 @@ class DeploymentReceipt:
         }
 
 
-class StagingDeployAdapter:
-    """Thread-safe staging control plane with durable idempotency receipts."""
+class SimulatedStagingAdapter:
+    """Thread-safe simulated staging control plane with durable idempotency receipts."""
 
     def __init__(
         self,
@@ -438,7 +454,7 @@ def _tool(name: str, *, write: bool = False) -> ConnectorToolSpec:
     }
     return ConnectorToolSpec(
         name=name,
-        description=f"Controlled staging deployment action: {name}",
+        description=f"Simulated staging deployment fixture action: {name}",
         input_schema=schemas[name],
         permissions=frozenset({"write"}) if write else frozenset({"read"}),
         risk_class="R3" if write else "R2",
@@ -447,11 +463,11 @@ def _tool(name: str, *, write: bool = False) -> ConnectorToolSpec:
     )
 
 
-def staging_deploy_manifest() -> ConnectorManifest:
+def simulated_staging_manifest() -> ConnectorManifest:
     return ConnectorManifest(
         connector_id=CONNECTOR_ID,
         version="1.0.0",
-        provider="product-factory-staging",
+        provider="product-factory-simulated-staging",
         tool_class=TOOL_CLASS,
         tools=(
             _tool(TOOL_RESOLVE),
@@ -465,12 +481,12 @@ def staging_deploy_manifest() -> ConnectorManifest:
         timeout_seconds=30,
         max_concurrency=4,
         result_retention="full",
-        description="In-process, non-production deployment control plane",
+        description="In-process simulated staging fixture (not production deploy)",
     )
 
 
-class StagingDeployHandler:
-    def __init__(self, adapter: StagingDeployAdapter) -> None:
+class SimulatedStagingHandler:
+    def __init__(self, adapter: SimulatedStagingAdapter) -> None:
         self.adapter = adapter
 
     def __call__(self, invocation: ConnectorInvocation) -> ConnectorResult:
@@ -515,34 +531,47 @@ class StagingDeployHandler:
             payload=payload,
             provenance=(
                 Provenance(
-                    source=f"deployment://{payload.get('target_id', 'staging')}",
+                    source=f"deployment://{payload.get('target_id', 'simulated')}",
                     kind="deployment_receipt",
                 ),
             ),
         )
 
 
-def default_staging_adapter(
+def default_simulated_staging_adapter(
     *,
     config_root: Path | None = None,
     state_path: Path | None = None,
-) -> StagingDeployAdapter:
+) -> SimulatedStagingAdapter:
     root = config_root or Path.cwd()
     registry = DeploymentTargetRegistry.from_file(root / "config" / "deployment_targets.yaml")
-    return StagingDeployAdapter(registry, state_path=state_path)
+    return SimulatedStagingAdapter(registry, state_path=state_path)
 
 
-def live_deploy_enabled(environ: Mapping[str, str] | None = None) -> bool:
+def simulated_deploy_integration_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    """Opt-in hermetic simulator smoke (DEPLOY_INTEGRATION=1). Not a live deploy."""
     env = environ if environ is not None else os.environ
     return str(env.get("DEPLOY_INTEGRATION") or "").strip() == "1"
 
 
+# Compatibility aliases (SD7 rename). Prefer simulated_* names in new code.
+StagingDeployAdapter = SimulatedStagingAdapter
+StagingDeployHandler = SimulatedStagingHandler
+staging_deploy_manifest = simulated_staging_manifest
+default_staging_adapter = default_simulated_staging_adapter
+live_deploy_enabled = simulated_deploy_integration_enabled
+
+
 __all__ = [
     "CONNECTOR_ID",
+    "CONNECTOR_ID_ALIASES",
+    "LEGACY_CONNECTOR_ID",
     "DeploymentReceipt",
     "DeploymentTarget",
     "DeploymentTargetRegistry",
     "DeploymentTargetsConfig",
+    "SimulatedStagingAdapter",
+    "SimulatedStagingHandler",
     "StagingDeployAdapter",
     "StagingDeployHandler",
     "TOOLS",
@@ -551,8 +580,11 @@ __all__ = [
     "TOOL_ROLLBACK",
     "TOOL_START",
     "TOOL_STATUS",
+    "default_simulated_staging_adapter",
     "default_staging_adapter",
     "live_deploy_enabled",
     "load_deployment_targets_config",
+    "simulated_deploy_integration_enabled",
+    "simulated_staging_manifest",
     "staging_deploy_manifest",
 ]

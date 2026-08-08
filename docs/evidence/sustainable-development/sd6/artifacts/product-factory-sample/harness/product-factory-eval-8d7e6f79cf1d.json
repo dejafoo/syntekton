@@ -1,0 +1,25 @@
+{
+  "harness_id": "product-factory-eval",
+  "schema_version": "sd6.harness.v1",
+  "harness_version": "0.1.0",
+  "product_factory_version": "0.1.0",
+  "corpus_id": "sd6-foundation",
+  "corpus_sha256": "8d7e6f79cf1d8572be0dc1ab234a69edcad1edcc8384bb01e3ed5b5d6802bbdc",
+  "scorecard_schema_version": "sd6.scorecard.v1",
+  "promotion_config_sha256": "b1409059e9cb028f5fc2ac2df694e5638b8f7d7265bd5b39667bec4a8c8cc1f1",
+  "configuration": {
+    "seeds": 1,
+    "live": false,
+    "arms": [
+      "local_only",
+      "local_first_fallback",
+      "cloud",
+      "single_agent_baseline",
+      "skills_enabled",
+      "skills_disabled"
+    ],
+    "min_cases_for_promotion": 30,
+    "min_seeds_for_promotion": 3
+  },
+  "created_at": "2026-08-08T20:07:26.427305+00:00"
+}

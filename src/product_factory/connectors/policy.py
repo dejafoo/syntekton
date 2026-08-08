@@ -57,7 +57,15 @@ class ConnectorsConfig(BaseModel):
     connectors: dict[str, ConnectorSettings] = Field(default_factory=dict)
 
     def settings_for(self, connector_id: str) -> ConnectorSettings:
-        return self.connectors.get(connector_id, ConnectorSettings())
+        direct = self.connectors.get(connector_id)
+        if direct is not None:
+            return direct
+        # SD7: simulated_staging supersedes staging_deploy; accept either config key.
+        if connector_id == "simulated_staging":
+            return self.connectors.get("staging_deploy", ConnectorSettings())
+        if connector_id == "staging_deploy":
+            return self.connectors.get("simulated_staging", ConnectorSettings())
+        return ConnectorSettings()
 
     def is_enabled(self, connector_id: str) -> bool:
         return self.settings_for(connector_id).enabled

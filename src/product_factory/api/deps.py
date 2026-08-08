@@ -8,17 +8,11 @@ from pathlib import Path
 from product_factory.api.ingress import IngressAuditor, IngressConfig, load_ingress_config
 from product_factory.api.remote_mode import resolve_project_root
 from product_factory.config.loader import AppConfig, load_config
-from product_factory.gateway.base import ModelGateway
-from product_factory.gateway.factory import gateway_from_config
-from product_factory.gateway.mock import MockGateway
+from product_factory.host.registry import close_host_service, get_host_service
 from product_factory.host.service import HostService
 from product_factory.observability.query import ObservabilityQueryService
 from product_factory.persistence.database import Database
 from product_factory.workspace.uploads import UploadStore
-
-
-def _gateway_from_config(config: AppConfig, *, force_mock: bool = False) -> ModelGateway:
-    return gateway_from_config(config, force_mock=force_mock)
 
 
 class ApiState:
@@ -34,7 +28,7 @@ class ApiState:
         self.observe_base_url = observe_base_url
         self.db = Database(self.data_dir / "data" / "product_factory.sqlite")
         self.query = ObservabilityQueryService(self.db, data_dir=self.data_dir)
-        self._hosts: dict[bool, HostService] = {}
+        self._host: HostService | None = None
         self._ingress_config: IngressConfig | None = None
         self._ingress_auditor = IngressAuditor(self.data_dir / "ops" / "ingress-audit.jsonl")
         self._upload_store: UploadStore | None = None
@@ -66,26 +60,22 @@ class ApiState:
         mock: bool = False,
         observe_base_url: str | None = None,
     ) -> HostService:
-        """Shared HostService for control routes (cached per mock flag)."""
+        """Sole HostService for this API process data root (SD4.A).
+
+        Mock vs live is resolved once. A conflicting second request refuses
+        rather than opening a dual supervisor on the same SQLite root.
+        """
         force_mock = mock or bool(os.environ.get("PRODUCT_FACTORY_FORCE_MOCK"))
-        if force_mock not in self._hosts:
-            config = self.config()
-            gateway = _gateway_from_config(config, force_mock=force_mock)
-            self._hosts[force_mock] = HostService(
-                config=config,
-                gateway=gateway,
-                data_dir=self.data_dir,
-                use_deterministic_planner=force_mock or isinstance(gateway, MockGateway),
-                observe_base_url=observe_base_url or self.observe_base_url or None,
-            )
-        service = self._hosts[force_mock]
         base = observe_base_url or self.observe_base_url
-        if base:
-            service.observe_base_url = base.rstrip("/")
-        return service
+        self._host = get_host_service(
+            config=self.config(),
+            data_dir=self.data_dir,
+            force_mock=force_mock,
+            observe_base_url=base,
+        )
+        return self._host
 
     def close(self) -> None:
-        for service in self._hosts.values():
-            service.close()
-        self._hosts.clear()
+        close_host_service(self.data_dir)
+        self._host = None
         self.db.close()

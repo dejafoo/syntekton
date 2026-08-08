@@ -1,22 +1,102 @@
 name: ci
 
+# Hermetic PR gate toward scripts/verify.sh (SD5). Live secrets never belong here.
 on:
   push:
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  python:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.13"
-      - name: Sync
-        run: uv sync --extra dev
-      - name: Verify
+          enable-cache: true
+      - name: Sync (frozen)
+        run: uv sync --frozen --extra dev
+      - name: Format
+        run: uv run ruff format --check src tests
+      - name: Lint
+        run: uv run ruff check src tests
+      - name: Type check
+        run: uv run basedpyright
+      - name: Unit / hermetic tests
+        run: uv run pytest -q -m "not integration"
+      - name: CLI smoke
+        run: uv run product-factory --help
+      - name: OpenAPI / host schema drift
+        run: bash scripts/check_openapi_drift.sh
+
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Install (npm ci)
+        run: npm ci
+      - name: Test
+        run: npm test -- --run
+      - name: Type check
+        run: npm run check
+      - name: Production build
+        run: npm run build
+
+  opencode-plugin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: integrations/opencode-plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: integrations/opencode-plugin/package-lock.json
+      - name: Install (npm ci)
+        run: npm ci
+      - name: Test
+        run: npm test -- --run
+      - name: Type check
+        run: npm run check
+      - name: Package smoke
+        # Plugin ships TypeScript source; pack proves the package metadata installs.
+        run: npm pack --dry-run
+
+  package-smoke:
+    runs-on: ubuntu-latest
+    needs: [python, dashboard]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Sync (frozen)
+        run: uv sync --frozen --extra dev --extra observability
+      - name: Build dashboard into package static tree
         run: |
-          uv run ruff format --check src tests
-          uv run ruff check src tests
-          uv run pytest -q -m "not integration"
-          uv run product-factory --help
+          npm --prefix dashboard ci
+          npm --prefix dashboard run build
+      - name: Wheel build / install / health smoke
+        run: bash scripts/package_smoke.sh
+
+# OpenAPI / host schema drift: scripts/check_openapi_drift.sh (SD4.C + SD5 CI).

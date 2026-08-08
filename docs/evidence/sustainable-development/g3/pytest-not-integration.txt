@@ -1,0 +1,5 @@
+# Captured on sd/g3-platform after SD3+SD4+SD5 merge (full permissions / local hermetic).
+# Command: uv run pytest -q -m "not integration"
+# Tip at capture time recorded in README.md merge SHAs.
+
+997 passed, 3 skipped, 14 deselected in 198.87s (0:03:18)

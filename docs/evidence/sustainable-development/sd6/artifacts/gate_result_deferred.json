@@ -1,0 +1,12 @@
+{
+  "passed": false,
+  "decision": "deferred",
+  "failures": [
+    "operational AMD-owned multi-seed promotion run not available; local-first default remains deferred"
+  ],
+  "details": {
+    "candidate_arm": "local_first_fallback",
+    "cloud_arm": "cloud",
+    "operational_ready": false
+  }
+}

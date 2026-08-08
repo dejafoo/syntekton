@@ -1,0 +1,1 @@
+host OpenAPI/JSON Schema snapshots OK

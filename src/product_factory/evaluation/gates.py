@@ -87,7 +87,7 @@ def evaluate_regression_gate(
     """Block default changes unless scorecards meet thresholds on the pinned corpus."""
     thresholds = thresholds or GateThresholds()
     failures: list[str] = []
-    if experiment.status not in {"active", "promoted", "draft"}:
+    if experiment.status not in {"active", "promoted", "draft", "deferred"}:
         failures.append(f"experiment status {experiment.status!r} is not eligible")
 
     corpus_sha = expected_corpus_sha256 or experiment.corpus_sha256

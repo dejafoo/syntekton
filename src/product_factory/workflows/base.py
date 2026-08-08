@@ -16,6 +16,12 @@ from typing import Any, Literal
 
 from product_factory.domain.capabilities import CAPABILITIES, CAPABILITY_TOOL_CLASSES
 from product_factory.domain.errors import ConfigurationError
+from product_factory.registry.capability_descriptors import (
+    CAPABILITY_DESCRIPTORS,
+    KNOWN_AGENT_PROFILES,
+    KNOWN_EXECUTOR_ADAPTERS,
+    require_descriptor,
+)
 from product_factory.workflows.artifacts import ArtifactLandSpec
 
 ExecutorMode = Literal[
@@ -70,26 +76,10 @@ PACK_VALIDATOR_IDS: frozenset[str] = frozenset(
     }
 )
 
+# Derived from CapabilityDescriptor — packs never invent modes.
 DEFAULT_EXECUTOR_MODES: dict[str, ExecutorMode] = {
-    "implementation": "repository_agent_loop",
-    "repair": "repository_agent_loop",
-    "repository_analysis": "deterministic",
-    "independent_review": "model_draft",
-    "composition": "composition",
-    "architecture": "research_agent_loop",
-    "requirements": "research_agent_loop",
-    "domain_research": "research_agent_loop",
-    "decision_analysis": "research_agent_loop",
-    "interface_analysis": "interface_agent_loop",
-    "test_design": "model_draft",
-    "test_execution": "validation",
-    "security_review": "model_draft",
-    "documentation": "model_draft",
-    "release_analysis": "model_draft",
-    "operations_analysis": "model_draft",
-    # Deployment packs provide deterministic orchestration around connector
-    # effects; a model may prepare inputs but never owns the mutation loop.
-    "deployment_execution": "deterministic",
+    capability_id: descriptor.executor_mode  # type: ignore[misc]
+    for capability_id, descriptor in CAPABILITY_DESCRIPTORS.items()
 }
 
 
@@ -121,6 +111,26 @@ class PackExecutionPolicy:
             tool_class for classes in CAPABILITY_TOOL_CLASSES.values() for tool_class in classes
         }
         unknown_tool_classes = set(self.allowed_tool_classes) - known_tool_classes
+        permitted_union = frozenset(
+            tool_class
+            for capability in capabilities
+            for tool_class in CAPABILITY_TOOL_CLASSES.get(capability, frozenset())
+        )
+        widened_tool_authority = sorted(set(self.allowed_tool_classes) - permitted_union)
+        mode_mismatches: list[str] = []
+        unknown_adapters: list[str] = []
+        unknown_profiles: list[str] = []
+        for capability in capabilities:
+            if capability not in CAPABILITY_DESCRIPTORS:
+                continue
+            descriptor = require_descriptor(capability)
+            declared_mode = self.executor_modes.get(capability)
+            if declared_mode is not None and declared_mode != descriptor.executor_mode:
+                mode_mismatches.append(f"{capability}:{declared_mode}!={descriptor.executor_mode}")
+            if descriptor.executor_adapter_id not in KNOWN_EXECUTOR_ADAPTERS:
+                unknown_adapters.append(f"{capability}:{descriptor.executor_adapter_id}")
+            if descriptor.agent_profile_id not in KNOWN_AGENT_PROFILES:
+                unknown_profiles.append(f"{capability}:{descriptor.agent_profile_id}")
         output_roles = set(self.output_roles)
         invalid_fallbacks = set(self.fallback_composition_roles) - output_roles
         invalid_required = set(self.required_output_roles) - output_roles
@@ -139,6 +149,10 @@ class PackExecutionPolicy:
             "missing_capabilities": sorted(missing_capabilities),
             "unknown_executor_modes": sorted(unknown_modes),
             "unknown_tool_classes": sorted(unknown_tool_classes),
+            "executor_mode_mismatches": sorted(mode_mismatches),
+            "unknown_executor_adapters": sorted(unknown_adapters),
+            "unknown_agent_profiles": sorted(unknown_profiles),
+            "widened_tool_authority": widened_tool_authority,
             "invalid_fallback_roles": sorted(invalid_fallbacks),
             "invalid_required_roles": sorted(invalid_required),
             "invalid_role_groups": invalid_groups,
@@ -220,10 +234,11 @@ class WorkflowPack:
     output_schema: dict[str, Any]
     allowed_capabilities: frozenset[str]
     default_planner_mode: str
-    validation_policy: dict[str, Any]
-    skill_policy: dict[str, Any]
-    routing_defaults: dict[str, Any]
     execution_policy: PackExecutionPolicy
+    # Deprecated identity-only fields (SD2). PackExecutionPolicy is authoritative.
+    validation_policy: dict[str, Any] = field(default_factory=dict)
+    skill_policy: dict[str, Any] = field(default_factory=dict)
+    routing_defaults: dict[str, Any] = field(default_factory=dict)
     description: str = ""
     # Deliverables keyed by stable role; names are defaults hosts may override.
     artifacts: tuple[ArtifactLandSpec, ...] = field(default_factory=tuple)

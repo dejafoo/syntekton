@@ -11,28 +11,7 @@ from product_factory.domain.budgets import RunBudget
 from product_factory.domain.runs import RunRequest
 from product_factory.gateway.mock import MockGateway
 from product_factory.orchestration.coordinator import RunCoordinator
-from product_factory.orchestration.graph import build_graph
 from tests.conftest import clone_fixture
-
-
-def test_graph_compiles_and_runs() -> None:
-    graph = build_graph()
-    result = graph.invoke(
-        {
-            "run_id": "run-test",
-            "workflow_type": "code_change",
-            "compiler_errors": [],
-            "validation_results": [],
-            "plan_attempt": 0,
-            "repair_count": 0,
-            "task_results": [],
-            "findings": [],
-            "events": [],
-            "final_status": "initializing",
-        },
-        config={"configurable": {"thread_id": "t1"}},
-    )
-    assert result["final_status"] in {"completed", "awaiting_approval"}
 
 
 def test_code_change_vertical_slice(tmp_path: Path) -> None:

@@ -145,7 +145,7 @@ def test_generate_architecture_uses_profile_max_output_tokens(tmp_path: Path) ->
         gateway=MockGateway(responder=responder),
         data_dir=tmp_path / ".product-factory",
     )
-    text, usage = coord._generate_architecture_document(
+    text, usage = coord._engine.composition.generate_architecture_document(
         request=_request(),
         task=_task(),
         ctx_messages=[],
@@ -184,7 +184,7 @@ def test_generate_architecture_continues_after_length_truncation(tmp_path: Path)
         gateway=MockGateway(responder=responder),
         data_dir=tmp_path / ".product-factory",
     )
-    text, usage = coord._generate_architecture_document(
+    text, usage = coord._engine.composition.generate_architecture_document(
         request=_request(),
         task=_task(),
         ctx_messages=[],
@@ -217,7 +217,7 @@ def test_generate_architecture_fails_after_exhausted_continuations(tmp_path: Pat
         data_dir=tmp_path / ".product-factory",
     )
     with pytest.raises(RuntimeFailureError, match="truncated after"):
-        coord._generate_architecture_document(
+        coord._engine.composition.generate_architecture_document(
             request=_request(),
             task=_task(),
             ctx_messages=[],

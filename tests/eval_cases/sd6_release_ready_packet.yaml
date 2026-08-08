@@ -1,0 +1,30 @@
+id: sd6_release_ready_packet
+workflow_type: architecture
+corpus_category: release
+request: |
+  Sanitized release readiness: review a complete packet with immutable build id,
+  verification receipts, migration notes, monitoring owner, and rollback steps.
+  Confirm readiness without expanding scope into deployment execution.
+tags: ['sd6', 'release', 'readiness', 'sanitized']
+expected_status:
+  - completed
+  - awaiting_approval
+acceptance_criteria:
+  - Complete packet can be marked ready or ready-with-notes
+  - Review does not perform or authorize deployment
+  - Rollback and monitoring are acknowledged
+must_cover:
+  - immutable build
+  - verification
+  - rollback
+  - monitoring
+reference_hints: |
+  Fixture analogue: tests/fixtures/release/ready_packet.json
+isolation_targets:
+  - release_analysis
+metadata:
+  sd6_corpus: true
+  sanitization: synthetic_release_packet
+  fixture_ref: tests/fixtures/release/ready_packet.json
+  skill_hint: release.readiness-review
+  expected_recommendation: ready

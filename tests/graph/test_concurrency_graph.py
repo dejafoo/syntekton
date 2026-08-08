@@ -25,6 +25,7 @@ from product_factory.domain.runs import RunRequest
 from product_factory.domain.tasks import AcceptanceCriterion, TaskSpec
 from product_factory.gateway.mock import MockGateway
 from product_factory.orchestration.coordinator import RunCoordinator
+from product_factory.orchestration.lifecycle import RunLifecycleEngine
 from tests.conftest import clone_fixture
 
 
@@ -122,14 +123,14 @@ def test_two_read_only_tasks_overlap_in_the_same_wave(tmp_path: Path, monkeypatc
     coord = _new_coordinator(tmp_path)
 
     monkeypatch.setattr(
-        RunCoordinator,
+        RunLifecycleEngine,
         "_plan",
         lambda self, run_id, request, repo_summary=None, repair_errors=None, **kwargs: (
             _read_only_overlap_plan(request.request_text)
         ),
     )
 
-    original_execute_task = RunCoordinator._execute_task
+    original_execute_task = RunLifecycleEngine._execute_task
     delay_s = 0.15
 
     def slow_execute_task(self, *, task, **kwargs):  # type: ignore[no-untyped-def]
@@ -137,7 +138,7 @@ def test_two_read_only_tasks_overlap_in_the_same_wave(tmp_path: Path, monkeypatc
             time.sleep(delay_s)
         return original_execute_task(self, task=task, **kwargs)
 
-    monkeypatch.setattr(RunCoordinator, "_execute_task", slow_execute_task)
+    monkeypatch.setattr(RunLifecycleEngine, "_execute_task", slow_execute_task)
 
     request = RunRequest(
         request_id="req-concurrency-overlap",
@@ -251,14 +252,14 @@ def test_conflicting_writers_yield_typed_composition_conflict(tmp_path: Path, mo
     coord = _new_coordinator(tmp_path)
 
     monkeypatch.setattr(
-        RunCoordinator,
+        RunLifecycleEngine,
         "_plan",
         lambda self, run_id, request, repo_summary=None, repair_errors=None, **kwargs: (
             _writer_conflict_plan(request.request_text)
         ),
     )
     monkeypatch.setattr(
-        "product_factory.orchestration.coordinator.deterministic_impl_files",
+        "product_factory.orchestration.lifecycle.engine.deterministic_impl_files",
         _variant_impl_files,
     )
 

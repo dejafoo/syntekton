@@ -1,0 +1,27 @@
+id: sd6_quality_patch_review
+workflow_type: architecture
+corpus_category: quality
+request: |
+  Sanitized quality review: given a proposed patch that adds a retry helper,
+  produce a review that checks for missing tests, silent exception swallowing,
+  and scope creep. Prefer blocked/needs-revision over approve-when-uncertain.
+tags: ['sd6', 'quality', 'review', 'sanitized']
+expected_status:
+  - completed
+  - awaiting_approval
+acceptance_criteria:
+  - Review calls out missing tests or silent exception risks when present
+  - Uncertain claims are labeled rather than approved
+  - Recommendation is approve, needs_revision, or blocked
+must_cover:
+  - tests
+  - exception handling
+  - scope
+reference_hints: |
+  Quality reviews must not rubber-stamp incomplete patches.
+isolation_targets:
+  - independent_review
+metadata:
+  sd6_corpus: true
+  sanitization: synthetic_retry_helper_patch
+  skill_hint: quality.patch-review

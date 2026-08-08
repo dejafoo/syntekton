@@ -6,27 +6,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from product_factory.domain.artifacts import HandoffRef
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.usage import UsageMetrics
 
-WorkflowType = Literal[
-    "architecture",
-    "technical_plan",
-    "code_change",
-    "repository_change",
-    "repository_investigation",
-    "quality_gate",
-    "feasibility_discovery",
-    "change_intake",
-    "technical_spike",
-    "release_readiness",
-    "incident_triage",
-    "service_health_review",
-    "deployment_execution",
-]
+# SD2: pack ids are registry-validated strings (not a closed Literal).
+# Host/API still accept aliases; durable runs persist canonical pack IDs.
+WorkflowType = str
 
 
 class GitRefWorkspace(BaseModel):
@@ -80,16 +68,28 @@ class RunRequest(BaseModel):
     request_id: str
     workflow_type: WorkflowType
     request_text: str
+
+    @field_validator("workflow_type")
+    @classmethod
+    def _validate_workflow_type(cls, value: str) -> str:
+        from product_factory.workflows.registry import is_registered_workflow
+
+        if not is_registered_workflow(value):
+            raise ValueError(f"Unknown workflow pack: {value!r}")
+        return value
+
     repository_path: Path | None = None
     # Server-registered repository id (remote mode). Resolved to repository_path
     # on the host before execution; clients never send laptop paths remotely.
     repository_id: str | None = None
     workspace: GitRefWorkspace | None = None
     workspace_provenance: WorkspaceProvenance | None = None
-    project_profile: str = "default"
+    # Deprecated (SD7): ignored; capability routing owns profiles. Retained on
+    # RunRequest for host/v1 compatibility until the v1 removal window.
     model_profile_set: str = "local-target"
     validation_commands: list[str] = Field(default_factory=list)
-    # Deprecated one-release alias for `artifact_overrides`, as `ROLE=dest/path.md`.
+    # Deprecated (SD7): prefer `artifact_overrides`. Still accepted for one
+    # compatibility window; host/v2 rejects this field.
     requested_artifacts: list[str] = Field(default_factory=list)
     artifact_overrides: dict[str, ArtifactOverride] = Field(default_factory=dict)
     handoff_refs: list[HandoffRef] = Field(default_factory=list)

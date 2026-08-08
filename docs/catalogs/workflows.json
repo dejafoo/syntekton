@@ -1,0 +1,286 @@
+[
+  {
+    "allowed_capabilities": [
+      "composition",
+      "decision_analysis",
+      "documentation",
+      "independent_review",
+      "repository_analysis",
+      "requirements"
+    ],
+    "allowed_tool_classes": [
+      "artifact_write",
+      "ci_read",
+      "evidence_build",
+      "git_read",
+      "mcp_filesystem_read",
+      "ops_read",
+      "repository_read",
+      "web_read"
+    ],
+    "artifact_roles": [
+      "change_brief",
+      "clarification_request"
+    ],
+    "default_planner_mode": "fixed",
+    "description": "Frame a vague or well-scoped change request into either a pinned change brief or a typed clarification request. Read-only; never opens a new live research plane or grants repository writes.",
+    "version": "1.0.0",
+    "workflow_type": "change_intake"
+  },
+  {
+    "allowed_capabilities": [
+      "composition",
+      "deployment_execution"
+    ],
+    "allowed_tool_classes": [
+      "artifact_write",
+      "deployment_read",
+      "deployment_write"
+    ],
+    "artifact_roles": [
+      "deployment_record"
+    ],
+    "default_planner_mode": "fixed",
+    "description": "Approval-gated deployment of one immutable artifact to an allowlisted non-production target with health, halt, rollback, and reconciliation receipts.",
+    "version": "1.0.0",
+    "workflow_type": "deployment_execution"
+  },
+  {
+    "allowed_capabilities": [
+      "composition",
+      "decision_analysis",
+      "documentation",
+      "domain_research",
+      "independent_review",
+      "interface_analysis",
+      "repository_analysis",
+      "requirements"
+    ],
+    "allowed_tool_classes": [
+      "artifact_write",
+      "ci_read",
+      "evidence_build",
+      "git_read",
+      "interface_analysis",
+      "mcp_filesystem_read",
+      "ops_read",
+      "repository_read",
+      "source_read",
+      "synthetic_write",
+      "web_read"
+    ],
+    "artifact_roles": [
+      "feasibility_dossier"
+    ],
+    "default_planner_mode": "fixed",
+    "description": "Bounded public-evidence discovery producing a feasibility dossier with labeled provenance, option comparison, and an expert-review escalations path.",
+    "version": "1.0.0",
+    "workflow_type": "feasibility_discovery"
+  },
+  {
+    "allowed_capabilities": [
+      "composition",
+      "operations_analysis"
+    ],
+    "allowed_tool_classes": [
+      "artifact_write",
+      "git_read",
+      "ops_read",
+      "repository_read"
+    ],
+    "artifact_roles": [
+      "operational_record"
+    ],
+    "default_planner_mode": "fixed",
+    "description": "Read-only synthesis of bounded incident evidence into observations, inferences, unknowns, and a typed non-mutating follow-up.",
+    "version": "1.0.0",
+    "workflow_type": "incident_triage"
+  },
+  {
+    "allowed_capabilities": [
+      "composition",
+      "independent_review",
+      "security_review",
+      "test_design",
+      "test_execution"
+    ],
+    "allowed_tool_classes": [
+      "artifact_write",
+      "ci_read",
+      "git_read",
+      "mcp_filesystem_read",
+      "ops_read",
+      "repository_read",
+      "repository_write",
+      "validation_command",
+      "web_read"
+    ],
+    "artifact_roles": [
+      "test_plan",
+      "quality_findings",
+      "security_evidence",
+      "verification_report"
+    ],
+    "default_planner_mode": "fixed",
+    "description": "Read-only verification gate producing review documents and a typed acceptance-to-evidence report \u2014 reports defects without repairing them.",
+    "version": "2.0.0",
+    "workflow_type": "quality_gate"
+  },
+  {
+    "allowed_capabilities": [
+      "composition",
+      "operations_analysis",
+      "release_analysis"
+    ],
+    "allowed_tool_classes": [
+      "artifact_write",
+      "ci_read",
+      "git_read",
+      "ops_read",
+      "repository_read"
+    ],
+    "artifact_roles": [
+      "release_plan"
+    ],
+    "default_planner_mode": "fixed",
+    "description": "Read-only release evidence review over immutable Git/CI and bounded operational signals; emits ready, blocked, or needs_decision.",
+    "version": "1.0.0",
+    "workflow_type": "release_readiness"
+  },
+  {
+    "allowed_capabilities": [
+      "architecture",
+      "composition",
+      "decision_analysis",
+      "deployment_execution",
+      "documentation",
+      "domain_research",
+      "implementation",
+      "independent_review",
+      "interface_analysis",
+      "operations_analysis",
+      "release_analysis",
+      "repair",
+      "repository_analysis",
+      "requirements",
+      "security_review",
+      "test_design",
+      "test_execution"
+    ],
+    "allowed_tool_classes": [
+      "artifact_write",
+      "ci_read",
+      "deployment_read",
+      "deployment_write",
+      "evidence_build",
+      "git_read",
+      "git_write",
+      "interface_analysis",
+      "mcp_filesystem_read",
+      "ops_read",
+      "repository_read",
+      "repository_write",
+      "source_read",
+      "synthetic_write",
+      "validation_command",
+      "web_read"
+    ],
+    "artifact_roles": [
+      "proposed_patch",
+      "change_set"
+    ],
+    "default_planner_mode": "fixed",
+    "description": "Bounded repository change producing a patch and content-addressed ChangeSet, with optional review and repair before composition.",
+    "version": "2.0.0",
+    "workflow_type": "repository_change"
+  },
+  {
+    "allowed_capabilities": [
+      "composition",
+      "documentation",
+      "independent_review",
+      "repository_analysis"
+    ],
+    "allowed_tool_classes": [
+      "artifact_write",
+      "ci_read",
+      "git_read",
+      "mcp_filesystem_read",
+      "ops_read",
+      "repository_read",
+      "web_read"
+    ],
+    "artifact_roles": [
+      "evidence_report"
+    ],
+    "default_planner_mode": "fixed",
+    "description": "Read-only repository investigation consuming a pinned ChangeBrief and producing labeled facts, inferences, unknowns, and source provenance.",
+    "version": "2.0.0",
+    "workflow_type": "repository_investigation"
+  },
+  {
+    "allowed_capabilities": [
+      "composition",
+      "operations_analysis"
+    ],
+    "allowed_tool_classes": [
+      "artifact_write",
+      "git_read",
+      "ops_read",
+      "repository_read"
+    ],
+    "artifact_roles": [
+      "operational_record"
+    ],
+    "default_planner_mode": "fixed",
+    "description": "Read-only review of bounded service-health signals with explicit observation/inference labels and typed follow-up.",
+    "version": "1.0.0",
+    "workflow_type": "service_health_review"
+  },
+  {
+    "allowed_capabilities": [
+      "architecture",
+      "composition",
+      "documentation",
+      "independent_review",
+      "interface_analysis",
+      "requirements"
+    ],
+    "allowed_tool_classes": [
+      "artifact_write",
+      "ci_read",
+      "git_read",
+      "interface_analysis",
+      "mcp_filesystem_read",
+      "ops_read",
+      "repository_read",
+      "synthetic_write",
+      "web_read"
+    ],
+    "artifact_roles": [
+      "architecture_document"
+    ],
+    "default_planner_mode": "fixed",
+    "description": "Technical plan from pinned ChangeBrief/evidence inputs, mapping every acceptance criterion to an implementation slice and verification evidence.",
+    "version": "2.0.0",
+    "workflow_type": "technical_plan"
+  },
+  {
+    "allowed_capabilities": [
+      "interface_analysis"
+    ],
+    "allowed_tool_classes": [
+      "artifact_write",
+      "interface_analysis",
+      "repository_read",
+      "synthetic_write"
+    ],
+    "artifact_roles": [
+      "spike_result"
+    ],
+    "default_planner_mode": "fixed",
+    "description": "Local-only OpenAPI/JSON Schema analysis with synthetic fixtures and worktree-confined simulation.",
+    "version": "1.0.0",
+    "workflow_type": "technical_spike"
+  }
+]

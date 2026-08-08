@@ -13,6 +13,7 @@ from product_factory.domain.errors import ApprovalBlockedError, RuntimeFailureEr
 from product_factory.domain.runs import RunRequest
 from product_factory.gateway.mock import MockGateway
 from product_factory.orchestration.coordinator import RunCoordinator
+from product_factory.orchestration.lifecycle import RunLifecycleEngine
 from tests.conftest import clone_fixture
 
 
@@ -39,14 +40,14 @@ def test_resume_skips_completed_tasks_and_retries_crashed_task(tmp_path: Path, m
     fixture = _fixture(tmp_path)
     coord1 = _new_coordinator(tmp_path)
 
-    original_execute_task = RunCoordinator._execute_task
+    original_execute_task = RunLifecycleEngine._execute_task
 
     def crashing_execute_task(self, *, task, **kwargs):  # type: ignore[no-untyped-def]
         if task.id == "T-004":
             raise RuntimeError("simulated crash mid-task")
         return original_execute_task(self, task=task, **kwargs)
 
-    monkeypatch.setattr(RunCoordinator, "_execute_task", crashing_execute_task)
+    monkeypatch.setattr(RunLifecycleEngine, "_execute_task", crashing_execute_task)
 
     request = RunRequest(
         request_id="req-resume-1",
@@ -103,7 +104,7 @@ def test_resume_skips_completed_tasks_and_retries_crashed_task(tmp_path: Path, m
         invoked_task_ids.append(task.id)
         return original_execute_task(self, task=task, **kwargs)
 
-    monkeypatch.setattr(RunCoordinator, "_execute_task", tracking_execute_task)
+    monkeypatch.setattr(RunLifecycleEngine, "_execute_task", tracking_execute_task)
 
     manifest = coord2.resume(run_id)
 
