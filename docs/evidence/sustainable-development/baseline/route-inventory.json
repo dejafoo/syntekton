@@ -1,0 +1,202 @@
+[
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/health"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/meta"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/runs"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/runs/{run_id}"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/tasks"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/tasks/{task_id}"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/plan"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/lineage"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/costs"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/events"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/events"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/model-invocations"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/tool-calls"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/validations"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/artifacts"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/artifacts/{sha256}/content"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/content/{sha256}"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/prompts"
+  },
+  {
+    "file": "src/product_factory/api/routes.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/events/stream"
+  },
+  {
+    "file": "src/product_factory/api/control.py",
+    "method": "POST",
+    "path": "/runs"
+  },
+  {
+    "file": "src/product_factory/api/control.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/status"
+  },
+  {
+    "file": "src/product_factory/api/control.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/inspect"
+  },
+  {
+    "file": "src/product_factory/api/control.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/tail"
+  },
+  {
+    "file": "src/product_factory/api/control.py",
+    "method": "POST",
+    "path": "/runs/{run_id}/approve"
+  },
+  {
+    "file": "src/product_factory/api/control.py",
+    "method": "POST",
+    "path": "/runs/{run_id}/reject"
+  },
+  {
+    "file": "src/product_factory/api/control.py",
+    "method": "POST",
+    "path": "/runs/{run_id}/cancel"
+  },
+  {
+    "file": "src/product_factory/api/control.py",
+    "method": "POST",
+    "path": "/runs/{run_id}/revise"
+  },
+  {
+    "file": "src/product_factory/api/control.py",
+    "method": "POST",
+    "path": "/runs/{run_id}/materialize"
+  },
+  {
+    "file": "src/product_factory/api/control.py",
+    "method": "POST",
+    "path": "/runs/{run_id}/materialize-all"
+  },
+  {
+    "file": "src/product_factory/api/control.py",
+    "method": "POST",
+    "path": "/plan"
+  },
+  {
+    "file": "src/product_factory/api/delivery.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/delivery"
+  },
+  {
+    "file": "src/product_factory/api/delivery.py",
+    "method": "GET",
+    "path": "/runs/{run_id}/delivery/blobs/{sha256}"
+  },
+  {
+    "file": "src/product_factory/api/uploads.py",
+    "method": "GET",
+    "path": "/uploads/bounds"
+  },
+  {
+    "file": "src/product_factory/api/uploads.py",
+    "method": "POST",
+    "path": "/uploads/git-bundle/preflight"
+  },
+  {
+    "file": "src/product_factory/api/uploads.py",
+    "method": "PUT",
+    "path": "/uploads/git-bundle/{upload_id}"
+  },
+  {
+    "file": "src/product_factory/api/uploads.py",
+    "method": "POST",
+    "path": "/uploads/git-bundle/{upload_id}/finalize"
+  },
+  {
+    "file": "src/product_factory/api/uploads.py",
+    "method": "GET",
+    "path": "/uploads/git-bundle/{upload_id}"
+  },
+  {
+    "file": "src/product_factory/api/app.py",
+    "method": "GET",
+    "path": "/dashboard/{path:path}"
+  },
+  {
+    "file": "src/product_factory/api/app.py",
+    "method": "WEBSOCKET",
+    "path": "/api/v1/events/ws"
+  },
+  {
+    "file": "src/product_factory/api/app.py",
+    "method": "WEBSOCKET",
+    "path": "/api/v1/events/ws"
+  }
+]

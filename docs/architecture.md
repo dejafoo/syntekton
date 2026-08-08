@@ -241,7 +241,7 @@ Runtime data root: **`.product-factory/`** (gitignored).
 | Run directories | `runs/<run_id>/output/`, prompts, worktree scratch |
 | Event log + `TelemetryRecorder` | Typed run/task/tool/validation events |
 
-Optional FastAPI observability server (`product-factory observe serve`) exposes read-only REST and WebSocket/SSE over the same store (ADR-006). Optional OTLP export via `observability/otel.py`.
+Optional FastAPI observability server (`product-factory observe serve`) exposes read-only REST and cursor-resumable SSE over the same store (ADR-006). Optional OTLP export via `observability/otel.py`.
 
 ---
 

@@ -498,6 +498,62 @@ class RunCoordinator:
             gateway.inner if isinstance(gateway, InstrumentedModelGateway) else gateway
         )
 
+    def _deployment_approval_verified(
+        self,
+        request: RunRequest,
+        *,
+        consumer_run_id: str,
+        capability: str,
+    ) -> bool:
+        """Resolve durable ActionApproval for deployment_execution (SD0.C).
+
+        Pack-input booleans and mirrored digest fields are never authority.
+        Temporary on RunCoordinator until the deployment executor owns this
+        (issue: remove-coordinator-approval-verify-2026-08).
+        """
+        if capability != "deployment_execution" or request.workflow_type != "deployment_execution":
+            return False
+        binding = request.pack_input.get("approval_binding")
+        if not isinstance(binding, dict):
+            binding = {}
+        approval_id = str(
+            binding.get("approval_id") or request.pack_input.get("approval_id") or ""
+        ).strip()
+        if not approval_id:
+            return False
+        from product_factory.trust.approvals import (
+            ApprovalError,
+            ApprovalService,
+            deployment_action_fingerprint,
+        )
+
+        release_handoff_id = str(
+            binding.get("release_handoff_id") or request.pack_input.get("release_handoff_id") or ""
+        )
+        release_handoff_digest = str(
+            binding.get("release_handoff_digest")
+            or request.pack_input.get("release_handoff_digest")
+            or ""
+        )
+        try:
+            expected = deployment_action_fingerprint(
+                release_handoff_id=release_handoff_id,
+                release_handoff_digest=release_handoff_digest,
+                release_plan_digest=str(request.pack_input.get("release_plan_digest") or ""),
+                artifact_digest=str(request.pack_input.get("artifact_digest") or ""),
+                target_id=str(request.pack_input.get("target_id") or ""),
+                change_window=request.pack_input.get("change_window"),
+                idempotency_key=str(request.pack_input.get("idempotency_key") or ""),
+            )
+            ApprovalService(self.db).consume_for_execution(
+                approval_id,
+                expected_fingerprint=expected,
+                consumer_run_id=consumer_run_id,
+            )
+        except ApprovalError:
+            return False
+        return True
+
     def _build_execution_context(
         self,
         *,
@@ -618,6 +674,26 @@ class RunCoordinator:
         if is_registered_workflow(request.workflow_type):
             workflow_pack = resolve_workflow_pack(request.workflow_type)
             validate_pack_handoffs(request, workflow_pack)
+            if request.handoff_refs:
+                # SD0.B temporary: remove when RunLifecycleEngine owns handoff
+                # resolution (issue: remove-coordinator-handoff-resolve-2026-08).
+                from product_factory.trust.handoffs import HandoffService
+
+                resolved_handoffs = HandoffService(self.db, self.pf_root).resolve_refs(
+                    request,
+                    workflow_pack,
+                    consumer_run_id=run_id,
+                    materialize_dir=run_dir / "input",
+                )
+                (run_dir / "input" / "resolved-handoffs.json").write_text(
+                    json.dumps(
+                        [item.model_dump(mode="json") for item in resolved_handoffs],
+                        indent=2,
+                        default=str,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
             # Bad artifact overrides or typed pack input fail here, before any
             # planning spend.
             validate_pack_input(workflow_pack, request.pack_input)
@@ -932,6 +1008,17 @@ class RunCoordinator:
         if is_registered_workflow(request.workflow_type):
             workflow_pack = resolve_workflow_pack(request.workflow_type)
             validate_pack_handoffs(request, workflow_pack)
+            if request.handoff_refs:
+                # SD0.B temporary: remove when RunLifecycleEngine owns handoff
+                # resolution (issue: remove-coordinator-handoff-resolve-2026-08).
+                from product_factory.trust.handoffs import HandoffService
+
+                HandoffService(self.db, self.pf_root).resolve_refs(
+                    request,
+                    workflow_pack,
+                    consumer_run_id=run_id,
+                    materialize_dir=run_dir / "input",
+                )
             validate_pack_input(workflow_pack, request.pack_input)
             land_map = land_map_for_request(request)
         execution_context = execution_context.with_pack(workflow_pack)
@@ -2767,17 +2854,10 @@ class RunCoordinator:
             source_policy=resolve_request_source_policy(
                 request, profiles_root=self.config.root / "profiles"
             ),
-            connector_approval_verified=(
-                request.workflow_type == "deployment_execution"
-                and bool(request.pack_input.get("approval_binding", {}).get("approval_id"))
-                and request.pack_input.get("release_plan", {}).get("outcome") == "ready"
-                and all(
-                    str(request.pack_input.get("approval_binding", {}).get(field) or "")
-                    == str(request.pack_input.get(field) or "")
-                    for field in ("release_plan_digest", "artifact_digest", "target_id")
-                )
-                and request.pack_input.get("approval_binding", {}).get("change_window")
-                == request.pack_input.get("change_window")
+            # SD0.C temporary: remove when deployment executor owns ApprovalService
+            # consumption (issue: remove-coordinator-approval-verify-2026-08).
+            connector_approval_verified=self._deployment_approval_verified(
+                request, consumer_run_id=run_id, capability=task.capability
             ),
             run_id=run_id,
             capture_level=recorder.capture_level if recorder is not None else None,

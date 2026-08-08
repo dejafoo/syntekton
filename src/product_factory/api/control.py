@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
@@ -79,6 +79,23 @@ class PlanPreviewBody(BaseModel):
     mock: bool = False
 
 
+class HandoffSupersedeBody(BaseModel):
+    successor_handoff_id: str | None = None
+
+
+class ActionApprovalCreateBody(BaseModel):
+    action_type: str
+    subject_run_id: str
+    action_fingerprint: str = Field(min_length=64, max_length=64)
+    subject_artifact_instance_id: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    expires_at: str | None = None
+
+
+class ActionApprovalDecisionBody(BaseModel):
+    decision: Literal["approved", "rejected"]
+
+
 def _state(request: Request) -> ApiState:
     return request.app.state.api_state
 
@@ -100,6 +117,10 @@ def _host_json(response: HostResponse, *, success_status: int = 200) -> JSONResp
         else:
             status = 400
     return JSONResponse(content=response.model_dump(mode="json"), status_code=status)
+
+
+def _operator_actor() -> dict[str, str]:
+    return {"kind": "local_operator", "id": "api_operator"}
 
 
 def _resolve_repository(
@@ -244,6 +265,77 @@ def submit_run(body: SubmitRunBody, request: Request) -> JSONResponse:
         inline_thread=body.inline and not body.sync,
     )
     return _host_json(response, success_status=202)
+
+
+@router.get("/runs/{run_id}/handoffs")
+def list_handoffs(run_id: str, request: Request) -> JSONResponse:
+    return _host_json(_state(request).host(observe_base_url=_observe_base(request)).handoffs(run_id))
+
+
+@router.post("/handoffs/{handoff_id}/approve")
+def approve_handoff(handoff_id: str, request: Request) -> JSONResponse:
+    return _host_json(
+        _state(request).host(observe_base_url=_observe_base(request)).approve_handoff(
+            handoff_id, actor=_operator_actor()
+        )
+    )
+
+
+@router.post("/handoffs/{handoff_id}/supersede")
+def supersede_handoff(
+    handoff_id: str, body: HandoffSupersedeBody, request: Request
+) -> JSONResponse:
+    return _host_json(
+        _state(request).host(observe_base_url=_observe_base(request)).supersede_handoff(
+            handoff_id,
+            successor_handoff_id=body.successor_handoff_id,
+            actor=_operator_actor(),
+        )
+    )
+
+
+@router.post("/action-approvals")
+def create_action_approval(body: ActionApprovalCreateBody, request: Request) -> JSONResponse:
+    from product_factory.trust.approvals import ApprovalError, ApprovalService
+
+    try:
+        approval = ApprovalService(_state(request).db).create_pending(
+            action_type=body.action_type,
+            subject_run_id=body.subject_run_id,
+            subject_artifact_instance_id=body.subject_artifact_instance_id,
+            action_fingerprint=body.action_fingerprint,
+            actor=_operator_actor(),
+            payload=body.payload,
+            expires_at=body.expires_at,
+        )
+    except ApprovalError as exc:
+        return _host_json(HostResponse.failure(code="invalid_approval", message=str(exc)))
+    return JSONResponse(content=approval.model_dump(mode="json"), status_code=201)
+
+
+@router.get("/action-approvals/{approval_id}")
+def get_action_approval(approval_id: str, request: Request) -> JSONResponse:
+    from product_factory.trust.approvals import ApprovalService
+
+    approval = ApprovalService(_state(request).db).get(approval_id)
+    if approval is None:
+        return _host_json(HostResponse.failure(code="not_found", message="Unknown action approval"))
+    return JSONResponse(content=approval.model_dump(mode="json"))
+
+
+@router.post("/action-approvals/{approval_id}/decision")
+def decide_action_approval(
+    approval_id: str, body: ActionApprovalDecisionBody, request: Request
+) -> JSONResponse:
+    from product_factory.trust.approvals import ApprovalError, ApprovalService
+
+    try:
+        approval = ApprovalService(_state(request).db).decide(
+            approval_id, body.decision, _operator_actor()
+        )
+    except ApprovalError as exc:
+        return _host_json(HostResponse.failure(code="invalid_approval", message=str(exc)))
+    return JSONResponse(content=approval.model_dump(mode="json"))
 
 
 @router.get("/runs/{run_id}/status")

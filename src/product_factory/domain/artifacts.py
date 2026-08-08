@@ -32,6 +32,7 @@ class HandoffRef(BaseModel):
     producer_task_id: str
     role: str
     state: HandoffState = "draft"
+    metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class ResourceRef(BaseModel):

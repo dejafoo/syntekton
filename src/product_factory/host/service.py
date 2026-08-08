@@ -211,6 +211,31 @@ class HostService:
             request=request.model_dump(mode="json"),
             active_operation="queued",
         )
+        if request.handoff_refs:
+            try:
+                from product_factory.trust.handoffs import HandoffService
+                from product_factory.workflows.registry import resolve_workflow_pack
+
+                HandoffService(self.coord.db, self.pf_root).resolve_refs(
+                    request,
+                    resolve_workflow_pack(request.workflow_type),
+                    consumer_run_id=run_id,
+                    materialize_dir=run_dir / "input",
+                )
+            except Exception as exc:
+                self.coord.db.upsert_run(
+                    run_id=run_id,
+                    workflow_type=request.workflow_type,
+                    status="failed",
+                    request=request.model_dump(mode="json"),
+                    active_operation="invalid_handoff",
+                )
+                return HostResponse.failure(
+                    code="invalid_handoff",
+                    message=str(exc),
+                    run_id=run_id,
+                    status="failed",
+                )
 
         if self.supervisor.running:
             self.supervisor.spawn(run_id)
@@ -470,6 +495,38 @@ class HostService:
             status=row["status"] if row else "completed",
             data={"approval": result},
         )
+
+    def handoffs(self, run_id: str) -> HostResponse:
+        row = self.coord.db.get_run(run_id)
+        if row is None:
+            return HostResponse.failure(code="not_found", message=f"Unknown run {run_id}")
+        return HostResponse.success(
+            run_id=run_id,
+            status=row["status"],
+            data={"handoffs": self.coord.db.list_handoff_records_by_run(run_id)},
+        )
+
+    def approve_handoff(self, handoff_id: str, *, actor: dict[str, Any] | str) -> HostResponse:
+        from product_factory.trust.handoffs import HandoffError, HandoffService
+
+        try:
+            record = HandoffService(self.coord.db, self.pf_root).approve(handoff_id, actor=actor)
+        except HandoffError as exc:
+            return HostResponse.failure(code="invalid_handoff", message=str(exc))
+        return HostResponse.success(data={"handoff": record.model_dump(mode="json")})
+
+    def supersede_handoff(
+        self, handoff_id: str, *, successor_handoff_id: str | None, actor: dict[str, Any] | str
+    ) -> HostResponse:
+        from product_factory.trust.handoffs import HandoffError, HandoffService
+
+        try:
+            record = HandoffService(self.coord.db, self.pf_root).supersede(
+                handoff_id, successor_handoff_id=successor_handoff_id, actor=actor
+            )
+        except HandoffError as exc:
+            return HostResponse.failure(code="invalid_handoff", message=str(exc))
+        return HostResponse.success(data={"handoff": record.model_dump(mode="json")})
 
     def reject(self, run_id: str) -> HostResponse:
         try:

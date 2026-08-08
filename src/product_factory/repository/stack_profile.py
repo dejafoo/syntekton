@@ -67,28 +67,6 @@ def _normalized_dependency_name(specifier: str) -> str:
     return re.split(r"[\s\[<>=!~;@]", specifier.strip().lower(), maxsplit=1)[0]
 
 
-def _python_locations(root: Path) -> list[str]:
-    locations: list[str] = []
-    if (root / "src").is_dir():
-        locations.append("src/**/*.py")
-    if (root / "tests").is_dir():
-        locations.append("tests/**/*.py")
-    if not locations:
-        locations.append("**/*.py")
-    return locations
-
-
-def _javascript_locations(root: Path, *, typescript: bool) -> list[str]:
-    suffix = "{ts,tsx}" if typescript else "{js,jsx,mjs,cjs}"
-    locations: list[str] = []
-    for directory in ("src", "app", "test", "tests"):
-        if (root / directory).is_dir():
-            locations.append(f"{directory}/**/*.{suffix}")
-    if not locations:
-        locations.append(f"**/*.{suffix}")
-    return locations
-
-
 def _framework_slots(
     names: set[str], candidates: tuple[str, ...], locations: list[str]
 ) -> list[FrameworkSlot]:
@@ -133,22 +111,51 @@ def discover_stack_profile(
     root: Path,
     *,
     registered_command_ids: Iterable[str] = (),
+    inventory: Any | None = None,
 ) -> StackProfile:
-    """Discover only declared Python/JS stack facts from fixed manifest names."""
+    """Discover only declared Python/JS stack facts from fixed manifest names.
+
+    Manifest reads are confined by SafeRepositoryInventory (SD0.E).
+    """
+    from product_factory.context.safe_inventory import (
+        InventoryPolicy,
+        SafeRepositoryInventory,
+        build_safe_repository_inventory,
+    )
+
     root = Path(root)
+    if inventory is None:
+        inventory = build_safe_repository_inventory(
+            root,
+            policy=InventoryPolicy(max_files=500, max_file_bytes=1_000_000),
+        )
+    elif not isinstance(inventory, SafeRepositoryInventory):
+        raise TypeError("inventory must be a SafeRepositoryInventory")
+
     languages: list[LanguageStack] = []
     sources: list[str] = []
     limitations: list[str] = []
     profile_name = root.name
 
-    pyproject_path = root / "pyproject.toml"
-    uv_lock_path = root / "uv.lock"
+    def _safe_text(rel: str) -> str | None:
+        if not inventory.contains(rel):
+            return None
+        try:
+            return inventory.read_text(rel)
+        except (OSError, UnicodeDecodeError, PermissionError, FileNotFoundError):
+            return None
+
+    def _safe_dir(rel: str) -> bool:
+        path = root / rel
+        return path.is_dir() and not path.is_symlink()
+
     python_dependencies: set[str] = set()
     python_runtime: str | None = None
-    if pyproject_path.is_file():
+    pyproject_text = _safe_text("pyproject.toml")
+    if pyproject_text is not None:
         sources.append("pyproject.toml")
         try:
-            data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+            data = tomllib.loads(pyproject_text)
             project = data.get("project") or {}
             profile_name = str(project.get("name") or profile_name)
             python_runtime = project.get("requires-python")
@@ -156,22 +163,29 @@ def discover_stack_profile(
             for values in (project.get("optional-dependencies") or {}).values():
                 declared.extend(values or [])
             python_dependencies.update(_normalized_dependency_name(str(item)) for item in declared)
-        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, AttributeError):
+        except (tomllib.TOMLDecodeError, AttributeError):
             limitations.append("pyproject.toml could not be parsed")
 
-    if uv_lock_path.is_file():
+    uv_text = _safe_text("uv.lock")
+    if uv_text is not None:
         sources.append("uv.lock")
         try:
-            lock_data = tomllib.loads(uv_lock_path.read_text(encoding="utf-8"))
+            lock_data = tomllib.loads(uv_text)
             for package in lock_data.get("package") or []:
                 if isinstance(package, dict) and package.get("name"):
                     python_dependencies.add(str(package["name"]).lower())
             python_runtime = python_runtime or lock_data.get("requires-python")
-        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, AttributeError):
+        except (tomllib.TOMLDecodeError, AttributeError):
             limitations.append("uv.lock could not be parsed")
 
-    if pyproject_path.is_file() or uv_lock_path.is_file():
-        python_locations = _python_locations(root)
+    if pyproject_text is not None or uv_text is not None:
+        python_locations: list[str] = []
+        if _safe_dir("src"):
+            python_locations.append("src/**/*.py")
+        if _safe_dir("tests"):
+            python_locations.append("tests/**/*.py")
+        if not python_locations:
+            python_locations.append("**/*.py")
         languages.append(
             LanguageStack(
                 language="python",
@@ -182,14 +196,14 @@ def discover_stack_profile(
                 location_globs=python_locations,
             )
         )
-        if not pyproject_path.is_file():
+        if pyproject_text is None:
             limitations.append("Python project manifest is absent")
 
-    package_path = root / "package.json"
-    if package_path.is_file():
+    package_text = _safe_text("package.json")
+    if package_text is not None:
         sources.append("package.json")
         try:
-            package_data: Any = json.loads(package_path.read_text(encoding="utf-8"))
+            package_data: Any = json.loads(package_text)
             if not isinstance(package_data, dict):
                 raise ValueError("package.json is not an object")
             profile_name = str(package_data.get("name") or profile_name)
@@ -199,8 +213,16 @@ def discover_stack_profile(
                 for name in (package_data.get(section) or {})
             }
             is_typescript = "typescript" in dependencies
-            language = "typescript" if is_typescript else "javascript"
-            locations = _javascript_locations(root, typescript=is_typescript)
+            language: Literal["javascript", "typescript"] = (
+                "typescript" if is_typescript else "javascript"
+            )
+            suffix = "{ts,tsx}" if is_typescript else "{js,jsx,mjs,cjs}"
+            locations: list[str] = []
+            for directory in ("src", "app", "test", "tests"):
+                if _safe_dir(directory):
+                    locations.append(f"{directory}/**/*.{suffix}")
+            if not locations:
+                locations.append(f"**/*.{suffix}")
             engines = package_data.get("engines") or {}
             runtime = engines.get("node") if isinstance(engines, dict) else None
             languages.append(
@@ -213,7 +235,7 @@ def discover_stack_profile(
             )
             if runtime is None:
                 limitations.append("Node runtime is not declared")
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
+        except (json.JSONDecodeError, ValueError, TypeError):
             limitations.append("package.json could not be parsed")
 
     if not languages:
