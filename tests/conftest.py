@@ -6,6 +6,18 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _reset_host_registry() -> None:
+    """SD4.A: each test starts without a cached HostService supervisor."""
+    from product_factory.host.registry import reset_host_registry
+
+    reset_host_registry()
+    yield
+    reset_host_registry()
+
 
 def materialize_git_fixture(fixture: Path, dest: Path) -> Path:
     """Copy a fixture directory into dest as a fresh git repository."""

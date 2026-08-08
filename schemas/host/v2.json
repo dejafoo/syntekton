@@ -1,0 +1,327 @@
+{
+  "$id": "https://product-factory.dev/schemas/host/v2.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "definitions": {
+    "HandoffClaim": {
+      "additionalProperties": false,
+      "description": "Authority-shaped handoff assertion for host/v2 (no fat producer claims).",
+      "properties": {
+        "expected_digest": {
+          "maxLength": 64,
+          "minLength": 64,
+          "title": "Expected Digest",
+          "type": "string"
+        },
+        "handoff_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Handoff Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "handoff_id",
+        "expected_digest"
+      ],
+      "title": "HandoffClaim",
+      "type": "object"
+    },
+    "HostResponseV2": {
+      "$defs": {
+        "HostError": {
+          "properties": {
+            "code": {
+              "title": "Code",
+              "type": "string"
+            },
+            "details": {
+              "additionalProperties": true,
+              "title": "Details",
+              "type": "object"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "title": "HostError",
+          "type": "object"
+        },
+        "HostSubscription": {
+          "properties": {
+            "cli_tail": {
+              "title": "Cli Tail",
+              "type": "string"
+            },
+            "sse_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Sse Url"
+            }
+          },
+          "required": [
+            "cli_tail"
+          ],
+          "title": "HostSubscription",
+          "type": "object"
+        }
+      },
+      "description": "Typed host/v2 response. Payload lives in `result` rather than a free-form bag.",
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ok": {
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "operation": {
+          "title": "Operation",
+          "type": "string"
+        },
+        "protocol": {
+          "const": "product-factory.host/v2",
+          "default": "product-factory.host/v2",
+          "title": "Protocol",
+          "type": "string"
+        },
+        "result": {
+          "additionalProperties": true,
+          "title": "Result",
+          "type": "object"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run Id"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Status"
+        },
+        "subscription": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostSubscription"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "ok",
+        "operation"
+      ],
+      "title": "HostResponseV2",
+      "type": "object"
+    },
+    "SubmitRunV2Body": {
+      "$defs": {
+        "ArtifactOverride": {
+          "additionalProperties": false,
+          "description": "Host-chosen name and/or destination for one pack deliverable role.",
+          "properties": {
+            "dest_path": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Dest Path"
+            },
+            "logical_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Logical Name"
+            }
+          },
+          "title": "ArtifactOverride",
+          "type": "object"
+        },
+        "HandoffClaim": {
+          "additionalProperties": false,
+          "description": "Authority-shaped handoff assertion for host/v2 (no fat producer claims).",
+          "properties": {
+            "expected_digest": {
+              "maxLength": 64,
+              "minLength": 64,
+              "title": "Expected Digest",
+              "type": "string"
+            },
+            "handoff_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Handoff Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "handoff_id",
+            "expected_digest"
+          ],
+          "title": "HandoffClaim",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Strict submit body for host/v2 and /api/v2.",
+      "properties": {
+        "artifact_overrides": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ArtifactOverride"
+          },
+          "title": "Artifact Overrides",
+          "type": "object"
+        },
+        "budget_usd": {
+          "default": 3.0,
+          "exclusiveMinimum": 0,
+          "maximum": 10000,
+          "title": "Budget Usd",
+          "type": "number"
+        },
+        "handoffs": {
+          "items": {
+            "$ref": "#/$defs/HandoffClaim"
+          },
+          "maxItems": 32,
+          "title": "Handoffs",
+          "type": "array"
+        },
+        "max_wall_clock_seconds": {
+          "anyOf": [
+            {
+              "maximum": 86400,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Wall Clock Seconds"
+        },
+        "metadata": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Metadata",
+          "type": "object"
+        },
+        "pack_input": {
+          "additionalProperties": true,
+          "title": "Pack Input",
+          "type": "object"
+        },
+        "repository_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository Id"
+        },
+        "repository_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository Path"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Id"
+        },
+        "request_text": {
+          "title": "Request Text",
+          "type": "string"
+        },
+        "validation_commands": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Validation Commands",
+          "type": "array"
+        },
+        "workflow_type": {
+          "default": "code_change",
+          "title": "Workflow Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "request_text"
+      ],
+      "title": "SubmitRunV2Body",
+      "type": "object"
+    }
+  },
+  "title": "product-factory.host/v2"
+}

@@ -60,10 +60,8 @@ class CompositionExecutor:
         dependency_outputs = request.dependency_outputs or []
         validation_evidence_refs = request.validation_evidence_refs
         validator_results = request.validator_results
-        services = request.services  # non-compose helpers only
-        execution_mode = (
-            "deterministic_mock" if request.allow_deterministic_workers else "live"
-        )
+        _ = request.services  # non-compose helpers only
+        execution_mode = "deterministic_mock" if request.allow_deterministic_workers else "live"
 
         artifact_refs = []
         summary = ""
@@ -170,9 +168,7 @@ class CompositionExecutor:
                 lineage_path = run_dir / "output" / f"{task.id}-lineage.json"
                 if lineage_path.exists():
                     lineage = json.loads(lineage_path.read_text(encoding="utf-8"))
-                    lineage["final_patch_fingerprint"] = (
-                        patch_fingerprint(patch) if patch else None
-                    )
+                    lineage["final_patch_fingerprint"] = patch_fingerprint(patch) if patch else None
                     lineage["post_patch_fingerprint"] = lineage["final_patch_fingerprint"]
                     lineage_path.write_text(json.dumps(lineage, indent=2), encoding="utf-8")
             else:
@@ -187,9 +183,7 @@ class CompositionExecutor:
                 findings=task_findings,
                 model_profile=profile,
                 resolved_model_id=profile,
-                provider=getattr(
-                    request.gateway, "default_model", type(request.gateway).__name__
-                ),
+                provider=getattr(request.gateway, "default_model", type(request.gateway).__name__),
                 prompt_package_hash=package_hash,
                 usage=model_usage,
             ),

@@ -68,10 +68,12 @@ def _table_names(conn: sqlite3.Connection) -> set[str]:
 
 
 def _ensure_foreign_keys(conn: sqlite3.Connection) -> None:
-    conn.execute("PRAGMA foreign_keys = ON")
-    enabled = conn.execute("PRAGMA foreign_keys").fetchone()
-    if enabled is None or int(enabled[0]) != 1:
-        raise MigrationError("PRAGMA foreign_keys must be ON for every connection")
+    from product_factory.persistence.connection import SqliteConnectionError, ensure_foreign_keys
+
+    try:
+        ensure_foreign_keys(conn)
+    except SqliteConnectionError as exc:
+        raise MigrationError(str(exc)) from exc
 
 
 def _applied_rows(conn: sqlite3.Connection) -> dict[int, sqlite3.Row]:

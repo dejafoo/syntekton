@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { parseSseFrame, projectionsForEvent, taskColumn } from "./api";
+import {
+  isUnsupportedRemoteDashboard,
+  parseSseFrame,
+  projectionsForEvent,
+  taskColumn,
+  unsupportedRemoteDashboardMessage,
+} from "./api";
 
 describe("dashboard API compatibility helpers", () => {
   it("parses arbitrary named SSE events instead of relying on a fixed listener list", () => {
@@ -27,5 +33,19 @@ describe("dashboard API compatibility helpers", () => {
     expect(projectionsForEvent("model.request.completed")).toEqual(
       expect.arrayContaining(["run", "invocations", "costs"]),
     );
+  });
+
+  it("explains unsupported authenticated remote browser use without mentioning bearer storage", () => {
+    const message = unsupportedRemoteDashboardMessage({
+      remote_mode: true,
+      dashboard: { remote_browser: "unsupported", deployment_support: "loopback_monitor_only" },
+    });
+    expect(message).toMatch(/loopback\/monitor-only/);
+    expect(message).toMatch(/SSH\/private tunnel/);
+    expect(message.toLowerCase()).not.toMatch(/bearer/);
+    expect(message.toLowerCase()).not.toMatch(/localstorage/);
+    expect(isUnsupportedRemoteDashboard({
+      dashboard: { remote_browser: "unsupported", deployment_support: "loopback_monitor_only" },
+    })).toBe(true);
   });
 });

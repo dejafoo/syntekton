@@ -1,13 +1,17 @@
-"""Content-addressed artifact store."""
+"""Content-addressed artifact store with crash-safe atomic writes (SD3.C)."""
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from product_factory.domain.artifacts import ArtifactRef
+from product_factory.domain.errors import UnsafeOperationError
 
 
 class ArtifactStore:
@@ -31,8 +35,10 @@ class ArtifactStore:
     ) -> ArtifactRef:
         sha = hashlib.sha256(content).hexdigest()
         path = self.blobs / sha
-        if not path.exists():
-            path.write_bytes(content)
+        if path.exists():
+            self.verify_blob(sha, expected_size=len(content))
+        else:
+            self._atomic_write(path, content, expected_sha256=sha)
         rel = f"blobs/{sha}"
         return ArtifactRef(
             sha256=sha,
@@ -98,14 +104,80 @@ class ArtifactStore:
             handoff_state=handoff_state,
         )
 
-    def get_bytes(self, sha256: str) -> bytes:
+    def get_bytes(self, sha256: str, *, verify: bool = False) -> bytes:
         path = self.blobs / sha256
         if not path.exists():
             raise FileNotFoundError(sha256)
-        return path.read_bytes()
+        data = path.read_bytes()
+        if verify:
+            self.verify_blob(sha256, expected_size=len(data), content=data)
+        return data
 
-    def get_text(self, sha256: str) -> str:
-        return self.get_bytes(sha256).decode("utf-8")
+    def get_text(self, sha256: str, *, verify: bool = False) -> str:
+        return self.get_bytes(sha256, verify=verify).decode("utf-8")
 
     def exists(self, sha256: str) -> bool:
         return (self.blobs / sha256).exists()
+
+    def verify_blob(
+        self,
+        sha256: str,
+        *,
+        expected_size: int | None = None,
+        content: bytes | None = None,
+    ) -> None:
+        path = self.blobs / sha256
+        if not path.exists():
+            raise FileNotFoundError(sha256)
+        data = content if content is not None else path.read_bytes()
+        if expected_size is not None and len(data) != expected_size:
+            raise UnsafeOperationError(
+                "Artifact blob size mismatch",
+                details={"sha256": sha256, "expected": expected_size, "actual": len(data)},
+            )
+        actual = hashlib.sha256(data).hexdigest()
+        if actual != sha256:
+            raise UnsafeOperationError(
+                "Artifact blob digest mismatch",
+                details={"sha256": sha256, "actual": actual},
+            )
+
+    def _atomic_write(self, final_path: Path, content: bytes, *, expected_sha256: str) -> None:
+        """Write via same-filesystem temp file, fsync, verify digest, then rename."""
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{final_path.name}.",
+            suffix=".tmp",
+            dir=str(final_path.parent),
+        )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            written = tmp_path.read_bytes()
+            actual = hashlib.sha256(written).hexdigest()
+            if actual != expected_sha256:
+                raise UnsafeOperationError(
+                    "Artifact temp digest mismatch before rename",
+                    details={"expected": expected_sha256, "actual": actual},
+                )
+            if len(written) != len(content):
+                raise UnsafeOperationError(
+                    "Artifact temp size mismatch before rename",
+                    details={"expected": len(content), "actual": len(written)},
+                )
+            os.replace(tmp_path, final_path)
+            try:
+                dir_fd = os.open(str(final_path.parent), os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                pass
+        finally:
+            if tmp_path.exists():
+                with contextlib.suppress(OSError):
+                    tmp_path.unlink()

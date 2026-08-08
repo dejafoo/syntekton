@@ -13,8 +13,10 @@ ENV UV_COMPILE_BYTECODE=1 \
     PRODUCT_FACTORY_ROOT=/app \
     PATH="/app/.venv/bin:$PATH"
 
-# uv.lock is gitignored in this repo; resolve from pyproject at build time.
-COPY pyproject.toml README.md ./
+# SD5: install from the committed lock. Prefer digest-pinning the base image
+# for release builds; record the resolved digest in provenance notes when
+# publishing (see docs/evidence/sustainable-development/sd5/).
+COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 COPY config ./config
 COPY profiles ./profiles
@@ -23,7 +25,7 @@ COPY tests/fixtures/sample_api ./fixtures/sample_api
 COPY examples/remote/docker-entrypoint.sh /docker-entrypoint.sh
 
 RUN chmod +x /docker-entrypoint.sh \
-    && uv sync --extra observability --no-dev --no-editable
+    && uv sync --frozen --extra observability --no-dev --no-editable
 
 EXPOSE 8765
 

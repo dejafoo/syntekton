@@ -80,9 +80,7 @@ class RunFinalizer:
             else []
         )
         blocking = any(v.status in {"fail", "error"} for v in validation_results)
-        requires_patch = bool(
-            policy is not None and ROLE_PROPOSED_PATCH in policy.output_roles
-        )
+        requires_patch = bool(policy is not None and ROLE_PROPOSED_PATCH in policy.output_roles)
         empty_patch = requires_patch and not patch_text.strip()
         requires_approval = bool(policy is not None and policy.approval_required)
         if missing or exclusive or blocking or empty_patch:

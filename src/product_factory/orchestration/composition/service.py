@@ -62,8 +62,6 @@ def append_markdown_continuation(base: str, continuation: str) -> str:
     return f"{base}{cont}"
 
 
-
-
 class CompositionService:
     """Typed composition boundary for pack deliverables."""
 
