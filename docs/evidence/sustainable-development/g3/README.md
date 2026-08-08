@@ -2,7 +2,7 @@
 
 **Branch:** `sd/g3-platform`  
 **Gate:** G3 (SD3 durability + SD4 protocol/clients + SD5 release engineering)  
-**Tip at evidence capture:** `bfebd59b6dd3d15880fe058015f3593f0dee45c0`
+**Tip at evidence capture:** `bb911c73e657d228b0437fbd8ed7811a6987e87b`
 
 ## Merge SHAs
 
