@@ -221,30 +221,10 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
 
 def migrate(conn: sqlite3.Connection) -> None:
-    conn.executescript(SCHEMA_SQL)
-    # Additive migrations for existing DBs created before observability columns.
-    _ensure_column(conn, "runs", "last_progress_at", "TEXT")
-    _ensure_column(conn, "runs", "active_operation", "TEXT")
-    _ensure_column(conn, "runs", "budget_json", "TEXT")
-    _ensure_column(conn, "runs", "cancel_requested", "INTEGER NOT NULL DEFAULT 0")
-    _ensure_column(conn, "tasks", "started_at", "TEXT")
-    _ensure_column(conn, "tasks", "ended_at", "TEXT")
-    _ensure_column(conn, "tasks", "attempt", "INTEGER NOT NULL DEFAULT 1")
-    _ensure_column(conn, "tasks", "updated_at", "TEXT")
-    _ensure_column(conn, "tasks", "active_operation", "TEXT")
-    _ensure_column(conn, "model_invocations", "provider", "TEXT")
-    _ensure_column(conn, "model_invocations", "resolved_model_id", "TEXT")
-    _ensure_column(conn, "model_invocations", "prompt_package_hash", "TEXT")
-    _ensure_column(conn, "model_invocations", "started_at", "TEXT")
-    _ensure_column(conn, "model_invocations", "ended_at", "TEXT")
-    _ensure_column(conn, "model_invocations", "latency_ms", "INTEGER")
-    _ensure_column(conn, "model_invocations", "content_refs_json", "TEXT NOT NULL DEFAULT '[]'")
-    _ensure_column(conn, "model_invocations", "routing_json", "TEXT NOT NULL DEFAULT '{}'")
-    _ensure_column(conn, "tool_calls", "status", "TEXT NOT NULL DEFAULT 'completed'")
-    _ensure_column(conn, "tool_calls", "started_at", "TEXT")
-    _ensure_column(conn, "tool_calls", "ended_at", "TEXT")
-    _ensure_column(conn, "tasks", "effective_policy_json", "TEXT")
-    conn.commit()
+    """Apply versioned migrations (SD0.A). No unversioned startup DDL path remains."""
+    from product_factory.persistence.migrations import apply_migrations
+
+    apply_migrations(conn)
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
@@ -893,6 +873,202 @@ class Database:
             (run_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    @_synchronized
+    def get_artifact_instance_by_id(self, instance_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM artifact_instances WHERE instance_id = ?", (instance_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    @_synchronized
+    def insert_handoff_record(self, record: dict[str, Any]) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO handoff_records (
+                handoff_id, producer_artifact_instance_id, producer_run_id,
+                producer_task_id, sha256, schema_id, schema_version, role, state,
+                created_at, updated_at, superseded_by, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record["handoff_id"],
+                record["producer_artifact_instance_id"],
+                record["producer_run_id"],
+                record["producer_task_id"],
+                record["sha256"],
+                record["schema_id"],
+                record.get("schema_version"),
+                record["role"],
+                record["state"],
+                record["created_at"],
+                record["updated_at"],
+                record.get("superseded_by"),
+                json.dumps(record.get("metadata") or {}, sort_keys=True, default=str),
+            ),
+        )
+        self.conn.commit()
+
+    @_synchronized
+    def get_handoff_record(self, handoff_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM handoff_records WHERE handoff_id = ?", (handoff_id,)
+        ).fetchone()
+        return self._decode_handoff_record(row)
+
+    @_synchronized
+    def find_handoff_record(
+        self, *, sha256: str, producer_run_id: str, schema_id: str, role: str
+    ) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT * FROM handoff_records
+            WHERE sha256 = ? AND producer_run_id = ? AND schema_id = ? AND role = ?
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (sha256, producer_run_id, schema_id, role),
+        ).fetchone()
+        return self._decode_handoff_record(row)
+
+    @_synchronized
+    def list_handoff_records_by_run(self, run_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM handoff_records WHERE producer_run_id = ? ORDER BY created_at",
+            (run_id,),
+        ).fetchall()
+        return [decoded for row in rows if (decoded := self._decode_handoff_record(row))]
+
+    @_synchronized
+    def update_handoff_state(
+        self,
+        handoff_id: str,
+        *,
+        expected_state: str,
+        state: str,
+        superseded_by: str | None = None,
+    ) -> bool:
+        cur = self.conn.execute(
+            """
+            UPDATE handoff_records
+            SET state = ?, superseded_by = ?, updated_at = ?
+            WHERE handoff_id = ? AND state = ?
+            """,
+            (
+                state,
+                superseded_by,
+                datetime.now(UTC).isoformat(),
+                handoff_id,
+                expected_state,
+            ),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    @_synchronized
+    def insert_handoff_consumption(self, consumption: dict[str, Any]) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO handoff_consumptions (
+                consumer_run_id, handoff_id, producer_artifact_instance_id,
+                consumer_artifact_instance_id, state_at_resolution, resolved_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                consumption["consumer_run_id"],
+                consumption["handoff_id"],
+                consumption["producer_artifact_instance_id"],
+                consumption["consumer_artifact_instance_id"],
+                consumption["state_at_resolution"],
+                consumption["resolved_at"],
+            ),
+        )
+        self.conn.commit()
+
+    @_synchronized
+    def list_handoff_consumptions(self, handoff_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM handoff_consumptions WHERE handoff_id = ? ORDER BY resolved_at",
+            (handoff_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    @_synchronized
+    def get_handoff_consumption(
+        self, *, consumer_run_id: str, handoff_id: str
+    ) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT * FROM handoff_consumptions
+            WHERE consumer_run_id = ? AND handoff_id = ?
+            """,
+            (consumer_run_id, handoff_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+    @_synchronized
+    def insert_action_approval(self, approval: dict[str, Any]) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO action_approvals (
+                approval_id, action_type, subject_run_id, subject_artifact_instance_id,
+                action_fingerprint, status, actor_json, payload_json, created_at,
+                decided_at, expires_at, consumed_at, consumed_by_run_id, reconciliation_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                approval["approval_id"], approval["action_type"], approval["subject_run_id"],
+                approval.get("subject_artifact_instance_id"), approval["action_fingerprint"],
+                approval["status"], json.dumps(approval["actor"], sort_keys=True),
+                json.dumps(approval.get("payload") or {}, sort_keys=True, default=str),
+                approval["created_at"], approval.get("decided_at"), approval.get("expires_at"),
+                approval.get("consumed_at"), approval.get("consumed_by_run_id"),
+                json.dumps(approval.get("reconciliation") or {}, sort_keys=True, default=str),
+            ),
+        )
+        self.conn.commit()
+
+    @_synchronized
+    def get_action_approval(self, approval_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM action_approvals WHERE approval_id = ?", (approval_id,)
+        ).fetchone()
+        return self._decode_action_approval(row)
+
+    @_synchronized
+    def update_action_approval(
+        self, approval_id: str, *, expected_status: str, values: dict[str, Any]
+    ) -> bool:
+        allowed = {
+            "status", "actor_json", "decided_at", "consumed_at", "consumed_by_run_id",
+            "reconciliation_json",
+        }
+        fields = {key: value for key, value in values.items() if key in allowed}
+        if not fields:
+            return False
+        assignments = ", ".join(f"{key} = ?" for key in fields)
+        cur = self.conn.execute(
+            f"UPDATE action_approvals SET {assignments} WHERE approval_id = ? AND status = ?",
+            (*fields.values(), approval_id, expected_status),
+        )
+        self.conn.commit()
+        return cur.rowcount == 1
+
+    @staticmethod
+    def _decode_handoff_record(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        result = dict(row)
+        result["metadata"] = json.loads(result.pop("metadata_json") or "{}")
+        return result
+
+    @staticmethod
+    def _decode_action_approval(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        result = dict(row)
+        for key in ("actor", "payload", "reconciliation"):
+            result[key] = json.loads(result.pop(f"{key}_json") or "{}")
+        return result
 
     @_synchronized
     def record_validator_results(
