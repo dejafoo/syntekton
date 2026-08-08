@@ -36,7 +36,9 @@ Owners below are **default PR boundaries**. Cross-cutting edits need an explicit
 | Area | Paths |
 | --- | --- |
 | Evaluation | `src/product_factory/evaluation/`, `tests/evaluation/` |
-| Verify / CI | `scripts/verify.sh`, `.github/workflows/` |
+| Verify / CI | `scripts/verify.sh`, `scripts/package_smoke.sh`, `.github/workflows/` |
+| Lockfiles | `uv.lock`, `dashboard/package-lock.json`, `integrations/opencode-plugin/package-lock.json` |
+| Evidence | `docs/evidence/sustainable-development/sd5/` |
 
 ## Conflict rule
 
