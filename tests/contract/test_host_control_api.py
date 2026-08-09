@@ -309,7 +309,7 @@ def test_control_materialize_happy_path_and_path_escape(control_env) -> None:
     (run_dir / "input" / "request.json").write_text(
         json.dumps(request, indent=2) + "\n", encoding="utf-8"
     )
-    host.coord.db.upsert_run(
+    host.db.upsert_run(
         run_id=run_id,
         workflow_type="technical_plan",
         status="awaiting_approval",
@@ -371,7 +371,7 @@ def test_control_materialize_all_lands_named_deliverable(control_env) -> None:
     (run_dir / "input" / "request.json").write_text(
         json.dumps(request, indent=2) + "\n", encoding="utf-8"
     )
-    host.coord.db.upsert_run(
+    host.db.upsert_run(
         run_id=run_id,
         workflow_type="technical_plan",
         status="completed",

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import yaml
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import load_config
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.runs import RunRequest
@@ -22,7 +23,7 @@ FIXTURE = ROOT / "tests" / "fixtures" / "domain" / "fhir_style_discovery.yaml"
 
 
 def _coord(tmp_path: Path) -> RunCoordinator:
-    return RunCoordinator(
+    return build_coordinator(
         config=load_config(ROOT),
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",

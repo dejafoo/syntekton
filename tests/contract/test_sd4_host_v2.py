@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from product_factory.api.app import create_app
+from product_factory.application import build_host_service
 from product_factory.config.loader import load_config
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.runs import RunRequest
@@ -25,7 +26,6 @@ from product_factory.host.protocol_v2 import (
     protocol_metadata,
 )
 from product_factory.host.registry import get_host_service, reset_host_registry
-from product_factory.host.service import HostService
 from tests.conftest import clone_fixture
 
 
@@ -167,16 +167,16 @@ def test_ingress_parity_approve_handoff_host_vs_http(tmp_path: Path) -> None:
 
     from product_factory.trust.handoffs import HandoffService
 
-    hs = HandoffService(service.coord.db, data_dir)
-    service.coord.db.upsert_run(
+    hs = HandoffService(service.db, data_dir)
+    service.db.upsert_run(
         run_id="run-producer", workflow_type="code_change", status="completed", request={}
     )
-    service.coord.db.upsert_run(
+    service.db.upsert_run(
         run_id="run-producer-2", workflow_type="code_change", status="completed", request={}
     )
 
     instance_id = "artifact-instance-parity"
-    service.coord.db.record_artifact_instance(
+    service.db.record_artifact_instance(
         {
             "instance_id": instance_id,
             "run_id": "run-producer",
@@ -197,7 +197,7 @@ def test_ingress_parity_approve_handoff_host_vs_http(tmp_path: Path) -> None:
     assert via_service.data["handoff"]["state"] == "approved"
 
     instance_id_2 = "artifact-instance-parity-2"
-    service.coord.db.record_artifact_instance(
+    service.db.record_artifact_instance(
         {
             "instance_id": instance_id_2,
             "run_id": "run-producer-2",
@@ -226,7 +226,7 @@ def test_host_service_submit_status_parity_envelope(tmp_path: Path) -> None:
     fixture = _fixture_repo(tmp_path)
     config = load_config(project)
     data_dir = tmp_path / "pf"
-    service = HostService(
+    service = build_host_service(
         config=config,
         gateway=MockGateway(),
         data_dir=data_dir,

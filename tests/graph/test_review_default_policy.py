@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import load_config
 from product_factory.domain.runs import RunRequest
 from product_factory.gateway.mock import MockGateway
-from product_factory.orchestration.coordinator import RunCoordinator
 
 
 def test_low_risk_default_plan_omits_review() -> None:
     root = Path(__file__).resolve().parents[2]
-    coordinator = RunCoordinator(
+    coordinator = build_coordinator(
         config=load_config(root),
         gateway=MockGateway(),
         data_dir=root / ".product-factory-test-unused",
@@ -36,7 +36,7 @@ def test_low_risk_default_plan_omits_review() -> None:
 
 def test_high_risk_fixed_plan_keeps_review() -> None:
     root = Path(__file__).resolve().parents[2]
-    coordinator = RunCoordinator(
+    coordinator = build_coordinator(
         config=load_config(root),
         gateway=MockGateway(),
         data_dir=root / ".product-factory-test-unused",

@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import load_config
 from product_factory.connectors.policy import ConnectorSettings
 from product_factory.domain.runs import RunRequest
 from product_factory.gateway.mock import MockGateway
-from product_factory.orchestration.coordinator import RunCoordinator
 from product_factory.trust.approvals import ApprovalService, deployment_action_fingerprint
 
 
@@ -23,7 +23,7 @@ def test_mock_deployment_executes_staging_and_emits_record(tmp_path: Path) -> No
             )
         }
     )
-    coordinator = RunCoordinator(
+    coordinator = build_coordinator(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",

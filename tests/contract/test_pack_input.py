@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from product_factory.api.control import SubmitRunBody, _run_request
+from product_factory.application import build_host_service
 from product_factory.config.loader import load_config
 from product_factory.domain.runs import RunRequest
 from product_factory.gateway.mock import MockGateway
@@ -48,7 +49,7 @@ def service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> HostService:
     repo_root = Path(__file__).resolve().parents[2]
     shutil.copytree(repo_root / "config", project / "config")
     shutil.copytree(repo_root / "profiles", project / "profiles")
-    host = HostService(
+    host = build_host_service(
         config=load_config(project),
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",

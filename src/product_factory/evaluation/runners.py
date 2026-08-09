@@ -8,6 +8,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import AppConfig
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.runs import RunRequest
@@ -17,7 +18,7 @@ from product_factory.evaluation.subjects import SubjectArtifact, SubjectConfig
 from product_factory.gateway.base import ModelGateway
 from product_factory.gateway.canonical_messages import CanonicalMessage, ModelRequest
 from product_factory.gateway.mock import MockGateway
-from product_factory.orchestration.coordinator import RunCoordinator, extract_unified_diff
+from product_factory.orchestration.coordinator import extract_unified_diff
 
 
 def _pack_input_for_case(case: EvalCase) -> dict:
@@ -124,7 +125,7 @@ class FullOrchestrationRunner:
         work_dir.mkdir(parents=True, exist_ok=True)
         repo = _resolve_repo(case, self.app_config.root, work_dir)
         use_det = self.use_deterministic_planner or isinstance(gateway, MockGateway)
-        coord = RunCoordinator(
+        coord = build_coordinator(
             config=self.app_config,
             gateway=gateway,
             data_dir=work_dir / ".product-factory",

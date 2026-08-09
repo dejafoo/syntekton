@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import AppConfig, load_config
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.errors import ApprovalBlockedError, RuntimeFailureError
@@ -28,7 +29,7 @@ def _fixture(tmp_path: Path) -> Path:
 
 
 def _new_coordinator(tmp_path: Path) -> RunCoordinator:
-    return RunCoordinator(
+    return build_coordinator(
         config=_config(),
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
