@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import logging
@@ -19,13 +18,6 @@ from product_factory.connectors.broker import EVENT_INVOKED as CONNECTOR_EVENT_I
 from product_factory.connectors.broker import ConnectorBroker
 from product_factory.connectors.registry import ConnectorRegistry
 from product_factory.connectors.tavily import CONNECTOR_ID as TAVILY_CONNECTOR_ID
-from product_factory.context.assembler import (
-    assemble_context,
-    list_repository_paths,
-    resolve_context_limits,
-    select_repository_excerpts,
-)
-from product_factory.context.task_context import build_task_context, persist_task_context
 from product_factory.domain.artifacts import ResourceRef
 from product_factory.domain.errors import (
     ApprovalBlockedError,
@@ -68,6 +60,10 @@ from product_factory.orchestration.repair import (
     should_terminate_no_progress,
     update_no_progress,
 )
+from product_factory.orchestration.task_contracts import (
+    TaskPreparationRequest,
+    TaskRuntimeRequest,
+)
 from product_factory.orchestration.task_preparation import (
     BlockedPreparation,
     TaskPreparationService,
@@ -81,10 +77,7 @@ from product_factory.orchestration.validation_repair.service import (
 from product_factory.orchestration.wave_execution import WaveExecutionService
 from product_factory.orchestration.worktree_lineage import WorktreeLineageService
 from product_factory.persistence.artifact_policy import ArtifactInstance
-from product_factory.persistence.artifacts import ArtifactStore
 from product_factory.persistence.database import Database
-from product_factory.policy.domain_packs import resolve_request_domain_packs
-from product_factory.policy.policy_profiles import resolve_request_policy_profiles
 from product_factory.policy.source_policy import resolve_request_source_policy
 from product_factory.registry.capability_descriptors import (
     CAPABILITY_DESCRIPTORS,
@@ -94,9 +87,6 @@ from product_factory.repositories.patches import (
     create_patch,
 )
 from product_factory.repositories.worktrees import WorktreeManager
-from product_factory.repository.stack_profile import StackProfile, discover_stack_profile
-from product_factory.schemas import validate_write_payload
-from product_factory.skills.profiles import ProfileRegistry
 from product_factory.skills.registry import SkillRegistry
 from product_factory.tools.registry import ToolRegistry
 from product_factory.validation.pipeline import (
@@ -1446,126 +1436,6 @@ class RunLifecycleEngine:
     def _record_artifact_instance(self, instance: ArtifactInstance) -> None:
         self.db.record_artifact_instance(instance.model_dump(mode="json"))
 
-    def _pin_stack_profile(
-        self,
-        *,
-        request: RunRequest,
-        artifacts: ArtifactStore,
-        run_id: str,
-        task_id: str,
-        existing_policy: dict[str, Any] | None,
-    ) -> tuple[dict[str, str], str | None, str | None, str | None]:
-        """Return (profile_digests, digest, artifact_sha256, schema_version).
-
-        On resume, reuse the pinned stack-profile artifact instead of re-detecting.
-        """
-
-        digests = ProfileRegistry.load(self.config.root / "profiles").digests()
-        source_policy = resolve_request_source_policy(
-            request, profiles_root=self.config.root / "profiles"
-        )
-        if source_policy is not None:
-            digests.update(source_policy.as_manifest_entry())
-        for pack in resolve_request_domain_packs(request, packs_root=self.config.root / "packs"):
-            digests.update(pack.as_manifest_entry())
-        for profile in resolve_request_policy_profiles(
-            request, profiles_root=self.config.root / "profiles"
-        ):
-            digests.update(profile.as_manifest_entry())
-
-        stack_digest = None
-        stack_sha = None
-        stack_version = None
-        if existing_policy:
-            stack_sha = existing_policy.get("stack_profile_artifact_sha256")
-            stack_digest = existing_policy.get("stack_profile_digest")
-            stack_version = existing_policy.get("stack_profile_schema_version")
-            if stack_sha and artifacts.exists(str(stack_sha)):
-                try:
-                    pinned = StackProfile.model_validate(
-                        json.loads(artifacts.get_text(str(stack_sha)))
-                    )
-                    digests.update(pinned.as_manifest_entry())
-                    return digests, pinned.digest, str(stack_sha), pinned.version
-                except (OSError, json.JSONDecodeError, ValueError, TypeError):
-                    if stack_digest:
-                        digests["stack:pinned"] = str(stack_digest)
-                    return digests, stack_digest, str(stack_sha), stack_version
-            if stack_sha:
-                return digests, stack_digest, str(stack_sha), stack_version
-
-        existing_instance = next(
-            (
-                row
-                for row in self.db.list_artifact_instances(run_id)
-                if row.get("role") == "stack_profile"
-            ),
-            None,
-        )
-        if existing_instance and artifacts.exists(str(existing_instance["sha256"])):
-            try:
-                pinned = StackProfile.model_validate(
-                    json.loads(artifacts.get_text(str(existing_instance["sha256"])))
-                )
-                digests.update(pinned.as_manifest_entry())
-                return (
-                    digests,
-                    pinned.digest,
-                    str(existing_instance["sha256"]),
-                    pinned.version,
-                )
-            except (OSError, json.JSONDecodeError, ValueError, TypeError):
-                pass
-
-        if request.repository_path is None:
-            return digests, None, None, None
-
-        stack_profile = discover_stack_profile(
-            request.repository_path,
-            registered_command_ids=(
-                resolve_validation_command_ids(request) or self.config.policies.registered_commands
-            ),
-        )
-        digests.update(stack_profile.as_manifest_entry())
-        ref = artifacts.put_json(
-            stack_profile.model_dump(mode="json"),
-            logical_name="stack-profile.json",
-            created_by_task_id=task_id,
-            schema_id="stack_profile.v1",
-            schema_version=stack_profile.version,
-            trust_level="generated",
-        )
-        self.db.record_artifact(ref.model_dump(mode="json"))
-        self._record_artifact_instance(
-            ArtifactInstance.create(
-                run_id=run_id,
-                sha256=ref.sha256,
-                content_class="durable_output",
-                capture_level="full",
-                role="stack_profile",
-                producer_task_id=task_id,
-                media_type=ref.media_type,
-                schema_id="stack_profile.v1",
-                schema_version=stack_profile.version,
-                size_bytes=ref.size_bytes,
-                display_name="stack-profile.json",
-                metadata={"stack_id": stack_profile.id, "digest": stack_profile.digest},
-            )
-        )
-        return digests, stack_profile.digest, ref.sha256, stack_profile.version
-
-    def _research_prompt_tool_names(
-        self,
-        *,
-        task: TaskSpec,
-        request: RunRequest,
-        allowed: set[str],
-    ) -> tuple[list[str] | None, str | None]:
-        """Compat delegate — ownership is TaskPreparationService (SR2)."""
-        return self.task_preparation.research_prompt_tool_names(
-            task=task, request=request, allowed=allowed
-        )
-
     def _execute_task(
         self,
         *,
@@ -1581,348 +1451,92 @@ class RunLifecycleEngine:
         validation_evidence_refs: list[str] | None = None,
         validator_results: list[dict[str, Any]] | None = None,
     ) -> TaskResult:
-        run_id = execution_context.run_id
-        run_dir = execution_context.run_dir
-        artifacts = execution_context.artifacts
-        recorder = execution_context.recorder
-        ledger = execution_context.ledger
-        gateway = execution_context.gateway
-        land_map = land_map or ArtifactLandMap()
-        validation_evidence_refs = validation_evidence_refs or []
-        validator_results = validator_results or []
+        """Prepare and dispatch one task; wave ownership persists its outcome."""
 
-        existing_policy_data: dict[str, Any] | None = None
-        existing_row = self.db.get_task(run_id, task.id)
-        if existing_row and existing_row.get("effective_policy_json"):
-            with contextlib.suppress(json.JSONDecodeError, TypeError):
-                loaded = json.loads(existing_row["effective_policy_json"])
-                if isinstance(loaded, dict):
-                    existing_policy_data = loaded
-
-        profile_digests, stack_digest, stack_sha, stack_version = self._pin_stack_profile(
-            request=request,
-            artifacts=artifacts,
-            run_id=run_id,
-            task_id=task.id,
-            existing_policy=existing_policy_data,
-        )
-
-        prepared = self.task_preparation.prepare_effective_policy(
-            run_id=run_id,
-            request=request,
-            task=task,
-            existing_policy_data=existing_policy_data,
-            profile_digests=profile_digests,
-            stack_digest=stack_digest,
-            stack_sha=stack_sha,
-            stack_version=stack_version,
+        prepared = self.task_preparation.prepare(
+            TaskPreparationRequest(
+                execution_session=execution_context,
+                run_request=request,
+                task=task,
+                worktrees=worktrees,
+                original_repository=original_repo,
+                base_commit=base_commit,
+                dependency_outputs=tuple(dependency_outputs or ()),
+                land_map=land_map or ArtifactLandMap(),
+                composition_role=composer_role,
+                validation_evidence_refs=tuple(validation_evidence_refs or ()),
+                validator_results=tuple(validator_results or ()),
+            )
         )
         if isinstance(prepared, BlockedPreparation):
-            conflict_result = prepared.result
-            # SR3: WaveExecutionService owns terminal task+event durability.
             self.wave_execution.record_task_completion(
                 db=self.db,
-                run_id=run_id,
+                run_id=execution_context.run_id,
                 task=task,
-                result=conflict_result,
+                result=prepared.result,
             )
-            return conflict_result
+            return prepared.result
 
-        effective_policy = prepared.effective_policy
-        profile = prepared.profile
-        agent_profile = prepared.agent_profile
-        skills = prepared.skills
-        skills_disabled = prepared.skills_disabled
-        profile_digests = prepared.profile_digests
-        profile_cfg = self.config.models.profiles.get(profile)
-
-        if not prepared.reused_existing:
-            validate_write_payload(
-                EFFECTIVE_TASK_POLICY_SCHEMA,
-                effective_policy.model_dump(mode="json"),
-            )
-            policy_ref = artifacts.put_json(
-                effective_policy.model_dump(mode="json"),
-                logical_name=f"effective-policy-{task.id}.json",
-                created_by_task_id=task.id,
-                schema_id=EFFECTIVE_TASK_POLICY_SCHEMA,
-                schema_version="1",
-            )
-            self.db.record_artifact(policy_ref.model_dump(mode="json"))
-            self._record_artifact_instance(
-                ArtifactInstance.create(
-                    run_id=run_id,
-                    sha256=policy_ref.sha256,
-                    content_class="durable_output",
-                    capture_level="full",
-                    role="effective_task_policy",
-                    producer_task_id=task.id,
-                    media_type=policy_ref.media_type,
-                    schema_id=EFFECTIVE_TASK_POLICY_SCHEMA,
-                    schema_version="1",
-                    size_bytes=policy_ref.size_bytes,
-                    display_name=policy_ref.logical_name,
-                )
-            )
-            self.db.upsert_task(
-                run_id=run_id,
-                task_id=task.id,
-                capability=task.capability,
-                status="running",
-                spec=task.model_dump(mode="json"),
-                effective_policy=effective_policy.model_dump(mode="json"),
-                active_operation=task.capability,
-            )
-
-        prompt_set = set(effective_policy.prompt_tool_names)
-        tool_defs = [
-            {"name": t.name, "description": t.description, "parameters": t.input_schema}
-            for t in self.tool_registry.list()
-            if t.name in prompt_set
-        ]
-        registered_ids = resolve_validation_command_ids(request) or list(
-            self.config.policies.registered_commands
-        )
-        if registered_ids:
-            for entry in tool_defs:
-                if entry.get("name") == "run_validation_command":
-                    entry["description"] = (
-                        f"{entry.get('description', '')} Registered ids: "
-                        f"{', '.join(registered_ids)}."
-                    )
-        excerpt_root = original_repo
-        repository_excerpts: list[dict[str, str]] = []
-        context_omissions: list[str] = []
-        if skills_disabled:
-            context_omissions.append("skills_disabled")
-        context_mode = str(request.metadata.get("context_mode") or "targeted").strip().lower()
-        soft_limit = profile_cfg.context_soft_limit if profile_cfg is not None else None
-        packing_limits = resolve_context_limits(
-            self.config.policies.context,
-            task_max_input_tokens=task.budget.max_input_tokens,
-            model_context_soft_limit=soft_limit,
-        )
-        if excerpt_root is not None:
-            if context_mode in {"file_list_only", "file-list-only", "paths_only"}:
-                repository_excerpts, context_omissions = list_repository_paths(
-                    excerpt_root,
-                    max_files=packing_limits.max_file_list_paths,
-                )
-            else:
-                repository_excerpts, context_omissions = select_repository_excerpts(
-                    excerpt_root,
-                    objective=f"{request.request_text}\n{task.objective}",
-                    max_files=packing_limits.max_excerpt_files,
-                    max_chars=packing_limits.max_excerpt_chars,
-                )
-        runtime_directives: list[str] = []
-        if registered_ids and task.capability in {"implementation", "repair"}:
-            runtime_directives.append(
-                "Validation: call run_validation_command only with a registered "
-                f"command_id from [{', '.join(registered_ids)}]. Never use "
-                "validator labels (behavioral:...) or raw executables (pytest)."
-            )
-        if "jitter" in f"{request.request_text}\n{task.objective}".lower() and task.capability in {
-            "implementation",
-            "repair",
-        }:
-            runtime_directives.append(
-                "Retry/jitter: compute the sleep duration with jitter applied "
-                "before calling sleep (e.g. sleep(min(max_delay, delay * "
-                "(1 + random())))). Do not sleep the base delay and only mutate "
-                "delay afterward — tests assert observed sleep values vary."
-            )
-        ctx = assemble_context(
-            task=task,
-            model_profile=profile,
-            agent_profile=agent_profile,
-            skills=skills,
-            tool_definitions=tool_defs,
-            repository_excerpts=repository_excerpts,
-            dependency_outputs=dependency_outputs,
-            context_omissions=context_omissions,
-            runtime_directives=runtime_directives or None,
-            package_id=f"pkg-{task.id}",
-            packing=packing_limits,
-            profile_digests=profile_digests,
-        )
-        task_context = build_task_context(
-            task_id=task.id,
-            skills=skills,
-            tool_names=list(effective_policy.allowed_tool_names),
-            prompt_tool_names=list(effective_policy.prompt_tool_names),
-            expected_output_schema=task.expected_output_schema,
-            profile_digests=profile_digests,
-            effective_policy=effective_policy.model_dump(mode="json"),
-        )
-        persist_task_context(task_context, run_dir / "prompts")
-        (run_dir / "prompts" / f"{task.id}.manifest.json").write_text(
-            ctx.manifest.model_dump_json(indent=2), encoding="utf-8"
-        )
-        if recorder is not None:
-            recorder.emit(
-                run_id=run_id,
-                event_type="prompt.package_created",
-                task_id=task.id,
-                summary="Prompt package assembled",
-                payload={
-                    "package_hash": ctx.package_hash,
-                    "manifest": ctx.manifest.model_dump(mode="json"),
-                    "effective_policy": effective_policy.model_dump(mode="json"),
-                },
-                content=ctx.messages,
-                content_logical_name=f"prompt-package-{task.id}",
-            )
-
-        wt_path = run_dir / "scratch" / task.id
-        wt_path.mkdir(parents=True, exist_ok=True)
-        writable = task.capability in {
-            "implementation",
-            "repair",
-            "test_design",
-            "composition",
-            "interface_analysis",
-        }
-        inherited_artifacts: list[str] = []
-        lineage_conflicts: list[dict[str, str]] = []
-        pre_patch_fingerprint: str | None = None
-        if worktrees is not None and original_repo is not None and base_commit:
-            if task.capability in {
-                "implementation",
-                "repair",
-                "repository_analysis",
-                "independent_review",
-                "composition",
-                "test_execution",
-                "domain_research",
-                "interface_analysis",
-            }:
-                (
-                    wt_path,
-                    inherited_artifacts,
-                    lineage_conflicts,
-                    pre_patch_fingerprint,
-                ) = self.worktree_lineage.prepare_task_worktree(
-                    worktrees=worktrees,
-                    artifacts=artifacts,
-                    run_dir=run_dir,
-                    task_id=task.id,
-                    capability=task.capability,
-                    dependencies=task.dependencies,
-                    dependency_outputs=dependency_outputs or [],
-                    base_commit=base_commit,
-                    writable=writable,
-                )
-
-        if lineage_conflicts and task.capability == "composition":
-            conflict_result = TaskResult(
-                task_id=task.id,
-                status="failed",
-                summary="composition_conflict",
-                validator_results=[
-                    ValidatorResult(
-                        validator_id="composition_conflict",
-                        status="fail",
-                        message="Conflicting writable-task patches detected",
-                        details={"conflicts": lineage_conflicts},
-                    )
-                ],
-                model_profile=profile,
-            )
-            # Early-exit path (P1.F): still persist the terminal status so the
-            # task row doesn't stay stuck at "running" for resume/observability.
-            # SR3: WaveExecutionService owns terminal task+event durability.
-            self.wave_execution.record_task_completion(
-                db=self.db,
-                run_id=run_id,
-                task=task,
-                result=conflict_result,
-            )
-            return conflict_result
-
-        # SR2: TaskRuntimeService owns broker construction, grants, and dispatch.
         runtime_outcome = self.task_runtime.execute(
-            run_id=run_id,
-            run_dir=run_dir,
-            request=request,
-            task=task,
-            effective_policy=effective_policy,
-            agent_profile=agent_profile,
-            model_profile=profile,
-            skills=skills,
-            artifacts=artifacts,
-            gateway=gateway,
-            ledger=ledger,
-            wt_path=wt_path,
-            original_repo=original_repo,
-            base_commit=base_commit,
-            ctx_messages=ctx.messages,
-            package_hash=ctx.package_hash,
-            registered_command_ids=list(registered_ids),
-            dependency_outputs=dependency_outputs or [],
-            repository_excerpts=repository_excerpts,
-            land_map=land_map,
-            composer_role=composer_role,
-            validation_evidence_refs=validation_evidence_refs,
-            validator_results=validator_results,
-            composition=self.composition,
-            recorder=recorder,
+            TaskRuntimeRequest(
+                prepared_task=prepared,
+                execution_session=execution_context,
+            )
         )
         result = runtime_outcome.result
-
-        # Legacy live probe path removed: architecture/requirements now persist drafts above.
-        context_evidence = [
-            ResourceRef(
-                id=f"context:{task.id}:{excerpt['path']}",
-                resource_type="file",
-                origin="run_coordinator",
-                scope=excerpt["path"],
-                trust_level="mixed",
-                content_hash=hashlib.sha256(excerpt["content"].encode()).hexdigest(),
-            )
-            for excerpt in repository_excerpts
-        ]
         if not result.evidence_refs:
-            result.evidence_refs = context_evidence
+            result.evidence_refs = [
+                ResourceRef(
+                    id=f"context:{task.id}:{excerpt['path']}",
+                    resource_type="file",
+                    origin="task",
+                    scope=excerpt["path"],
+                    trust_level="mixed",
+                    content_hash=hashlib.sha256(excerpt["content"].encode()).hexdigest(),
+                )
+                for excerpt in prepared.repository_excerpts
+            ]
         if not result.provider:
+            gateway = execution_context.gateway
             result.provider = getattr(gateway, "default_model", type(gateway).__name__)
         if not result.prompt_package_hash:
-            result.prompt_package_hash = ctx.package_hash
-        artifact_refs = list(result.artifact_refs)
-        # SR3: couple terminal task upsert with its observability event.
+            result.prompt_package_hash = prepared.prompt_package.package_hash
+
         self.wave_execution.record_task_completion(
             db=self.db,
-            run_id=run_id,
+            run_id=execution_context.run_id,
             task=task,
             result=result,
         )
-        for art in artifact_refs:
-            self.db.record_artifact(art.model_dump(mode="json"))
+        for artifact in result.artifact_refs:
+            self.db.record_artifact(artifact.model_dump(mode="json"))
             self._record_artifact_instance(
                 ArtifactInstance.create(
-                    run_id=run_id,
-                    sha256=art.sha256,
+                    run_id=execution_context.run_id,
+                    sha256=artifact.sha256,
                     content_class="durable_output",
-                    capture_level=recorder.capture_level if recorder is not None else "full",
-                    role=art.logical_name,
+                    capture_level=execution_context.recorder.capture_level,
+                    role=artifact.logical_name,
                     producer_task_id=task.id,
-                    media_type=art.media_type,
-                    schema_id=art.schema_id,
-                    schema_version=art.schema_version,
-                    size_bytes=art.size_bytes,
-                    display_name=art.logical_name,
+                    media_type=artifact.media_type,
+                    schema_id=artifact.schema_id,
+                    schema_version=artifact.schema_version,
+                    size_bytes=artifact.size_bytes,
+                    display_name=artifact.logical_name,
                 )
             )
-            if recorder is not None:
-                recorder.emit(
-                    run_id=run_id,
-                    event_type="artifact.created",
-                    task_id=task.id,
-                    summary=art.logical_name,
-                    payload=art.model_dump(mode="json"),
-                )
-        for tc in runtime_outcome.tool_call_records:
-            self.db.record_tool_call(run_id=run_id, record=tc.model_dump(mode="json"))
+            execution_context.recorder.emit(
+                run_id=execution_context.run_id,
+                event_type="artifact.created",
+                task_id=task.id,
+                summary=artifact.logical_name,
+                payload=artifact.model_dump(mode="json"),
+            )
+        for tool_call in runtime_outcome.tool_call_records:
+            self.db.record_tool_call(
+                run_id=execution_context.run_id,
+                record=tool_call.model_dump(mode="json"),
+            )
         return result
 
     def _count_connector_invocations(self, run_id: str, *, connector_id: str) -> int:

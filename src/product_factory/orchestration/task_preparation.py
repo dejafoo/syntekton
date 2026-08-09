@@ -1,21 +1,30 @@
-"""TaskPreparationService — effective policy and execution-request assembly (SR2).
+"""TaskPreparationService — immutable policy, prompt, dependency, and workspace preparation.
 
 Owns capability/executor resolution inputs, effective-policy calculation, and
 immutable ``TaskExecutionRequest`` construction. Does not execute tasks.
 
-The first extraction cut moves policy resolution and request assembly out of
-``RunLifecycleEngine._execute_task``. Context packaging, worktree lineage, and
-broker construction remain sequenced by the lifecycle engine until later cuts.
+This service is the sole owner of inputs needed before runtime dispatch.  It
+does not execute a task or commit its terminal lifecycle state.
 """
 
 from __future__ import annotations
 
+import contextlib
+import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from product_factory.config.loader import AppConfig
 from product_factory.connectors.tavily import TOOL_WEB_SEARCH
+from product_factory.context.assembler import (
+    assemble_context,
+    list_repository_paths,
+    resolve_context_limits,
+    select_repository_excerpts,
+)
+from product_factory.context.task_context import build_task_context, persist_task_context
 from product_factory.domain.findings import ValidatorResult
 from product_factory.domain.runs import RunRequest
 from product_factory.domain.tasks import TaskResult, TaskSpec
@@ -25,23 +34,36 @@ from product_factory.executors.research_agent import (
     SOURCE_READ_TOOL_NAMES,
 )
 from product_factory.orchestration.effective_policy import (
+    EFFECTIVE_TASK_POLICY_SCHEMA,
     EffectiveTaskPolicy,
     compute_allowed_tool_names,
     grantable_connector_names_for_task,
     resolve_effective_task_policy,
 )
+from product_factory.orchestration.task_contracts import (
+    DependencyArtifact,
+    PreparedTask,
+    PreparedWorkspace,
+    TaskPreparationRequest,
+)
 from product_factory.orchestration.validation_repair.service import (
     resolve_validation_command_ids,
 )
+from product_factory.orchestration.worktree_lineage import WorktreeLineageService
+from product_factory.persistence.artifact_policy import ArtifactInstance
 from product_factory.policy.composition_gates import evaluate_composition_gates
 from product_factory.policy.domain_packs import resolve_request_domain_packs
 from product_factory.policy.policy_profiles import resolve_request_policy_profiles
+from product_factory.policy.source_policy import resolve_request_source_policy
 from product_factory.registry.capability_descriptors import (
     CAPABILITY_DESCRIPTORS,
     agent_profile_for,
     require_descriptor,
 )
+from product_factory.repository.stack_profile import StackProfile, discover_stack_profile
 from product_factory.scheduling.scheduler import resolve_task_model_profile
+from product_factory.schemas import validate_write_payload
+from product_factory.skills.profiles import ProfileRegistry
 from product_factory.skills.registry import SkillRegistry
 from product_factory.tools.registry import ToolRegistry
 from product_factory.workflows.registry import is_registered_workflow, resolve_workflow_pack
@@ -51,6 +73,18 @@ _RESEARCH_LOOP_CAPABILITIES = frozenset(
     for capability_id, descriptor in CAPABILITY_DESCRIPTORS.items()
     if descriptor.executor_mode == "research_agent_loop"
 )
+
+
+class TaskPreparationRepository(Protocol):
+    """Narrow persistence needed while preparing immutable runtime input."""
+
+    def get_task(self, run_id: str, task_id: str) -> dict[str, Any] | None: ...
+
+    def list_artifact_instances(self, run_id: str) -> list[dict[str, Any]]: ...
+
+    def record_artifact(self, artifact: dict[str, Any]) -> None: ...
+
+    def upsert_task(self, **values: Any) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,12 +124,20 @@ class TaskPreparationService:
         tool_registry: ToolRegistry,
         connector_registry: Any,
         connector_broker: Any,
+        repository: TaskPreparationRepository,
+        worktree_lineage: WorktreeLineageService,
+        on_artifact_instance: Callable[[ArtifactInstance], None],
+        composition: Any,
     ) -> None:
         self.config = config
         self.skills = skills
         self.tool_registry = tool_registry
         self.connector_registry = connector_registry
         self.connector_broker = connector_broker
+        self.repository = repository
+        self.worktree_lineage = worktree_lineage
+        self.on_artifact_instance = on_artifact_instance
+        self.composition = composition
 
     def research_prompt_tool_names(
         self,
@@ -368,6 +410,381 @@ class TaskPreparationService:
             reused_existing=False,
         )
 
+    def _pin_stack_profile(
+        self,
+        *,
+        request: RunRequest,
+        run_id: str,
+        task_id: str,
+        artifacts: Any,
+        existing_policy: dict[str, Any] | None,
+    ) -> tuple[dict[str, str], str | None, str | None, str | None]:
+        """Resolve immutable profile digests, reusing the pinned stack on resume."""
+
+        digests = ProfileRegistry.load(self.config.root / "profiles").digests()
+        source_policy = resolve_request_source_policy(
+            request, profiles_root=self.config.root / "profiles"
+        )
+        if source_policy is not None:
+            digests.update(source_policy.as_manifest_entry())
+        for pack in resolve_request_domain_packs(request, packs_root=self.config.root / "packs"):
+            digests.update(pack.as_manifest_entry())
+        for profile in resolve_request_policy_profiles(
+            request, profiles_root=self.config.root / "profiles"
+        ):
+            digests.update(profile.as_manifest_entry())
+
+        if existing_policy:
+            stack_sha = existing_policy.get("stack_profile_artifact_sha256")
+            stack_digest = existing_policy.get("stack_profile_digest")
+            stack_version = existing_policy.get("stack_profile_schema_version")
+            if stack_sha and artifacts.exists(str(stack_sha)):
+                try:
+                    pinned = StackProfile.model_validate(
+                        json.loads(artifacts.get_text(str(stack_sha)))
+                    )
+                    digests.update(pinned.as_manifest_entry())
+                    return digests, pinned.digest, str(stack_sha), pinned.version
+                except (OSError, json.JSONDecodeError, ValueError, TypeError):
+                    if stack_digest:
+                        digests["stack:pinned"] = str(stack_digest)
+                    return digests, stack_digest, str(stack_sha), stack_version
+            if stack_sha:
+                return digests, stack_digest, str(stack_sha), stack_version
+
+        existing_instance = next(
+            (
+                row
+                for row in self.repository.list_artifact_instances(run_id)
+                if row.get("role") == "stack_profile"
+            ),
+            None,
+        )
+        if existing_instance and artifacts.exists(str(existing_instance["sha256"])):
+            try:
+                pinned = StackProfile.model_validate(
+                    json.loads(artifacts.get_text(str(existing_instance["sha256"])))
+                )
+                digests.update(pinned.as_manifest_entry())
+                return digests, pinned.digest, str(existing_instance["sha256"]), pinned.version
+            except (OSError, json.JSONDecodeError, ValueError, TypeError):
+                pass
+
+        if request.repository_path is None:
+            return digests, None, None, None
+
+        stack_profile = discover_stack_profile(
+            request.repository_path,
+            registered_command_ids=(
+                resolve_validation_command_ids(request) or self.config.policies.registered_commands
+            ),
+        )
+        digests.update(stack_profile.as_manifest_entry())
+        ref = artifacts.put_json(
+            stack_profile.model_dump(mode="json"),
+            logical_name="stack-profile.json",
+            created_by_task_id=task_id,
+            schema_id="stack_profile.v1",
+            schema_version=stack_profile.version,
+            trust_level="generated",
+        )
+        self.repository.record_artifact(ref.model_dump(mode="json"))
+        self.on_artifact_instance(
+            ArtifactInstance.create(
+                run_id=run_id,
+                sha256=ref.sha256,
+                content_class="durable_output",
+                capture_level="full",
+                role="stack_profile",
+                producer_task_id=task_id,
+                media_type=ref.media_type,
+                schema_id="stack_profile.v1",
+                schema_version=stack_profile.version,
+                size_bytes=ref.size_bytes,
+                display_name="stack-profile.json",
+                metadata={"stack_id": stack_profile.id, "digest": stack_profile.digest},
+            )
+        )
+        return digests, stack_profile.digest, ref.sha256, stack_profile.version
+
+    def prepare(
+        self,
+        preparation_request: TaskPreparationRequest,
+    ) -> PreparedTask | BlockedPreparation:
+        """Create the complete immutable input for one runtime dispatch."""
+
+        session = preparation_request.execution_session
+        task = preparation_request.task
+        request = preparation_request.run_request
+        run_id = session.run_id
+        artifacts = session.artifacts
+        run_dir = session.run_dir
+
+        existing_policy_data: dict[str, Any] | None = None
+        existing_row = self.repository.get_task(run_id, task.id)
+        if existing_row and existing_row.get("effective_policy_json"):
+            with contextlib.suppress(json.JSONDecodeError, TypeError):
+                loaded = json.loads(existing_row["effective_policy_json"])
+                if isinstance(loaded, dict):
+                    existing_policy_data = loaded
+
+        profile_digests, stack_digest, stack_sha, stack_version = self._pin_stack_profile(
+            request=request,
+            run_id=run_id,
+            task_id=task.id,
+            artifacts=artifacts,
+            existing_policy=existing_policy_data,
+        )
+        policy = self.prepare_effective_policy(
+            run_id=run_id,
+            request=request,
+            task=task,
+            existing_policy_data=existing_policy_data,
+            profile_digests=profile_digests,
+            stack_digest=stack_digest,
+            stack_sha=stack_sha,
+            stack_version=stack_version,
+        )
+        if isinstance(policy, BlockedPreparation):
+            return policy
+
+        effective_policy = policy.effective_policy
+        if not policy.reused_existing:
+            validate_write_payload(
+                EFFECTIVE_TASK_POLICY_SCHEMA,
+                effective_policy.model_dump(mode="json"),
+            )
+            policy_ref = artifacts.put_json(
+                effective_policy.model_dump(mode="json"),
+                logical_name=f"effective-policy-{task.id}.json",
+                created_by_task_id=task.id,
+                schema_id=EFFECTIVE_TASK_POLICY_SCHEMA,
+                schema_version="1",
+            )
+            self.repository.record_artifact(policy_ref.model_dump(mode="json"))
+            self.on_artifact_instance(
+                ArtifactInstance.create(
+                    run_id=run_id,
+                    sha256=policy_ref.sha256,
+                    content_class="durable_output",
+                    capture_level="full",
+                    role="effective_task_policy",
+                    producer_task_id=task.id,
+                    media_type=policy_ref.media_type,
+                    schema_id=EFFECTIVE_TASK_POLICY_SCHEMA,
+                    schema_version="1",
+                    size_bytes=policy_ref.size_bytes,
+                    display_name=policy_ref.logical_name,
+                )
+            )
+            self.repository.upsert_task(
+                run_id=run_id,
+                task_id=task.id,
+                capability=task.capability,
+                status="running",
+                spec=task.model_dump(mode="json"),
+                effective_policy=effective_policy.model_dump(mode="json"),
+                active_operation=task.capability,
+            )
+
+        prompt_set = set(effective_policy.prompt_tool_names)
+        tool_definitions = [
+            {"name": item.name, "description": item.description, "parameters": item.input_schema}
+            for item in self.tool_registry.list()
+            if item.name in prompt_set
+        ]
+        registered_ids = resolve_validation_command_ids(request) or list(
+            self.config.policies.registered_commands
+        )
+        if registered_ids:
+            for entry in tool_definitions:
+                if entry.get("name") == "run_validation_command":
+                    entry["description"] = (
+                        f"{entry.get('description', '')} Registered ids: "
+                        f"{', '.join(registered_ids)}."
+                    )
+
+        excerpts: list[dict[str, str]] = []
+        omissions: list[str] = ["skills_disabled"] if policy.skills_disabled else []
+        profile_cfg = self.config.models.profiles.get(policy.profile)
+        limits = resolve_context_limits(
+            self.config.policies.context,
+            task_max_input_tokens=task.budget.max_input_tokens,
+            model_context_soft_limit=(
+                profile_cfg.context_soft_limit if profile_cfg is not None else None
+            ),
+        )
+        if preparation_request.original_repository is not None:
+            context_mode = str(request.metadata.get("context_mode") or "targeted").strip().lower()
+            if context_mode in {"file_list_only", "file-list-only", "paths_only"}:
+                excerpts, inventory_omissions = list_repository_paths(
+                    preparation_request.original_repository,
+                    max_files=limits.max_file_list_paths,
+                )
+            else:
+                excerpts, inventory_omissions = select_repository_excerpts(
+                    preparation_request.original_repository,
+                    objective=f"{request.request_text}\n{task.objective}",
+                    max_files=limits.max_excerpt_files,
+                    max_chars=limits.max_excerpt_chars,
+                )
+            omissions.extend(inventory_omissions)
+
+        directives: list[str] = []
+        if registered_ids and "run_validation_command" in effective_policy.allowed_tool_names:
+            directives.append(
+                "Validation: call run_validation_command only with a registered "
+                f"command_id from [{', '.join(registered_ids)}]. Never use validator "
+                "labels or raw executables."
+            )
+        if (
+            effective_policy.workspace_access == "isolated_write"
+            and "jitter" in f"{request.request_text}\n{task.objective}".lower()
+        ):
+            directives.append(
+                "Retry/jitter: compute the jittered duration before calling sleep; "
+                "tests assert that observed sleep values vary."
+            )
+
+        context = assemble_context(
+            task=task,
+            model_profile=policy.profile,
+            agent_profile=policy.agent_profile,
+            skills=policy.skills,
+            tool_definitions=tool_definitions,
+            repository_excerpts=excerpts,
+            dependency_outputs=list(preparation_request.dependency_outputs),
+            context_omissions=omissions,
+            runtime_directives=directives or None,
+            package_id=f"pkg-{task.id}",
+            packing=limits,
+            profile_digests=policy.profile_digests,
+        )
+        task_context = build_task_context(
+            task_id=task.id,
+            skills=policy.skills,
+            tool_names=list(effective_policy.allowed_tool_names),
+            prompt_tool_names=list(effective_policy.prompt_tool_names),
+            expected_output_schema=task.expected_output_schema,
+            profile_digests=policy.profile_digests,
+            effective_policy=effective_policy.model_dump(mode="json"),
+        )
+        persist_task_context(task_context, run_dir / "prompts")
+        (run_dir / "prompts" / f"{task.id}.manifest.json").write_text(
+            context.manifest.model_dump_json(indent=2), encoding="utf-8"
+        )
+        session.recorder.emit(
+            run_id=run_id,
+            event_type="prompt.package_created",
+            task_id=task.id,
+            summary="Prompt package assembled",
+            payload={
+                "package_hash": context.package_hash,
+                "manifest": context.manifest.model_dump(mode="json"),
+                "effective_policy": effective_policy.model_dump(mode="json"),
+            },
+            content=context.messages,
+            content_logical_name=f"prompt-package-{task.id}",
+        )
+
+        workspace_path = run_dir / "scratch" / task.id
+        workspace_path.mkdir(parents=True, exist_ok=True)
+        inherited: list[str] = []
+        conflicts: list[dict[str, str]] = []
+        pre_patch_fingerprint: str | None = None
+        if (
+            effective_policy.workspace_access != "none"
+            and preparation_request.worktrees is not None
+            and preparation_request.original_repository is not None
+            and preparation_request.base_commit
+        ):
+            workspace_path, inherited, conflicts, pre_patch_fingerprint = (
+                self.worktree_lineage.prepare_task_worktree(
+                    worktrees=preparation_request.worktrees,
+                    artifacts=artifacts,
+                    run_dir=run_dir,
+                    task_id=task.id,
+                    dependencies=task.dependencies,
+                    dependency_outputs=list(preparation_request.dependency_outputs),
+                    base_commit=preparation_request.base_commit,
+                    writable=effective_policy.workspace_access == "isolated_write",
+                    inherit_dependency_patches=True,
+                )
+            )
+        if conflicts:
+            return BlockedPreparation(
+                result=TaskResult(
+                    task_id=task.id,
+                    status="failed",
+                    summary="workspace_lineage_conflict",
+                    validator_results=[
+                        ValidatorResult(
+                            validator_id="workspace_lineage_conflict",
+                            status="fail",
+                            message="Conflicting dependency patches detected",
+                            details={"conflicts": conflicts},
+                        )
+                    ],
+                    model_profile=policy.profile,
+                ),
+                profile=policy.profile,
+                agent_profile=policy.agent_profile,
+                skills=policy.skills,
+                skills_disabled=policy.skills_disabled,
+            )
+
+        dependency_artifacts = tuple(
+            DependencyArtifact(
+                producer_task_id=str(dependency.get("task_id") or ""),
+                role=preparation_request.land_map.role_for_logical_name(
+                    str(ref.get("logical_name") or "")
+                ),
+                artifact_instance_id=None,
+                sha256=str(ref.get("sha256") or ""),
+                media_type=str(ref.get("media_type") or "application/octet-stream"),
+                schema=str(ref.get("schema_id") or "") or None,
+                verified_excerpt=next(
+                    (
+                        str(excerpt.get("content") or "")
+                        for excerpt in dependency.get("artifact_excerpts", [])
+                        if excerpt.get("sha256") == ref.get("sha256")
+                    ),
+                    None,
+                ),
+            )
+            for dependency in preparation_request.dependency_outputs
+            for ref in dependency.get("artifact_refs", [])
+        )
+        return PreparedTask(
+            run_id=run_id,
+            run_request=request,
+            task_spec=task,
+            descriptor=require_descriptor(task.capability),
+            effective_policy=effective_policy,
+            model_profile=policy.profile,
+            agent_profile=policy.agent_profile,
+            matched_skills=tuple(policy.skills),
+            prompt_package=context,
+            workspace=PreparedWorkspace(
+                access_mode=effective_policy.workspace_access,
+                root=workspace_path,
+                base_revision=preparation_request.base_commit,
+                inherited_artifact_instances=tuple(inherited),
+                lineage=tuple(conflicts),
+                pre_execution_patch_fingerprint=pre_patch_fingerprint,
+                original_repository=preparation_request.original_repository,
+            ),
+            dependency_artifacts=dependency_artifacts,
+            dependency_outputs=preparation_request.dependency_outputs,
+            repository_excerpts=tuple(excerpts),
+            registered_command_ids=tuple(registered_ids),
+            land_map=preparation_request.land_map,
+            composition_role=preparation_request.composition_role,
+            validation_evidence_refs=preparation_request.validation_evidence_refs,
+            validator_results=preparation_request.validator_results,
+            composition=self.composition,
+        )
+
     def assemble_execution_request(
         self,
         *,
@@ -395,7 +812,8 @@ class TaskPreparationService:
         validation_evidence_refs: list[str] | None = None,
         validator_results: list[dict[str, Any]] | None = None,
         composition: Any | None = None,
-        services: dict[str, Any] | None = None,
+        deterministic_implementation=None,
+        patch_changed_files=None,
     ) -> TaskExecutionRequest:
         """Build an immutable TaskExecutionRequest from prepared inputs."""
 
@@ -426,5 +844,6 @@ class TaskPreparationService:
             validation_evidence_refs=validation_evidence_refs or [],
             validator_results=validator_results or [],
             composition=composition,
-            services=services or {},
+            deterministic_implementation=deterministic_implementation,
+            patch_changed_files=patch_changed_files,
         )

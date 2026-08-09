@@ -61,7 +61,6 @@ class CompositionExecutor:
         dependency_outputs = request.dependency_outputs or []
         validation_evidence_refs = request.validation_evidence_refs
         validator_results = request.validator_results
-        _ = request.services  # non-compose helpers only
         execution_mode = "deterministic_mock" if request.allow_deterministic_workers else "live"
 
         artifact_refs = []

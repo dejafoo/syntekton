@@ -83,7 +83,7 @@ def test_fake_live_release_readiness_records_ci_and_ops_activity(tmp_path: Path)
         )
     )
     assert manifest.final_status == "completed"
-    tasks = coord.db.list_tasks(manifest.run_id)
+    tasks = coord.queries.database.list_tasks(manifest.run_id)
     analysis = [
         json.loads(row["result_json"])
         for row in tasks
@@ -94,7 +94,7 @@ def test_fake_live_release_readiness_records_ci_and_ops_activity(tmp_path: Path)
         assert result.get("execution_mode") in {"live", "deterministic_mock"}
         assert result.get("executor_adapter_id")
         assert result.get("activity_receipt")
-    tools = {row["tool_name"] for row in coord.db.list_tool_calls(manifest.run_id)}
+    tools = {row["tool_name"] for row in coord.queries.database.list_tool_calls(manifest.run_id)}
     assert "get_commit_checks" in tools
     assert "query_service_signals" in tools
 
@@ -114,7 +114,7 @@ def test_fake_live_quality_gate_marks_mock_execution(tmp_path: Path) -> None:
         )
     )
     assert manifest.final_status == "completed"
-    for row in coord.db.list_tasks(manifest.run_id):
+    for row in coord.queries.database.list_tasks(manifest.run_id):
         if not row.get("result_json"):
             continue
         result = json.loads(row["result_json"])

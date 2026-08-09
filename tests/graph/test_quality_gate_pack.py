@@ -120,7 +120,9 @@ def test_quality_gate_never_receives_repository_write_tools(tmp_path: Path) -> N
     coord = _coord(tmp_path)
     manifest = _run(coord, _fixture(tmp_path))
 
-    tool_names = {row["tool_name"] for row in coord.db.list_tool_calls(manifest.run_id)}
+    tool_names = {
+        row["tool_name"] for row in coord.queries.database.list_tool_calls(manifest.run_id)
+    }
     assert "create_file" not in tool_names
     assert "apply_patch" not in tool_names
 
