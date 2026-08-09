@@ -240,6 +240,79 @@ def _upgrade_007_effective_policy_v2(conn: sqlite3.Connection) -> None:
 _EFFECTIVE_POLICY_V2_SOURCE = "r1:007:effective_policy_v2_provenance"
 
 
+def _upgrade_008_transactional_lifecycle(conn: sqlite3.Connection) -> None:
+    """Add attempt, reservation, lineage, and external-intent recovery records."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS task_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            state TEXT NOT NULL,
+            admitted_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT,
+            recovery_state TEXT,
+            provider_request_id TEXT,
+            tool_receipts_json TEXT NOT NULL DEFAULT '[]',
+            result_json TEXT,
+            UNIQUE(run_id, task_id, attempt_number),
+            FOREIGN KEY(run_id, task_id) REFERENCES tasks(run_id, task_id)
+        );
+        CREATE INDEX IF NOT EXISTS task_attempts_recovery
+        ON task_attempts(state, recovery_state);
+
+        CREATE TABLE IF NOT EXISTS budget_reservations (
+            reservation_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            attempt_id TEXT NOT NULL UNIQUE,
+            reserved_cost_usd TEXT NOT NULL,
+            settled_cost_usd TEXT,
+            state TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            settled_at TEXT,
+            FOREIGN KEY(run_id, task_id) REFERENCES tasks(run_id, task_id),
+            FOREIGN KEY(attempt_id) REFERENCES task_attempts(attempt_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS task_lineage (
+            lineage_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            origin_task_id TEXT,
+            supersedes_task_id TEXT,
+            inherited_patch_fingerprint TEXT,
+            lineage_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            UNIQUE(run_id, task_id),
+            FOREIGN KEY(run_id, task_id) REFERENCES tasks(run_id, task_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS external_action_intents (
+            intent_id TEXT PRIMARY KEY,
+            approval_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            action_fingerprint TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            state TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            reconciliation_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            reconciled_at TEXT,
+            UNIQUE(action_fingerprint, idempotency_key),
+            FOREIGN KEY(approval_id) REFERENCES action_approvals(approval_id),
+            FOREIGN KEY(run_id) REFERENCES runs(run_id)
+        );
+        """
+    )
+
+
+_TRANSACTIONAL_LIFECYCLE_SOURCE = "r4:008:attempt_budget_lineage_action_intent"
+
+
 MIGRATIONS: list[Migration] = [
     Migration(1, "baseline_pre_sd0_schema", _upgrade_001_baseline, source=_BASELINE_SOURCE),
     Migration(
@@ -264,5 +337,11 @@ MIGRATIONS: list[Migration] = [
         "effective_policy_v2_provenance",
         _upgrade_007_effective_policy_v2,
         source=_EFFECTIVE_POLICY_V2_SOURCE,
+    ),
+    Migration(
+        8,
+        "transactional_lifecycle_records",
+        _upgrade_008_transactional_lifecycle,
+        source=_TRANSACTIONAL_LIFECYCLE_SOURCE,
     ),
 ]
