@@ -22,8 +22,10 @@ from product_factory.orchestration.composition.input import (
 )
 from product_factory.orchestration.coordinator import RunCoordinator
 from product_factory.orchestration.task_preparation import TaskPreparationService
+from product_factory.orchestration.task_runtime import TaskRuntimeService
 from product_factory.orchestration.wave_execution import WaveExecutionService
 from product_factory.workflows.handlers.base import ComposeContext
+from tests.conftest import hermetic_validation_config
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src" / "product_factory"
@@ -49,6 +51,7 @@ def test_application_services_and_build_application_exist(tmp_path: Path) -> Non
     assert services.worktree_lineage is not None
     assert services.finalizer is not None
     assert isinstance(services.task_preparation, TaskPreparationService)
+    assert isinstance(services.task_runtime, TaskRuntimeService)
     assert isinstance(services.wave_execution, WaveExecutionService)
     assert services.wave_execution.wave_scheduler is services.wave_scheduler
     assert isinstance(services.commands, LifecycleCommandService)
@@ -57,12 +60,30 @@ def test_application_services_and_build_application_exist(tmp_path: Path) -> Non
 
 def test_task_preparation_and_wave_execution_modules_exist() -> None:
     assert (SRC / "orchestration" / "task_preparation.py").is_file()
+    assert (SRC / "orchestration" / "task_runtime.py").is_file()
     assert (SRC / "orchestration" / "wave_execution.py").is_file()
     assert TaskPreparationService is not None
+    assert TaskRuntimeService is not None
     assert WaveExecutionService is not None
     assert hasattr(TaskPreparationService, "prepare_effective_policy")
     assert hasattr(TaskPreparationService, "assemble_execution_request")
+    assert hasattr(TaskRuntimeService, "execute")
     assert hasattr(WaveExecutionService, "select_ready")
+    assert hasattr(WaveExecutionService, "run_wave_cycle")
+
+
+def test_engine_must_not_construct_tool_broker() -> None:
+    """G2: ToolBroker construction belongs to TaskRuntimeService, not the engine body."""
+    source = (SRC / "orchestration" / "lifecycle" / "engine.py").read_text(encoding="utf-8")
+    assert "ToolBroker(" not in source
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id == "ToolBroker":
+                raise AssertionError("engine.py must not call ToolBroker(...)")
+            if isinstance(func, ast.Attribute) and func.attr == "ToolBroker":
+                raise AssertionError("engine.py must not call ToolBroker(...)")
 
 
 def test_lifecycle_command_service_delegates_without_reimplementing() -> None:
@@ -137,6 +158,8 @@ def test_composition_input_is_immutable_typed_boundary() -> None:
     assert adapted.dependency_artifacts == ({"artifact": "a"},)
     assert "v1" in adapted.validation_evidence
     assert {"ok": True} in adapted.validation_evidence
+    ctx.composition_input = adapted
+    assert ctx.composition_input is adapted
 
 
 def test_run_coordinator_remains_thin_facade() -> None:
@@ -179,6 +202,7 @@ def test_engine_accepts_prebuilt_application_services(tmp_path: Path) -> None:
         services=services,
     )
     assert engine.task_preparation is services.task_preparation
+    assert engine.task_runtime is services.task_runtime
     assert engine.wave_execution is services.wave_execution
     assert engine.db is services.db
     assert services.lifecycle is engine
@@ -202,6 +226,7 @@ def test_coordinator_public_api_unchanged(tmp_path: Path) -> None:
     assert hasattr(coord, "revise")
     assert hasattr(coord, "apply_patch")
     assert coord.task_preparation is coord._engine.task_preparation
+    assert coord.task_runtime is coord._engine.task_runtime
     assert coord.wave_execution is coord._engine.wave_execution
     assert isinstance(coord.commands, LifecycleCommandService)
     assert coord.commands.lifecycle is coord._engine
@@ -234,6 +259,7 @@ def test_new_sr2_modules_must_not_import_run_coordinator() -> None:
         SRC / "application" / "command_service.py",
         SRC / "application" / "__init__.py",
         SRC / "orchestration" / "task_preparation.py",
+        SRC / "orchestration" / "task_runtime.py",
         SRC / "orchestration" / "wave_execution.py",
         SRC / "orchestration" / "composition" / "input.py",
     ]
@@ -244,3 +270,183 @@ def test_new_sr2_modules_must_not_import_run_coordinator() -> None:
         )
         source = path.read_text(encoding="utf-8")
         assert "RunCoordinator" not in source, f"{path} mentions RunCoordinator"
+
+
+def _engine_imports_from(module_prefix: str) -> list[str]:
+    """Return ImportFrom module names under ``module_prefix`` (exact or child)."""
+    engine = SRC / "orchestration" / "lifecycle" / "engine.py"
+    tree = ast.parse(engine.read_text(encoding="utf-8"))
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module == module_prefix or module.startswith(f"{module_prefix}."):
+                found.append(module)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == module_prefix or alias.name.startswith(f"{module_prefix}."):
+                    found.append(alias.name)
+    return found
+
+
+def test_engine_must_not_import_concrete_executor_modules() -> None:
+    """G2: capability executors stay behind execute_task / TaskRuntimeService."""
+    # Allow the package-level execute_task entrypoint only (not concrete classes).
+    allowed = {
+        "product_factory.executors",
+        "product_factory.executors.protocol",
+    }
+    imported = _engine_imports_from("product_factory.executors")
+    banned = [mod for mod in imported if mod not in allowed]
+    assert not banned, (
+        "engine.py must not import concrete executor modules "
+        f"(e.g. validation/composition); found {banned}"
+    )
+    source = (SRC / "orchestration" / "lifecycle" / "engine.py").read_text(encoding="utf-8")
+    for concrete in (
+        "TestExecutionExecutor",
+        "CompositionExecutor",
+        "ValidationRepairExecutor",
+        "from product_factory.executors.validation",
+        "from product_factory.executors.composition",
+        "from product_factory.executors.interface_agent",
+    ):
+        assert concrete not in source, f"engine.py must not reference {concrete}"
+
+
+def test_engine_temporary_forbidden_dependency_exceptions() -> None:
+    """Document remaining SR2.F exceptions with removal issue ids.
+
+    Temporary exceptions (must shrink toward zero):
+    - ``handler_for`` / workflow handlers — finalization compose fallback still
+      resolves pack handlers in-engine
+      (issue: remove-engine-handler-for-2026-08).
+    - ``ApprovalService`` — not currently imported; approve/reject still use
+      file-backed approval.json pending trust-service ownership
+      (issue: remove-coordinator-approval-verify-2026-08).
+    """
+    source = (SRC / "orchestration" / "lifecycle" / "engine.py").read_text(encoding="utf-8")
+    # ApprovalService must stay out of the engine (target met; guard regression).
+    assert "ApprovalService" not in source
+    assert "product_factory.trust.approvals" not in source
+
+    # handler_for is an acknowledged temporary exception until finalization owns
+    # pack-handler resolution (issue: remove-engine-handler-for-2026-08).
+    temporary_handler_for = "from product_factory.workflows.handlers import handler_for"
+    assert temporary_handler_for in source, (
+        "expected temporary handler_for import; update this guard if ownership moved"
+    )
+
+
+def test_engine_production_compose_attaches_composition_input() -> None:
+    """Engine fallback compose path must populate ComposeContext.composition_input."""
+    source = (SRC / "orchestration" / "lifecycle" / "engine.py").read_text(encoding="utf-8")
+    assert "composition_input_from_compose_context" in source
+    assert "compose_ctx.composition_input" in source
+    executor = (SRC / "executors" / "composition.py").read_text(encoding="utf-8")
+    assert "composition_input_from_compose_context" in executor
+    assert "compose_ctx.composition_input" in executor
+
+
+def test_mock_quality_gate_characterization_completes(tmp_path: Path) -> None:
+    """Fresh mock quality_gate run through coordinator/commands graph."""
+    from decimal import Decimal
+
+    from product_factory.domain.budgets import RunBudget
+    from tests.conftest import clone_fixture
+
+    fixture = clone_fixture(ROOT / "tests" / "fixtures" / "sample_api", tmp_path / "repo")
+    coord = RunCoordinator(
+        config=hermetic_validation_config(ROOT),
+        gateway=MockGateway(),
+        data_dir=tmp_path / "pf",
+        use_deterministic_planner=True,
+    )
+    manifest = coord.commands.submit(
+        RunRequest(
+            request_id="req-sr2-qg",
+            workflow_type="quality_gate",
+            request_text="Assess test coverage and quality risk in the sample API.",
+            repository_path=fixture,
+            budget=RunBudget(max_cost_usd=Decimal("3.00")),
+            approval_policy="none",
+            metadata={"disable_review": "true"},
+        )
+    )
+    assert manifest.final_status == "completed", manifest.notes
+    assert manifest.metadata.get("workflow_pack_id") == "quality_gate"
+    output = tmp_path / "pf" / "runs" / manifest.run_id / "output"
+    assert (output / "TEST_PLAN.md").is_file()
+    assert (output / "QUALITY_FINDINGS.md").is_file()
+    assert (output / "SECURITY_EVIDENCE.md").is_file()
+
+
+def test_cancel_queued_run_via_commands(tmp_path: Path) -> None:
+    """Cancel after submit while still queued (immediate terminal)."""
+    from decimal import Decimal
+
+    from product_factory.domain.budgets import RunBudget
+
+    coord = RunCoordinator(
+        config=load_config(),
+        gateway=MockGateway(),
+        data_dir=tmp_path / "pf",
+        use_deterministic_planner=True,
+    )
+    request = RunRequest(
+        request_id="req-sr2-cancel",
+        workflow_type="change_intake",
+        request_text="Clarify an ambiguous intake request before planning.",
+        budget=RunBudget(max_cost_usd=Decimal("2.00")),
+        approval_policy="none",
+    )
+    run_id = "run-sr2-cancel-queued"
+    coord.db.upsert_run(
+        run_id=run_id,
+        workflow_type=request.workflow_type,
+        status="queued",
+        request=request.model_dump(mode="json"),
+        active_operation="queued",
+    )
+    result = coord.commands.cancel(run_id)
+    assert result["status"] == "cancelled"
+    assert result.get("cancel_requested") is True
+    row = coord.db.get_run(run_id)
+    assert row is not None
+    assert row["status"] == "cancelled"
+
+
+def test_host_service_mutations_use_commands(tmp_path: Path) -> None:
+    """HostService public mutations route through LifecycleCommandService."""
+    from product_factory.host.service import HostService
+
+    service = HostService(
+        config=load_config(),
+        gateway=MockGateway(),
+        data_dir=tmp_path / "pf",
+        use_deterministic_planner=True,
+    )
+    assert service.commands is service.coord.commands
+    source = (SRC / "host" / "service.py").read_text(encoding="utf-8")
+    for needle in (
+        "self.commands.approve",
+        "self.commands.reject",
+        "self.commands.resume",
+        "self.commands.apply",
+        "self.commands.cancel",
+        "self.commands.revise",
+        "self.commands.submit",
+        "resume=self.commands.resume",
+    ):
+        assert needle in source, f"HostService must use {needle}"
+    for banned in (
+        "self.coord.approve",
+        "self.coord.reject",
+        "self.coord.resume(",
+        "self.coord.apply_patch",
+        "self.coord.cancel",
+        "self.coord.revise",
+        "self.coord.run(",
+        "resume=self.coord.resume",
+    ):
+        assert banned not in source, f"HostService must not call {banned}"

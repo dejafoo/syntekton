@@ -30,7 +30,8 @@ from product_factory.gateway.base import ModelGateway
 from product_factory.gateway.mock import MockGateway
 from product_factory.host.export import export_evidence_bundle
 from product_factory.host.protocol import HostResponse, HostSubscription
-from product_factory.observability.contracts import EventSeverity
+from product_factory.observability.contracts import EventSeverity, ObservabilityEvent
+from product_factory.observability.ids import new_event_id
 from product_factory.observability.query import ObservabilityQueryService
 from product_factory.observability.recorder import TelemetryRecorder
 from product_factory.orchestration.coordinator import RunCoordinator
@@ -99,15 +100,15 @@ class HostService:
             data_dir=data_dir,
             use_deterministic_planner=self.use_deterministic_planner,
         )
-        # SR2: command facade is constructed with the application graph; Host
-        # mutations still go through coord for API stability this cut.
+        # SR2: host mutations go through LifecycleCommandService; coord remains
+        # for db/pf_root compatibility and query construction.
         self.commands = self.coord.commands
         self.pf_root = self.coord.pf_root
         self.query = ObservabilityQueryService(self.coord.db, data_dir=self.pf_root)
         self.supervisor = WorkerSupervisor(
             db=self.coord.db,
             execute=self._execute_worker,
-            resume=self.coord.resume,
+            resume=self.commands.resume,
             worktree_key=self._worktree_key,
             on_error=self._supervisor_error,
             lease_ttl_seconds=float(os.environ.get("PRODUCT_FACTORY_WORKER_LEASE_TTL", "30")),
@@ -214,12 +215,24 @@ class HostService:
             json.dumps(worker_opts, indent=2) + "\n", encoding="utf-8"
         )
 
-        self.coord.db.upsert_run(
+        # SR3: couple queue admission with the authoritative admit event.
+        self.coord.db.unit_of_work().admit_run_with_events(
             run_id=run_id,
             workflow_type=request.workflow_type,
             status="queued",
             request=request.model_dump(mode="json"),
             active_operation="queued",
+            events=[
+                ObservabilityEvent(
+                    event_id=new_event_id(),
+                    type="run.admitted",
+                    run_id=run_id,
+                    request_id=request.request_id,
+                    severity=EventSeverity.INFO,
+                    summary="Run admitted to queue",
+                    payload={"workflow_type": request.workflow_type},
+                )
+            ],
         )
         if request.handoff_refs:
             try:
@@ -354,7 +367,7 @@ class HostService:
                 request=request.model_dump(mode="json"),
                 active_operation="initializing",
             )
-        return self.coord.run(request, run_id=run_id)
+        return self.commands.submit(request, run_id=run_id)
 
     def _worktree_key(self, run_id: str) -> str:
         """Stable key for the run's writable worktree collection."""
@@ -491,7 +504,7 @@ class HostService:
 
     def approve(self, run_id: str, *, apply: bool = False) -> HostResponse:
         try:
-            result = self.coord.approve(run_id, apply=apply)
+            result = self.commands.approve(run_id, apply=apply)
         except ProductFactoryError as exc:
             return HostResponse.failure(
                 code=exc.__class__.__name__,
@@ -540,7 +553,7 @@ class HostService:
 
     def reject(self, run_id: str) -> HostResponse:
         try:
-            result = self.coord.reject(run_id)
+            result = self.commands.reject(run_id)
         except ProductFactoryError as exc:
             return HostResponse.failure(
                 code=exc.__class__.__name__,
@@ -558,7 +571,7 @@ class HostService:
     def resume(self, run_id: str) -> HostResponse:
         """Resume an interrupted run through the shared application service."""
         try:
-            manifest = self.coord.resume(run_id)
+            manifest = self.commands.resume(run_id)
         except ProductFactoryError as exc:
             return HostResponse.failure(
                 code=exc.__class__.__name__,
@@ -575,7 +588,7 @@ class HostService:
     def apply(self, run_id: str) -> HostResponse:
         """Apply an approved patch through the shared application service."""
         try:
-            result = self.coord.apply_patch(run_id)
+            result = self.commands.apply(run_id)
         except ProductFactoryError as exc:
             return HostResponse.failure(
                 code=exc.__class__.__name__,
@@ -596,7 +609,7 @@ class HostService:
 
     def cancel(self, run_id: str) -> HostResponse:
         try:
-            result = self.coord.cancel(run_id)
+            result = self.commands.cancel(run_id)
         except ProductFactoryError as exc:
             return HostResponse.failure(
                 code=exc.__class__.__name__,
@@ -613,7 +626,7 @@ class HostService:
 
     def revise(self, run_id: str, *, note: str = "") -> HostResponse:
         try:
-            manifest = self.coord.revise(run_id, note=note)
+            manifest = self.commands.revise(run_id, note=note)
         except ProductFactoryError as exc:
             row = self.coord.db.get_run(run_id)
             return HostResponse.failure(

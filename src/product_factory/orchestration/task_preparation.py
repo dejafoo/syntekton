@@ -169,15 +169,56 @@ class TaskPreparationService:
 
         pack_id = None
         pack_version = None
+        pack_policy_digest = None
         workflow_pack = None
         if is_registered_workflow(request.workflow_type):
             workflow_pack = resolve_workflow_pack(request.workflow_type)
             pack_id = workflow_pack.id
             pack_version = getattr(workflow_pack, "version", None)
+            pack_policy_digest = workflow_pack.content_hash()
 
         if existing_policy_data:
+            # Unfinished work created under an earlier policy schema is not
+            # safe to resume.  The caller converts this into a durable blocked
+            # state before any broker, model, or connector is constructed.
+            try:
+                existing = EffectiveTaskPolicy.model_validate(existing_policy_data)
+                existing.ensure_valid_digest()
+            except (TypeError, ValueError):
+                return BlockedPreparation(
+                    result=TaskResult(
+                        task_id=task.id,
+                        status="blocked",
+                        summary="policy_incompatible: restart_required",
+                        model_profile=profile,
+                    ),
+                    profile=profile,
+                    agent_profile=agent_profile,
+                    skills=skills,
+                    skills_disabled=skills_disabled,
+                )
+            if (
+                existing.schema_version != "effective_task_policy.v2"
+                or existing.pack_id != pack_id
+                or existing.pack_version != pack_version
+                or existing.pack_policy_digest != pack_policy_digest
+                or existing.capability != task.capability
+                or existing.descriptor_version != require_descriptor(task.capability).version
+            ):
+                return BlockedPreparation(
+                    result=TaskResult(
+                        task_id=task.id,
+                        status="blocked",
+                        summary="policy_incompatible: restart_required",
+                        model_profile=profile,
+                    ),
+                    profile=profile,
+                    agent_profile=agent_profile,
+                    skills=skills,
+                    skills_disabled=skills_disabled,
+                )
             return PreparedPolicy(
-                effective_policy=EffectiveTaskPolicy.model_validate(existing_policy_data),
+                effective_policy=existing,
                 profile=profile,
                 agent_profile=agent_profile,
                 skills=skills,
@@ -189,6 +230,24 @@ class TaskPreparationService:
             )
 
         assert workflow_pack is not None  # registered workflows only reach fresh resolve
+        cap_policy = workflow_pack.execution_policy.capability_policies.get(task.capability)
+        if cap_policy is None:
+            return BlockedPreparation(
+                result=TaskResult(
+                    task_id=task.id,
+                    status="unsupported",
+                    summary=(
+                        f"capability {task.capability!r} has no CapabilityExecutionPolicy "
+                        f"in pack {workflow_pack.id!r}"
+                    ),
+                    model_profile=profile,
+                ),
+                profile=profile,
+                agent_profile=agent_profile,
+                skills=skills,
+                skills_disabled=skills_disabled,
+            )
+
         profile_cfg = self.config.models.profiles.get(profile)
         route_class = profile_cfg.route_class if profile_cfg is not None else "cloud"
         fallback_cfg = profile_cfg.cloud_fallback if profile_cfg is not None else None
@@ -201,6 +260,7 @@ class TaskPreparationService:
         grantable = grantable_connector_names_for_task(
             task=task,
             grantable_fn=self.connector_broker.grantable_tool_names,
+            allowed_connector_classes=cap_policy.allowed_connector_classes or None,
         )
         allowed_preview, _, _ = compute_allowed_tool_names(
             task=task,
@@ -210,7 +270,7 @@ class TaskPreparationService:
             grantable_connector_tools=grantable,
             web_search_tool=TOOL_WEB_SEARCH,
             denied_tool_names=workflow_pack.execution_policy.denied_tool_names,
-            pack_allowed_tool_classes=(workflow_pack.execution_policy.allowed_tool_classes),
+            pack_allowed_tool_classes=cap_policy.allowed_tool_classes,
         )
         prompt_names, reduction_reason = self.research_prompt_tool_names(
             task=task,
@@ -255,6 +315,7 @@ class TaskPreparationService:
 
         updated_digests = dict(profile_digests)
         updated_digests.update(composition_gate.profile_digests)
+        cap_validators = list(cap_policy.validator_ids) if cap_policy.validator_ids else []
         effective_policy = resolve_effective_task_policy(
             run_id=run_id,
             task=task,
@@ -265,6 +326,9 @@ class TaskPreparationService:
             skill_ids=[s.manifest.id for s in skills],
             pack_id=pack_id,
             pack_version=pack_version,
+            pack_policy_digest=pack_policy_digest,
+            descriptor_version=require_descriptor(task.capability).version,
+            executor_adapter_id=require_descriptor(task.capability).executor_adapter_id,
             connector_tool_names=connector_tool_names,
             grantable_connector_tools=grantable,
             web_search_tool=TOOL_WEB_SEARCH,
@@ -279,21 +343,18 @@ class TaskPreparationService:
             route_class=route_class,
             fallback_model_profile=fallback_model_profile,
             fallback_eligible=fallback_eligible,
-            validator_ids=resolve_validation_command_ids(request)
+            validator_ids=cap_validators
+            or resolve_validation_command_ids(request)
             or list(self.config.policies.registered_commands),
             prompt_tool_names=prompt_names,
             prompt_reduction_reason=reduction_reason,
             denied_tool_names=workflow_pack.execution_policy.denied_tool_names,
-            pack_allowed_tool_classes=(workflow_pack.execution_policy.allowed_tool_classes),
-            executor_mode=(
-                workflow_pack.execution_policy.executor_mode_for(task.capability)
-                if is_registered_workflow(request.workflow_type)
-                else require_descriptor(task.capability).executor_mode
-            ),
-            repair_eligible=(
-                task.capability in workflow_pack.execution_policy.repair_eligible_capabilities
-            ),
-            approval_required=workflow_pack.execution_policy.approval_required,
+            pack_allowed_tool_classes=cap_policy.allowed_tool_classes,
+            executor_mode=cap_policy.executor_mode,
+            repair_eligible=cap_policy.repair_eligible,
+            approval_required=cap_policy.approval_required,
+            external_action_requires_approval=cap_policy.external_action_requires_approval,
+            allowed_connector_classes=cap_policy.allowed_connector_classes,
         )
         return PreparedPolicy(
             effective_policy=effective_policy,

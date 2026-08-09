@@ -22,9 +22,11 @@ from product_factory.gateway.mock import MockGateway
 from product_factory.orchestration.composition.service import CompositionService
 from product_factory.orchestration.finalization.run_finalizer import RunFinalizer
 from product_factory.orchestration.task_preparation import TaskPreparationService
+from product_factory.orchestration.task_runtime import TaskRuntimeService
 from product_factory.orchestration.validation_repair.service import ValidationRepairService
 from product_factory.orchestration.wave_execution import WaveExecutionService
 from product_factory.orchestration.worktree_lineage import WorktreeLineageService
+from product_factory.persistence.artifact_policy import ArtifactInstance
 from product_factory.persistence.database import Database
 from product_factory.scheduling.scheduler import WaveScheduler
 from product_factory.skills.registry import SkillRegistry
@@ -49,6 +51,7 @@ class ApplicationServices:
     worktree_lineage: WorktreeLineageService
     finalizer: RunFinalizer
     task_preparation: TaskPreparationService
+    task_runtime: TaskRuntimeService
     wave_execution: WaveExecutionService
     commands: LifecycleCommandService
     allow_deterministic_workers: bool = False
@@ -102,6 +105,36 @@ def build_application(
         connector_registry=connector_registry,
         connector_broker=connector_broker,
     )
+
+    def _record_artifact_instance(instance: ArtifactInstance) -> None:
+        db.record_artifact_instance(instance.model_dump(mode="json"))
+
+    def _approval_verify(
+        request: Any,
+        *,
+        consumer_run_id: str,
+        capability: str,
+    ) -> bool:
+        from product_factory.trust.approvals import verify_deployment_action_approval
+
+        return verify_deployment_action_approval(
+            db,
+            request,
+            consumer_run_id=consumer_run_id,
+            capability=capability,
+        )
+
+    task_runtime = TaskRuntimeService(
+        config=config,
+        tool_registry=tool_registry,
+        connector_broker=connector_broker,
+        connector_registry=connector_registry,
+        task_preparation=task_preparation,
+        raw_gateway=raw_gateway,
+        allow_deterministic_workers=allow_deterministic_workers,
+        on_artifact_instance=_record_artifact_instance,
+        approval_verify=_approval_verify,
+    )
     wave_execution = WaveExecutionService(wave_scheduler=wave_scheduler)
     commands = LifecycleCommandService()
     return ApplicationServices(
@@ -119,6 +152,7 @@ def build_application(
         worktree_lineage=worktree_lineage,
         finalizer=finalizer,
         task_preparation=task_preparation,
+        task_runtime=task_runtime,
         wave_execution=wave_execution,
         commands=commands,
         allow_deterministic_workers=allow_deterministic_workers,

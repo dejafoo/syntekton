@@ -12,7 +12,6 @@ import json
 from decimal import Decimal
 from pathlib import Path
 
-from product_factory.config.loader import load_config
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.findings import Finding
 from product_factory.domain.runs import ArtifactOverride, RunRequest
@@ -30,7 +29,7 @@ from product_factory.workflows.quality_gate import (
     QUALITY_GATE_REQUIRED_SECTIONS,
     QUALITY_GATE_VALIDATOR_IDS,
 )
-from tests.conftest import clone_fixture
+from tests.conftest import clone_fixture, hermetic_validation_config
 
 # Predeclared gate for the seeded-defect fixture below: the pack must surface the
 # planted correctness defect on every run, so anything under 1/1 is a regression.
@@ -40,7 +39,7 @@ SEEDED_DETECTION_THRESHOLD = 1.0
 def _coord(tmp_path: Path) -> RunCoordinator:
     root = Path(__file__).resolve().parents[2]
     return RunCoordinator(
-        config=load_config(root),
+        config=hermetic_validation_config(root),
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
         use_deterministic_planner=True,
@@ -166,7 +165,7 @@ def test_materialize_all_lands_every_quality_deliverable(tmp_path: Path) -> None
     root = Path(__file__).resolve().parents[2]
     repository = _fixture(tmp_path)
     service = HostService(
-        config=load_config(root),
+        config=hermetic_validation_config(root),
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
         use_deterministic_planner=True,

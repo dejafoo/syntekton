@@ -20,6 +20,7 @@ from product_factory.gateway.canonical_messages import (
 )
 from product_factory.gateway.mock import MockGateway
 from product_factory.orchestration.coordinator import RunCoordinator, default_code_change_plan
+from tests.conftest import hermetic_validation_config
 
 
 class EmptyLiveGateway(ModelGateway):
@@ -259,7 +260,7 @@ def test_repair_inherits_failed_patch_and_composition_uses_repaired_lineage(
 
     clone_fixture(root / "tests/fixtures/sample_api", repo)
     coordinator = RunCoordinator(
-        config=load_config(root),
+        config=hermetic_validation_config(root),
         gateway=gateway,
         data_dir=tmp_path / ".product-factory",
         use_deterministic_planner=True,

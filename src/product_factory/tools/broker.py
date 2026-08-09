@@ -32,7 +32,11 @@ from product_factory.schemas import validate_write_payload
 from product_factory.tools import interface_analysis
 from product_factory.tools.policies import assert_path_allowed, resolve_under_root
 from product_factory.tools.registry import ToolRegistry
-from product_factory.tools.sandbox import run_sandboxed_command
+from product_factory.tools.sandbox import (
+    ManagedSandboxPaths,
+    classify_command_result,
+    run_sandboxed_command,
+)
 from product_factory.validation.evidence import write_validation_evidence
 
 ToolObserver = Callable[[str, dict[str, Any]], None]
@@ -854,6 +858,7 @@ class ToolBroker:
             cwd=root,
             timeout_seconds=timeout,
             pythonpath=str(root / "src"),
+            managed_paths=ManagedSandboxPaths.under(self.artifact_store.root.parents[2]),
         )
         if self.ledger is not None:
             self.ledger.record_command(duration_seconds=result.duration_seconds)
@@ -874,9 +879,11 @@ class ToolBroker:
             capture_level=self.capture_level,
             on_instance=self.on_artifact_instance,
         )
+        execution_state = classify_command_result(result, spec)
         return {
             "command_id": command_id,
             "exit_code": result.returncode,
+            "execution_state": execution_state,
             "stdout": result.stdout,
             "stderr": result.stderr,
             "sandbox": result.sandbox,

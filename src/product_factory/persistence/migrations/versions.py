@@ -227,6 +227,19 @@ def _upgrade_006_retention_and_maintenance(conn: sqlite3.Connection) -> None:
 _RETENTION_SOURCE = "sd3.d:006:retention_pins_and_maintenance_audit"
 
 
+def _upgrade_007_effective_policy_v2(conn: sqlite3.Connection) -> None:
+    """Add durable provenance used to fail closed before a resume spends."""
+    from product_factory.persistence.database import _ensure_column
+
+    _ensure_column(conn, "runs", "workflow_pack_digest", "TEXT")
+    _ensure_column(conn, "runs", "blocked_reason_json", "TEXT")
+    _ensure_column(conn, "tasks", "effective_policy_schema", "TEXT")
+    _ensure_column(conn, "tasks", "effective_policy_digest", "TEXT")
+
+
+_EFFECTIVE_POLICY_V2_SOURCE = "r1:007:effective_policy_v2_provenance"
+
+
 MIGRATIONS: list[Migration] = [
     Migration(1, "baseline_pre_sd0_schema", _upgrade_001_baseline, source=_BASELINE_SOURCE),
     Migration(
@@ -245,5 +258,11 @@ MIGRATIONS: list[Migration] = [
         "retention_pins_and_maintenance_audit",
         _upgrade_006_retention_and_maintenance,
         source=_RETENTION_SOURCE,
+    ),
+    Migration(
+        7,
+        "effective_policy_v2_provenance",
+        _upgrade_007_effective_policy_v2,
+        source=_EFFECTIVE_POLICY_V2_SOURCE,
     ),
 ]

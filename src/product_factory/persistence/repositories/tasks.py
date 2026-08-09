@@ -59,13 +59,24 @@ class TaskRepository(AggregateRepository):
     ) -> None:
         now = datetime.now(UTC).isoformat()
         existing = self._conn.execute(
-            "SELECT attempt, started_at, effective_policy_json FROM tasks WHERE run_id=? AND task_id=?",
+            """SELECT attempt, started_at, effective_policy_json, effective_policy_schema,
+               effective_policy_digest FROM tasks WHERE run_id=? AND task_id=?""",
             (run_id, task_id),
         ).fetchone()
         policy_json = (
             json.dumps(effective_policy, default=str)
             if effective_policy is not None
             else (existing["effective_policy_json"] if existing else None)
+        )
+        policy_schema = (
+            str(effective_policy.get("schema_version") or "")
+            if effective_policy is not None
+            else None
+        )
+        policy_digest = (
+            str(effective_policy.get("policy_digest") or "")
+            if effective_policy is not None
+            else None
         )
         if existing:
             next_attempt = attempt if attempt is not None else int(existing["attempt"] or 1)
@@ -77,7 +88,9 @@ class TaskRepository(AggregateRepository):
                   attempt=?,
                   updated_at=?,
                   active_operation=?,
-                  effective_policy_json=COALESCE(?, effective_policy_json)
+                  effective_policy_json=COALESCE(?, effective_policy_json),
+                  effective_policy_schema=COALESCE(?, effective_policy_schema),
+                  effective_policy_digest=COALESCE(?, effective_policy_digest)
                 WHERE run_id=? AND task_id=?
                 """,
                 (
@@ -91,6 +104,8 @@ class TaskRepository(AggregateRepository):
                     now,
                     active_operation,
                     policy_json,
+                    policy_schema,
+                    policy_digest,
                     run_id,
                     task_id,
                 ),
@@ -101,8 +116,8 @@ class TaskRepository(AggregateRepository):
                 INSERT INTO tasks
                 (run_id, task_id, capability, status, spec_json, result_json,
                  started_at, ended_at, attempt, updated_at, active_operation,
-                 effective_policy_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 effective_policy_json, effective_policy_schema, effective_policy_digest)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -117,6 +132,8 @@ class TaskRepository(AggregateRepository):
                     now,
                     active_operation,
                     policy_json,
+                    policy_schema,
+                    policy_digest,
                 ),
             )
         for dep in spec.get("dependencies") or []:

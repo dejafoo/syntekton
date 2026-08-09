@@ -9,6 +9,41 @@ from pathlib import Path
 import pytest
 
 
+def hermetic_validation_config(root: Path):
+    """Return test-only command policy for graph fixtures.
+
+    Production commands remain the operator-configured commands.  These two
+    standard-library scripts deliberately run through the same ToolBroker and
+    sandbox as production validation, while needing neither network nor the
+    Product Factory virtual environment.
+    """
+    from product_factory.config.loader import load_config
+
+    config = load_config(root)
+    commands = dict(config.policies.registered_commands)
+    commands.update(
+        {
+            "python_tests": {
+                "executable": "python",
+                "args": ["tools/run_tests.py"],
+                "timeout_seconds": 30,
+                "success_exit_codes": [0],
+                "domain_failure_exit_codes": [1],
+            },
+            "python_typecheck": {
+                "executable": "python",
+                "args": ["tools/typecheck.py"],
+                "timeout_seconds": 30,
+                "success_exit_codes": [0],
+                "domain_failure_exit_codes": [1],
+            },
+        }
+    )
+    return config.model_copy(
+        update={"policies": config.policies.model_copy(update={"registered_commands": commands})}
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_host_registry() -> None:
     """SD4.A: each test starts without a cached HostService supervisor."""

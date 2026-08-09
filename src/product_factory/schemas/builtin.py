@@ -139,6 +139,78 @@ def seed_builtin_schemas(registry: SchemaRegistry) -> None:
             ),
         )
     )
+    # v2 is intentionally a distinct write schema.  Historical v1 policy
+    # captures remain readable, but an unfinished v1 run cannot regain
+    # authority on resume.
+    registry.register(
+        SchemaSpec(
+            id="effective_task_policy.v2",
+            version="2",
+            kind="profile",
+            json_schema={
+                "type": "object",
+                "required": [
+                    "schema_version",
+                    "task_id",
+                    "run_id",
+                    "capability",
+                    "descriptor_version",
+                    "pack_policy_digest",
+                    "executor_adapter_id",
+                    "allowed_tool_names",
+                    "allowed_tool_classes",
+                    "allowed_connector_classes",
+                    "allowed_connector_names",
+                    "workspace_access",
+                    "prompt_tool_names",
+                    "primary_model_profile",
+                    "policy_digest",
+                ],
+                "properties": {
+                    "schema_version": {"const": "effective_task_policy.v2"},
+                    "task_id": {"type": "string", "minLength": 1},
+                    "run_id": {"type": "string", "minLength": 1},
+                    "pack_id": {"type": ["string", "null"]},
+                    "pack_version": {"type": ["string", "null"]},
+                    "pack_policy_digest": {"type": ["string", "null"]},
+                    "capability": {"type": "string", "minLength": 1},
+                    "descriptor_version": {"type": ["string", "null"]},
+                    "executor_mode": {"type": "string"},
+                    "executor_adapter_id": {"type": ["string", "null"]},
+                    "allowed_tool_names": {"type": "array", "items": {"type": "string"}},
+                    "allowed_tool_classes": {"type": "array", "items": {"type": "string"}},
+                    "connector_decisions": {"type": "object"},
+                    "allowed_connector_classes": {"type": "array", "items": {"type": "string"}},
+                    "allowed_connector_names": {"type": "array", "items": {"type": "string"}},
+                    "workspace_access": {"enum": ["none", "read_only", "isolated_write"]},
+                    "path_scopes": {"type": "object"},
+                    "call_limits": {"type": "object"},
+                    "result_limits": {"type": "object"},
+                    "data_classification": {"type": "string"},
+                    "prompt_tool_names": {"type": "array", "items": {"type": "string"}},
+                    "prompt_reduction_reason": {"type": ["string", "null"]},
+                    "skill_ids": {"type": "array", "items": {"type": "string"}},
+                    "profile_ids": {"type": "array", "items": {"type": "string"}},
+                    "reference_pack_ids": {"type": "array", "items": {"type": "string"}},
+                    "stack_profile_artifact_sha256": {"type": ["string", "null"]},
+                    "stack_profile_digest": {"type": ["string", "null"]},
+                    "stack_profile_schema_version": {"type": ["string", "null"]},
+                    "route_class": {"type": "string"},
+                    "primary_model_profile": {"type": "string", "minLength": 1},
+                    "fallback_model_profile": {"type": ["string", "null"]},
+                    "fallback_eligible": {"type": "boolean"},
+                    "budget_ceiling": {"type": "object"},
+                    "validator_ids": {"type": "array", "items": {"type": "string"}},
+                    "repair_eligible": {"type": "boolean"},
+                    "approval_required": {"type": "boolean"},
+                    "external_action_requires_approval": {"type": "boolean"},
+                    "policy_digest": {"type": "string", "minLength": 64, "maxLength": 64},
+                },
+                "additionalProperties": False,
+            },
+            description="Immutable v2 effective policy with descriptor and pack provenance.",
+        )
+    )
     registry.register(
         SchemaSpec(
             id="technical_plan.document.v2",

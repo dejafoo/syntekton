@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS runs (
     last_progress_at TEXT,
     active_operation TEXT,
     budget_json TEXT,
+    workflow_pack_digest TEXT,
+    blocked_reason_json TEXT,
     cancel_requested INTEGER NOT NULL DEFAULT 0
 );
 
@@ -55,6 +57,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     updated_at TEXT,
     active_operation TEXT,
     effective_policy_json TEXT,
+    effective_policy_schema TEXT,
+    effective_policy_digest TEXT,
     PRIMARY KEY (run_id, task_id),
     FOREIGN KEY (run_id) REFERENCES runs(run_id)
 );

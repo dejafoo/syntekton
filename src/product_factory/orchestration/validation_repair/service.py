@@ -86,6 +86,12 @@ class ValidationRepairService:
         )
         validators = set(policy.validators) if policy is not None else set()
         output_roles = set(policy.output_roles) if policy is not None else set()
+        if policy is not None:
+            cap_policy = policy.capability_policies.get(task.capability)
+            if cap_policy is not None and cap_policy.validator_ids:
+                validators = set(cap_policy.validator_ids)
+            if cap_policy is not None and cap_policy.output_roles:
+                output_roles = set(cap_policy.output_roles) | output_roles
 
         # Patch pipeline: packs that declare patch_applies / proposed_patch roles.
         if (
@@ -189,4 +195,7 @@ class ValidationRepairService:
     ) -> bool:
         if workflow_pack is None:
             return True
+        cap_policy = workflow_pack.execution_policy.capability_policies.get(capability)
+        if cap_policy is not None:
+            return cap_policy.repair_eligible
         return capability in workflow_pack.execution_policy.repair_eligible_capabilities

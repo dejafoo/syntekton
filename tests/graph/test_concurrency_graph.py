@@ -259,7 +259,7 @@ def test_conflicting_writers_yield_typed_composition_conflict(tmp_path: Path, mo
         ),
     )
     monkeypatch.setattr(
-        "product_factory.orchestration.lifecycle.engine.deterministic_impl_files",
+        "product_factory.orchestration.task_runtime.deterministic_impl_files",
         _variant_impl_files,
     )
 

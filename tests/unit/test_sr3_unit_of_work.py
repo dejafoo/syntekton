@@ -237,3 +237,78 @@ def test_autonomous_repository_writes_still_commit(tmp_path: Path) -> None:
     finally:
         probe.close()
     db.close()
+
+
+def test_wave_execution_production_path_uses_unit_of_work() -> None:
+    """AST guard: WaveExecutionService + engine call the SR3 completion helpers."""
+    import ast
+
+    root = Path(__file__).resolve().parents[2]
+    wave_path = root / "src" / "product_factory" / "orchestration" / "wave_execution.py"
+    engine_path = root / "src" / "product_factory" / "orchestration" / "lifecycle" / "engine.py"
+    host_path = root / "src" / "product_factory" / "host" / "service.py"
+    wave_source = wave_path.read_text(encoding="utf-8")
+    engine_source = engine_path.read_text(encoding="utf-8")
+    host_source = host_path.read_text(encoding="utf-8")
+
+    assert "unit_of_work" in wave_source
+    assert "complete_task_with_event" in wave_source
+    assert "record_task_completion" in wave_source
+    assert "record_task_completion" in engine_source
+    assert "admit_run_with_events" in host_source
+
+    wave_tree = ast.parse(wave_source)
+    saw_uow = False
+    saw_complete = False
+    for node in ast.walk(wave_tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute):
+                if func.attr == "unit_of_work":
+                    saw_uow = True
+                if func.attr == "complete_task_with_event":
+                    saw_complete = True
+    assert saw_uow, "wave_execution.py must call db.unit_of_work()"
+    assert saw_complete, "wave_execution.py must call complete_task_with_event"
+
+    host_tree = ast.parse(host_source)
+    saw_admit = False
+    for node in ast.walk(host_tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "admit_run_with_events":
+                saw_admit = True
+    assert saw_admit, "host/service.py must call admit_run_with_events"
+
+
+def test_wave_execution_record_task_completion_uses_uow(tmp_path: Path) -> None:
+    """Production helper couples terminal task upsert with its event."""
+    from product_factory.domain.tasks import TaskResult, TaskSpec
+    from product_factory.orchestration.wave_execution import WaveExecutionService
+
+    db = Database(tmp_path / "sr3.sqlite")
+    run_id = "run-wave-uow"
+    db.upsert_run(run_id=run_id, workflow_type="code_change", status="running", request={})
+    task = TaskSpec(
+        id="t1",
+        title="Implement",
+        capability="implementation",
+        objective="do the thing",
+        expected_output_schema="artifact_ref",
+        dependencies=[],
+    )
+    result = TaskResult(task_id="t1", status="success", summary="done")
+    seq = WaveExecutionService().record_task_completion(
+        db=db,
+        run_id=run_id,
+        task=task,
+        result=result,
+    )
+    assert seq > 0
+    row = db.get_task(run_id, "t1")
+    assert row is not None
+    assert row["status"] == "success"
+    events = db.list_events(run_id=run_id, types=["task.completed"])
+    assert len(events) == 1
+    assert events[0]["task_id"] == "t1"
+    db.close()
