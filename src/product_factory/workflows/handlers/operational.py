@@ -7,10 +7,11 @@ from collections.abc import Callable
 from typing import Literal
 
 from product_factory.domain.plans import PlannerOutput
+from product_factory.orchestration.composition.input import CompositionInput
+from product_factory.orchestration.composition.service import CompositionService
 from product_factory.workflows.artifacts import ROLE_OPERATIONAL_RECORD
 from product_factory.workflows.handlers.base import (
     AuthorityClass,
-    ComposeContext,
     EligibleNextAction,
 )
 
@@ -70,7 +71,9 @@ class OperationalHandler:
     def plan_template(self, request_text: str) -> PlannerOutput:
         return self.plan_factory(request_text)
 
-    def compose(self, role: str, ctx: ComposeContext) -> str:
+    def compose(
+        self, role: str, ctx: CompositionInput, drafts: CompositionService | None = None
+    ) -> str:
         if role != ROLE_OPERATIONAL_RECORD:
             raise RuntimeError(f"{self.pack_id} does not compose role {role!r}")
         data = ctx.pack_input

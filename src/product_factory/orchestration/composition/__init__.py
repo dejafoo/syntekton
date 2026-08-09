@@ -1,11 +1,11 @@
 from product_factory.orchestration.composition.input import (
     CompositionInput,
-    composition_input_from_compose_context,
+    CompositionOutcome,
 )
 from product_factory.orchestration.composition.service import CompositionService
 
 __all__ = [
     "CompositionInput",
+    "CompositionOutcome",
     "CompositionService",
-    "composition_input_from_compose_context",
 ]

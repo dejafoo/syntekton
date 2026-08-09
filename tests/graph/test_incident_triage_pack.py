@@ -46,7 +46,9 @@ def test_mock_incident_triage_emits_read_only_operational_record(tmp_path: Path)
     )
     assert payload["follow_up"] == "rollback_decision"
     assert payload["authority"]["deploy"] is False
-    calls = {row["tool_name"] for row in coordinator.db.list_tool_calls(manifest.run_id)}
+    calls = {
+        row["tool_name"] for row in coordinator.queries.database.list_tool_calls(manifest.run_id)
+    }
     assert "query_service_signals" in calls
     assert not calls & {
         "create_file",

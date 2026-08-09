@@ -44,7 +44,7 @@ from product_factory.gateway.base import ModelGateway
 from product_factory.gateway.mock import MockGateway
 from product_factory.observability.contracts import EventSeverity
 from product_factory.observability.recorder import TelemetryRecorder
-from product_factory.orchestration.composition.input import composition_input_from_compose_context
+from product_factory.orchestration.composition.input import CompositionInput
 from product_factory.orchestration.composition.service import CompositionService
 from product_factory.orchestration.effective_policy import (
     EFFECTIVE_TASK_POLICY_SCHEMA,
@@ -126,7 +126,6 @@ from product_factory.workflows.artifacts import (
 )
 from product_factory.workflows.base import WorkflowPack
 from product_factory.workflows.handlers import handler_for
-from product_factory.workflows.handlers.base import ComposeContext
 from product_factory.workflows.inputs import persist_pack_input
 from product_factory.workflows.registry import (
     is_registered_workflow,
@@ -1170,31 +1169,18 @@ class RunLifecycleEngine:
                             in workflow_pack.execution_policy.fallback_composition_roles
                         ):
                             try:
-                                compose_ctx = ComposeContext(
-                                    composition=self.composition,
+                                composition_input = CompositionInput(
                                     request=request,
                                     role=entry.role,
                                     document_name=entry.logical_name,
-                                    findings=findings,
-                                    dependency_outputs=[],
+                                    findings=tuple(findings),
                                     use_mock=isinstance(self._raw_gateway, MockGateway),
-                                    compose_architecture=self.composition.compose_architecture,
-                                    compose_evidence_report=self.composition.compose_evidence_report,
-                                    compose_feasibility_dossier=(
-                                        self.composition.compose_feasibility_dossier
-                                    ),
-                                    compose_change_intake=self.composition.compose_change_intake,
-                                    compose_quality_document=self.composition.compose_quality_document,
-                                    validation_evidence_refs=validation_evidence_refs,
-                                    validator_results=collected_validator_results,
+                                    run_id=run_id,
+                                    base_revision=base_commit,
+                                    validation_evidence_refs=tuple(validation_evidence_refs),
+                                    validator_results=tuple(collected_validator_results),
                                 )
-                                compose_ctx.composition_input = (
-                                    composition_input_from_compose_context(compose_ctx)
-                                )
-                                document = pack_handler.compose(
-                                    entry.role,
-                                    compose_ctx,
-                                )
+                                document = self.composition.compose(composition_input).body
                                 documents_by_role[entry.role] = document
                                 if entry.role == ROLE_EVIDENCE_REPORT:
                                     evidence_report_md = document

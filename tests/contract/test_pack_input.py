@@ -16,9 +16,9 @@ from product_factory.domain.runs import RunRequest
 from product_factory.gateway.mock import MockGateway
 from product_factory.host.service import HostService
 from product_factory.host_mcp import tools as mcp_tools
+from product_factory.orchestration.composition.input import CompositionInput
 from product_factory.workflows import persist_pack_input, resolve_workflow_pack
 from product_factory.workflows import registry as pack_registry
-from product_factory.workflows.handlers.base import ComposeContext
 
 TYPED_SCHEMA = {
     "type": "object",
@@ -178,13 +178,13 @@ def test_http_submit_body_carries_pack_input() -> None:
 
 
 def test_compose_context_exposes_pack_input() -> None:
-    ctx = ComposeContext(
+    ctx = CompositionInput(
         request=_request(**VALID_INPUT),
         role="architecture_document",
         document_name="ARCHITECTURE.md",
     )
     assert ctx.pack_input == VALID_INPUT
-    plain = ComposeContext(
+    plain = CompositionInput(
         request=RunRequest(
             request_id="req-plain",
             workflow_type="technical_plan",

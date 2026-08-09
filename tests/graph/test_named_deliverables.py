@@ -57,7 +57,7 @@ def test_technical_plan_honors_requested_deliverable_name(tmp_path: Path) -> Non
     assert validate_architecture_document(document).status == "pass"
     assert document.startswith("# integration_testing_architecture.md")
 
-    stored = {row["logical_name"] for row in coord.db.list_artifacts()}
+    stored = {row["logical_name"] for row in coord.queries.database.list_artifacts()}
     assert "integration_testing_architecture.md" in stored
     assert "ARCHITECTURE.md" not in stored
 
@@ -117,7 +117,7 @@ def test_pack_resolved_event_publishes_land_map(tmp_path: Path) -> None:
             },
         )
     )
-    events = coord.db.list_events(run_id=manifest.run_id, after_seq=0, limit=500)
+    events = coord.queries.database.list_events(run_id=manifest.run_id, after_seq=0, limit=500)
     resolved = [e for e in events if e["event_type"] == "workflow.pack_resolved"]
     assert resolved, "expected a workflow.pack_resolved event"
     payload = json.loads(resolved[0]["payload_json"])

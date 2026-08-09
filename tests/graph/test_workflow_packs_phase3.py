@@ -60,7 +60,9 @@ def test_mock_investigation_produces_report_without_write_tools(tmp_path: Path) 
     assert validate_investigation_provenance(report).status == "pass"
     assert validate_citations(report).status == "pass"
 
-    tool_names = {row["tool_name"] for row in coord.db.list_tool_calls(manifest.run_id)}
+    tool_names = {
+        row["tool_name"] for row in coord.queries.database.list_tool_calls(manifest.run_id)
+    }
     assert "create_file" not in tool_names
     assert "apply_patch" not in tool_names
     assert tool_names & {"list_files", "read_file", "search_text", "git_diff", "git_status"}
@@ -140,8 +142,8 @@ def test_brief_to_investigation_to_plan_uses_artifact_hash_pins(tmp_path: Path) 
     brief_digest = hashlib.sha256(brief_bytes).hexdigest()
     from product_factory.trust.handoffs import HandoffService
 
-    handoffs = HandoffService(coord.db, tmp_path / ".product-factory")
-    brief_instance = coord.db.get_artifact_instance(intake.run_id, brief_digest)
+    handoffs = HandoffService(coord.queries.database, tmp_path / ".product-factory")
+    brief_instance = coord.queries.database.get_artifact_instance(intake.run_id, brief_digest)
     assert brief_instance is not None, "intake must persist change_brief artifact instance"
     brief_handoff = handoffs.create_from_artifact_instance(
         brief_instance["instance_id"], role="change_brief"
@@ -171,7 +173,9 @@ def test_brief_to_investigation_to_plan_uses_artifact_hash_pins(tmp_path: Path) 
     investigation_output = tmp_path / ".product-factory" / "runs" / investigation.run_id / "output"
     report_bytes = (investigation_output / "EVIDENCE_REPORT.md").read_bytes()
     evidence_digest = hashlib.sha256(report_bytes).hexdigest()
-    evidence_instance = coord.db.get_artifact_instance(investigation.run_id, evidence_digest)
+    evidence_instance = coord.queries.database.get_artifact_instance(
+        investigation.run_id, evidence_digest
+    )
     assert evidence_instance is not None
     evidence_handoff = handoffs.create_from_artifact_instance(
         evidence_instance["instance_id"], role="evidence_report"

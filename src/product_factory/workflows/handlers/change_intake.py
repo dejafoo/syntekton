@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from product_factory.domain.plans import PlannerOutput
+from product_factory.orchestration.composition.input import CompositionInput
+from product_factory.orchestration.composition.service import CompositionService
 from product_factory.workflows.artifacts import ROLE_CHANGE_BRIEF, ROLE_CLARIFICATION_REQUEST
 from product_factory.workflows.change_intake import (
     CHANGE_BRIEF_REQUIRED_SECTIONS,
@@ -12,7 +14,6 @@ from product_factory.workflows.change_intake import (
 from product_factory.workflows.default_plans import default_change_intake_plan
 from product_factory.workflows.handlers.base import (
     AuthorityClass,
-    ComposeContext,
     EligibleNextAction,
 )
 
@@ -23,17 +24,19 @@ class ChangeIntakeHandler:
     def plan_template(self, request_text: str) -> PlannerOutput:
         return default_change_intake_plan(request_text)
 
-    def compose(self, role: str, ctx: ComposeContext) -> str:
+    def compose(
+        self, role: str, ctx: CompositionInput, drafts: CompositionService | None = None
+    ) -> str:
         if role not in {ROLE_CHANGE_BRIEF, ROLE_CLARIFICATION_REQUEST}:
             raise RuntimeError(f"change_intake does not compose role {role!r}")
-        if not callable(ctx.compose_change_intake):
+        if drafts is None:
             raise RuntimeError("change_intake compose requires compose_change_intake")
         return str(
-            ctx.compose_change_intake(
+            drafts.compose_change_intake(
                 ctx.request,
                 role=role,
-                findings=ctx.findings,
-                dependency_outputs=ctx.dependency_outputs,
+                findings=list(ctx.findings),
+                dependency_outputs=list(ctx.dependency_outputs),
                 document_name=ctx.document_name,
             )
         )

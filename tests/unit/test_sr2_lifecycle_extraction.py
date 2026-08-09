@@ -18,14 +18,10 @@ from product_factory.application.composition_root import ApplicationServices as 
 from product_factory.config.loader import load_config
 from product_factory.domain.runs import RunRequest
 from product_factory.gateway.mock import MockGateway
-from product_factory.orchestration.composition.input import (
-    CompositionInput,
-    composition_input_from_compose_context,
-)
+from product_factory.orchestration.composition.input import CompositionInput
 from product_factory.orchestration.task_preparation import TaskPreparationService
 from product_factory.orchestration.task_runtime import TaskRuntimeService
 from product_factory.orchestration.wave_execution import WaveExecutionService
-from product_factory.workflows.handlers.base import ComposeContext
 from tests.conftest import hermetic_validation_config
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -114,43 +110,29 @@ def test_lifecycle_command_service_delegates_without_reimplementing() -> None:
 
 def test_composition_input_is_immutable_typed_boundary() -> None:
     assert (SRC / "orchestration" / "composition" / "input.py").is_file()
+    request = RunRequest(
+        request_id="req-compose",
+        workflow_type="technical_plan",
+        request_text="Design the boundary",
+    )
     payload = CompositionInput(
-        run_snapshot={"run_id": "run-1"},
-        compiled_plan={"tasks": []},
-        task_results=({"task_id": "t1"},),
-        dependency_artifacts=({"role": "patch"},),
-        validation_evidence=("ref-1",),
-        findings=({"severity": "x"},),
-        lineage={"parent": None},
+        request=request,
+        role="architecture_document",
+        document_name="ARCHITECTURE.md",
+        run_id="run-1",
+        dependency_outputs=({"role": "patch"},),
+        validation_evidence_refs=("ref-1",),
+        lineage=({"parent": ""},),
         effective_policy={"mode": "live"},
     )
-    assert payload.run_snapshot["run_id"] == "run-1"
+    assert payload.run_id == "run-1"
     try:
-        payload.run_snapshot = {"run_id": "other"}  # type: ignore[misc]
+        payload.run_id = "other"  # type: ignore[misc]
         raise AssertionError("CompositionInput must be frozen")
     except FrozenInstanceError:
         pass
-
-    ctx = ComposeContext(
-        request=MagicMock(spec=RunRequest),
-        role="architecture_document",
-        document_name="ARCHITECTURE.md",
-        findings=[{"id": "f1"}],
-        dependency_outputs=[{"artifact": "a"}],
-        run_id="run-9",
-        profile="writer",
-        validation_evidence_refs=["v1"],
-        validator_results=[{"ok": True}],
-    )
-    adapted = composition_input_from_compose_context(ctx)
-    assert adapted.run_snapshot is not None
-    assert adapted.run_snapshot["run_id"] == "run-9"
-    assert adapted.findings == ({"id": "f1"},)
-    assert adapted.dependency_artifacts == ({"artifact": "a"},)
-    assert "v1" in adapted.validation_evidence
-    assert {"ok": True} in adapted.validation_evidence
-    ctx.composition_input = adapted
-    assert ctx.composition_input is adapted
+    assert payload.dependency_outputs == ({"role": "patch"},)
+    assert payload.validation_evidence_refs == ("ref-1",)
 
 
 def test_run_coordinator_remains_thin_facade() -> None:
@@ -320,14 +302,13 @@ def test_engine_temporary_forbidden_dependency_exceptions() -> None:
     )
 
 
-def test_engine_production_compose_attaches_composition_input() -> None:
-    """Engine fallback compose path must populate ComposeContext.composition_input."""
+def test_engine_and_executor_use_typed_composition_input_directly() -> None:
     source = (SRC / "orchestration" / "lifecycle" / "engine.py").read_text(encoding="utf-8")
-    assert "composition_input_from_compose_context" in source
-    assert "compose_ctx.composition_input" in source
+    assert "CompositionInput(" in source
+    assert "composition_input_from_compose_context" not in source
     executor = (SRC / "executors" / "composition.py").read_text(encoding="utf-8")
-    assert "composition_input_from_compose_context" in executor
-    assert "compose_ctx.composition_input" in executor
+    assert "CompositionInput(" in executor
+    assert "ComposeContext" not in executor
 
 
 def test_mock_quality_gate_characterization_completes(tmp_path: Path) -> None:

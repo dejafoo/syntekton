@@ -64,7 +64,7 @@ def test_mock_release_readiness_emits_typed_plan_without_write_or_deploy_tools(
         (data_dir / "runs" / manifest.run_id / "output" / "RELEASE_PLAN.json").read_text()
     )
     assert payload["outcome"] == "ready"
-    calls = coordinator.db.list_tool_calls(manifest.run_id)
+    calls = coordinator.queries.database.list_tool_calls(manifest.run_id)
     tool_names = {row["tool_name"] for row in calls}
     assert not {
         "create_file",

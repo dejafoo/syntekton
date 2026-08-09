@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 
 from product_factory.domain.runs import RunRequest
+from product_factory.orchestration.composition.input import CompositionInput
 from product_factory.validation.pipeline import validate_release_plan
 from product_factory.workflows.artifacts import ROLE_RELEASE_PLAN
-from product_factory.workflows.handlers.base import ComposeContext
 from product_factory.workflows.handlers.release_readiness import ReleaseReadinessHandler
 
 _ANALYSIS_DEPS = [
@@ -30,7 +30,7 @@ def _compose(**pack_input: object) -> str:
     )
     return ReleaseReadinessHandler().compose(
         ROLE_RELEASE_PLAN,
-        ComposeContext(
+        CompositionInput(
             request=request,
             role=ROLE_RELEASE_PLAN,
             document_name="RELEASE_PLAN.json",
@@ -66,7 +66,7 @@ def test_ready_blocked_without_analysis_receipts() -> None:
     )
     document = ReleaseReadinessHandler().compose(
         ROLE_RELEASE_PLAN,
-        ComposeContext(
+        CompositionInput(
             request=request,
             role=ROLE_RELEASE_PLAN,
             document_name="RELEASE_PLAN.json",

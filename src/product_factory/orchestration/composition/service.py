@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from dataclasses import replace
 from typing import Any
 
 from product_factory.config.loader import AppConfig
@@ -20,11 +21,15 @@ from product_factory.domain.tasks import TaskSpec
 from product_factory.domain.usage import UsageMetrics
 from product_factory.gateway.base import ModelGateway
 from product_factory.gateway.canonical_messages import CanonicalMessage, ModelRequest
+from product_factory.orchestration.composition.input import CompositionInput, CompositionOutcome
 from product_factory.workflows.artifacts import (
+    ROLE_ARCHITECTURE_DOCUMENT,
     ROLE_CHANGE_BRIEF,
     ROLE_CLARIFICATION_REQUEST,
+    ROLE_DEPLOYMENT_RECORD,
     ROLE_SECURITY_EVIDENCE,
     ROLE_TEST_PLAN,
+    ROLE_VERIFICATION_REPORT,
 )
 
 logger = logging.getLogger("product_factory.orchestration.composition")
@@ -75,6 +80,49 @@ class CompositionService:
         self.config = config
         self._raw_gateway = gateway
         self._resolve_validation_command_ids_fn = resolve_validation_command_ids
+
+    def compose(self, composition_input: CompositionInput) -> CompositionOutcome:
+        """Dispatch a data-only input to its registered document composer."""
+
+        from product_factory.workflows.handlers import handler_for
+
+        prepared = composition_input
+        if (
+            prepared.role == ROLE_ARCHITECTURE_DOCUMENT
+            and not prepared.use_mock
+            and prepared.task is not None
+        ):
+            document, usage = self.generate_architecture_document(
+                request=prepared.request,
+                task=prepared.task,
+                ctx_messages=list(prepared.context_messages),
+                run_id=prepared.run_id,
+                profile=prepared.profile,
+                dependency_outputs=list(prepared.dependency_outputs),
+                document_name=prepared.document_name,
+                gateway=prepared.gateway,
+            )
+            prepared = replace(
+                prepared,
+                generated_document=document,
+                generated_usage=usage,
+            )
+        handler = handler_for(prepared.request.workflow_type)
+        body = handler.compose(prepared.role, prepared, self)
+        if not body.strip():
+            raise RuntimeFailureError(f"Composer for {prepared.role!r} returned an empty document")
+        media_type = (
+            "application/json"
+            if prepared.role in {ROLE_DEPLOYMENT_RECORD, ROLE_VERIFICATION_REPORT}
+            else "text/markdown"
+        )
+        return CompositionOutcome(
+            role=prepared.role,
+            media_type=media_type,
+            body=body,
+            usage=prepared.generated_usage,
+            complete=True,
+        )
 
     def resolve_validation_command_ids(self, request: RunRequest) -> list[str]:
         if self._resolve_validation_command_ids_fn is not None:

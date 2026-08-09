@@ -4,11 +4,11 @@ import json
 from pathlib import Path
 
 from product_factory.domain.runs import RunRequest
+from product_factory.orchestration.composition.input import CompositionInput
 from product_factory.planning.compiler import compile_plan
 from product_factory.validation.pipeline import validate_operational_record
 from product_factory.workflows.artifacts import ROLE_OPERATIONAL_RECORD
 from product_factory.workflows.handlers import handler_for
-from product_factory.workflows.handlers.base import ComposeContext
 from product_factory.workflows.registry import resolve_workflow_pack
 
 
@@ -53,7 +53,7 @@ def test_known_incident_composes_labeled_typed_record() -> None:
     )
     document = handler_for("incident_triage").compose(
         ROLE_OPERATIONAL_RECORD,
-        ComposeContext(
+        CompositionInput(
             request=request,
             role=ROLE_OPERATIONAL_RECORD,
             document_name="OPERATIONAL_RECORD.json",

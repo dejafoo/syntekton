@@ -48,7 +48,7 @@ def test_tool_call_budget_exhausted_mid_run_sets_typed_terminal_status(tmp_path:
         coord.run(request)
     assert excinfo.value.details["dimension"] == "max_tool_calls"
 
-    rows = coord.db.list_runs()
+    rows = coord.queries.database.list_runs()
     assert len(rows) == 1
     assert rows[0]["status"] == "budget_exhausted"
 
@@ -84,7 +84,7 @@ def test_wall_clock_budget_exhausted_mid_run_sets_typed_terminal_status(
         coord.run(request)
     assert excinfo.value.details["dimension"] == "max_wall_clock_seconds"
 
-    rows = coord.db.list_runs()
+    rows = coord.queries.database.list_runs()
     assert len(rows) == 1
     assert rows[0]["status"] == "budget_exhausted"
 
@@ -101,5 +101,5 @@ def test_cost_budget_exhausted_before_any_task(tmp_path: Path) -> None:
     )
     with pytest.raises(BudgetExhaustedError):
         coord.run(request)
-    rows = coord.db.list_runs()
+    rows = coord.queries.database.list_runs()
     assert rows[0]["status"] == "budget_exhausted"
