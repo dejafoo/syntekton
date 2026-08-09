@@ -337,6 +337,7 @@ class WorkflowPack:
     allowed_capabilities: frozenset[str]
     default_planner_mode: str
     execution_policy: PackExecutionPolicy
+    plan_transforms: tuple[str, ...] = ()
     # Deprecated identity-only fields (SD2). PackExecutionPolicy is authoritative.
     validation_policy: dict[str, Any] = field(default_factory=dict)
     skill_policy: dict[str, Any] = field(default_factory=dict)
@@ -358,6 +359,7 @@ class WorkflowPack:
             "skill_policy": self.skill_policy,
             "routing_defaults": self.routing_defaults,
             "execution_policy": self.execution_policy.as_payload(),
+            "plan_transforms": list(self.plan_transforms),
             "artifacts": [spec.as_payload() for spec in self.artifacts],
         }
         encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")

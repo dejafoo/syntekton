@@ -92,6 +92,7 @@ REPOSITORY_CHANGE_PACK = WorkflowPack(
         approval_required=True,
         evaluation_fixture_id="repository_change.v2",
     ),
+    plan_transforms=("repository_change_compat",),
     artifacts=(
         ArtifactLandSpec(
             role=ROLE_PROPOSED_PATCH,

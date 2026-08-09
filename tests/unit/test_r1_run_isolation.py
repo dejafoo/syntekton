@@ -31,7 +31,9 @@ from product_factory.orchestration.coordinator import (
     RunCoordinator,
     default_code_change_plan,
 )
+from product_factory.orchestration.lifecycle.session import RunExecutionSessionFactory
 from product_factory.persistence.artifacts import ArtifactStore
+from product_factory.planning.planner import plan_with_gateway
 from product_factory.tools.broker import ToolBroker
 from product_factory.tools.registry import default_tool_registry
 
@@ -131,14 +133,28 @@ def _request(run_id: str, *, max_input_tokens: int = 10) -> RunRequest:
     )
 
 
-def _context(coord: RunCoordinator, tmp_path: Path, run_id: str, request: RunRequest):
+def _context(
+    coord: RunCoordinator,
+    gateway: ModelGateway,
+    tmp_path: Path,
+    run_id: str,
+    request: RunRequest,
+    *,
+    budget_snapshot=None,
+):
     run_dir = tmp_path / ".product-factory" / "runs" / run_id
     for name in ("artifacts", "content"):
         (run_dir / name).mkdir(parents=True, exist_ok=True)
-    return coord._build_execution_context(
+    factory = RunExecutionSessionFactory(
+        database=coord.queries.database,
+        raw_gateway=gateway,
+        cancel_check=lambda _run_id: None,
+    )
+    return factory.open(
         run_id=run_id,
         request=request,
         run_dir=run_dir,
+        budget_snapshot=budget_snapshot,
     )
 
 
@@ -158,15 +174,19 @@ def test_concurrent_runs_isolate_model_invocation_run_ids(tmp_path: Path) -> Non
     coord = _coordinator(tmp_path, gateway)
     requests = {run_id: _request(run_id) for run_id in ("run-a", "run-b")}
     contexts = {
-        run_id: _context(coord, tmp_path, run_id, request) for run_id, request in requests.items()
+        run_id: _context(coord, gateway, tmp_path, run_id, request)
+        for run_id, request in requests.items()
     }
 
     def plan(run_id: str) -> None:
-        coord._plan(
-            run_id,
-            requests[run_id],
-            None,
-            execution_context=contexts[run_id],
+        request = requests[run_id]
+        plan_with_gateway(
+            contexts[run_id].gateway,
+            run_id=run_id,
+            request_text=request.request_text,
+            workflow_type=request.workflow_type,
+            repository_summary=None,
+            budget=request.budget.model_dump(mode="json"),
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -174,7 +194,7 @@ def test_concurrent_runs_isolate_model_invocation_run_ids(tmp_path: Path) -> Non
 
     assert sorted(gateway.seen) == [("run-a", "plan"), ("run-b", "plan")]
     for run_id in ("run-a", "run-b"):
-        rows = coord.db.list_invocations(run_id)
+        rows = coord.queries.database.list_invocations(run_id)
         assert len(rows) == 1
         assert rows[0]["run_id"] == run_id
         assert rows[0]["task_id"] == "plan"
@@ -188,18 +208,20 @@ def test_resume_run_a_during_active_run_b_preserves_attribution(tmp_path: Path) 
     coord = _coordinator(tmp_path, gateway)
     request_a = _request("run-a")
     request_b = _request("run-b")
-    context_b = _context(coord, tmp_path, "run-b", request_b)
+    context_b = _context(coord, gateway, tmp_path, "run-b", request_b)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         active_b = pool.submit(context_b.gateway.complete, _model_request("run-b"))
         assert gateway.blocked.wait(timeout=5)
 
-        initial_a = _context(coord, tmp_path, "run-a", request_a)
+        initial_a = _context(coord, gateway, tmp_path, "run-a", request_a)
         initial_a.ledger.record_usage(UsageMetrics(input_tokens=2))
-        resumed_a = coord._build_execution_context(
-            run_id="run-a",
-            request=request_a,
-            run_dir=initial_a.run_dir,
+        resumed_a = _context(
+            coord,
+            gateway,
+            tmp_path,
+            "run-a",
+            request_a,
             budget_snapshot=initial_a.ledger.snapshot(),
         )
         response_a = resumed_a.gateway.complete(_model_request("run-a", "resume"))
@@ -209,16 +231,17 @@ def test_resume_run_a_during_active_run_b_preserves_attribution(tmp_path: Path) 
     assert response_a.status == response_b.status == "success"
     assert resumed_a.ledger.usage.input_tokens == 3
     assert context_b.ledger.usage.input_tokens == 1
-    assert [row["run_id"] for row in coord.db.list_invocations("run-a")] == ["run-a"]
-    assert [row["run_id"] for row in coord.db.list_invocations("run-b")] == ["run-b"]
+    assert [row["run_id"] for row in coord.queries.database.list_invocations("run-a")] == ["run-a"]
+    assert [row["run_id"] for row in coord.queries.database.list_invocations("run-b")] == ["run-b"]
 
 
 def test_budget_exhaustion_does_not_spend_sibling_run(tmp_path: Path) -> None:
-    coord = _coordinator(tmp_path, _UsageGateway())
+    gateway = _UsageGateway()
+    coord = _coordinator(tmp_path, gateway)
     request_a = _request("run-a", max_input_tokens=1)
     request_b = _request("run-b", max_input_tokens=10)
-    context_a = _context(coord, tmp_path, "run-a", request_a)
-    context_b = _context(coord, tmp_path, "run-b", request_b)
+    context_a = _context(coord, gateway, tmp_path, "run-a", request_a)
+    context_b = _context(coord, gateway, tmp_path, "run-b", request_b)
 
     context_a.gateway.complete(_model_request("run-a"))
     with pytest.raises(BudgetExhaustedError, match="input token"):

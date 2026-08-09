@@ -60,18 +60,18 @@ def test_resume_skips_completed_tasks_and_retries_crashed_task(tmp_path: Path, m
     with pytest.raises(RuntimeFailureError):
         coord1.run(request)
 
-    rows = coord1.db.list_runs()
+    rows = coord1.queries.database.list_runs()
     assert len(rows) == 1
     run_id = rows[0]["run_id"]
 
     # The exception handler in `run()` marks the row "failed"; overwrite it to
     # "executing" to faithfully simulate a process that crashed before it
     # could persist any failure status at all.
-    row = coord1.db.get_run(run_id)
+    row = coord1.queries.database.get_run(run_id)
     assert row is not None
     import json
 
-    coord1.db.upsert_run(
+    coord1.queries.database.upsert_run(
         run_id=run_id,
         workflow_type=row["workflow_type"],
         status="executing",
@@ -82,17 +82,17 @@ def test_resume_skips_completed_tasks_and_retries_crashed_task(tmp_path: Path, m
 
     # T-002 (implementation) succeeded before the crash; confirm it is
     # persisted and has recorded tool calls prior to resume.
-    t002_before = coord1.db.get_task(run_id, "T-002")
+    t002_before = coord1.queries.database.get_task(run_id, "T-002")
     assert t002_before is not None
     assert t002_before["status"] == "success"
-    tool_calls_before = coord1.db.conn.execute(
+    tool_calls_before = coord1.queries.database.conn.execute(
         "SELECT COUNT(*) FROM tool_calls WHERE run_id = ? AND task_id = ?", (run_id, "T-002")
     ).fetchone()[0]
     assert tool_calls_before > 0
 
     # T-004 (composition) never got a worktree or result — a true crash before
     # any of its own side effects.
-    t004_before = coord1.db.get_task(run_id, "T-004")
+    t004_before = coord1.queries.database.get_task(run_id, "T-004")
     assert t004_before is not None
     assert t004_before["status"] == "running"
     assert t004_before.get("result_json") is None
@@ -114,12 +114,12 @@ def test_resume_skips_completed_tasks_and_retries_crashed_task(tmp_path: Path, m
     assert invoked_task_ids == ["T-004", "T-005"]
     assert manifest.final_status in {"completed", "awaiting_approval"}
 
-    tool_calls_after = coord2.db.conn.execute(
+    tool_calls_after = coord2.queries.database.conn.execute(
         "SELECT COUNT(*) FROM tool_calls WHERE run_id = ? AND task_id = ?", (run_id, "T-002")
     ).fetchone()[0]
     assert tool_calls_after == tool_calls_before
 
-    t004_after = coord2.db.get_task(run_id, "T-004")
+    t004_after = coord2.queries.database.get_task(run_id, "T-004")
     assert t004_after is not None
     assert t004_after["status"] == "success"
     assert int(t004_after["attempt"]) == 2
@@ -145,13 +145,13 @@ def test_resume_blocks_legacy_effective_policy_before_execution(tmp_path: Path) 
     )
     run_id = "run-legacy-policy"
     (tmp_path / ".product-factory" / "runs" / run_id).mkdir(parents=True)
-    coord.db.upsert_run(
+    coord.queries.database.upsert_run(
         run_id=run_id,
         workflow_type=request.workflow_type,
         status="executing",
         request=request.model_dump(mode="json"),
     )
-    coord.db.upsert_task(
+    coord.queries.database.upsert_task(
         run_id=run_id,
         task_id="T-001",
         capability="implementation",
@@ -168,11 +168,11 @@ def test_resume_blocks_legacy_effective_policy_before_execution(tmp_path: Path) 
     with pytest.raises(ConfigurationError, match="restart_required"):
         coord.resume(run_id)
 
-    row = coord.db.get_run(run_id)
+    row = coord.queries.database.get_run(run_id)
     assert row is not None
     assert row["status"] == "blocked"
     assert row["active_operation"] == "restart_required"
-    assert coord.db.list_events(run_id=run_id, types=["run.policy_incompatible"])
+    assert coord.queries.database.list_events(run_id=run_id, types=["run.policy_incompatible"])
 
 
 def test_resume_rejects_already_terminal_run(tmp_path: Path) -> None:
@@ -214,6 +214,6 @@ def test_approval_path_works_across_restart(tmp_path: Path) -> None:
         coord2.apply_patch(manifest.run_id)
     result = coord2.approve(manifest.run_id, apply=False)
     assert result["status"] == "approved"
-    row = coord2.db.get_run(manifest.run_id)
+    row = coord2.queries.database.get_run(manifest.run_id)
     assert row is not None
     assert row["status"] == "completed"
