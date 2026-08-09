@@ -15,7 +15,11 @@ from product_factory.orchestration.budget_ledger import BudgetLedger
 from product_factory.persistence.artifacts import ArtifactStore
 from product_factory.repositories.patches import apply_patch_check
 from product_factory.schemas.validate import validate_write_payload
-from product_factory.tools.sandbox import run_sandboxed_command
+from product_factory.tools.sandbox import (
+    ManagedSandboxPaths,
+    classify_command_result,
+    run_sandboxed_command,
+)
 from product_factory.validation.evidence import write_validation_evidence
 
 SECRET_PATTERNS = [
@@ -1415,10 +1419,15 @@ def validate_behavioral_commands(
                 cwd=work,
                 timeout_seconds=timeout_seconds,
                 pythonpath=str(work / "src"),
+                managed_paths=(
+                    ManagedSandboxPaths.under(artifact_store.root.parents[2])
+                    if artifact_store is not None
+                    else None
+                ),
             )
             if ledger is not None:
                 ledger.record_command(duration_seconds=sandbox_result.duration_seconds)
-            timed_out = sandbox_result.returncode == 124
+            execution_state = classify_command_result(sandbox_result, spec)
             evidence_details: dict[str, Any] = {}
             if artifact_store is not None:
                 evidence = write_validation_evidence(
@@ -1444,19 +1453,26 @@ def validate_behavioral_commands(
             results.append(
                 ValidatorResult(
                     validator_id=f"behavioral:{command_id}",
-                    status="pass" if sandbox_result.returncode == 0 else "fail",
+                    status=(
+                        "pass"
+                        if execution_state == "passed"
+                        else "fail"
+                        if execution_state == "domain_failure"
+                        else "error"
+                    ),
                     message=(
                         "ok"
                         if sandbox_result.returncode == 0
-                        else "Behavioral command timed out"
-                        if timed_out
                         else "Behavioral command failed"
+                        if execution_state == "domain_failure"
+                        else "Behavioral command unavailable"
                     ),
                     details={
                         "exit_code": sandbox_result.returncode,
                         "stdout": sandbox_result.stdout[-4000:],
                         "stderr": sandbox_result.stderr[-4000:],
                         "sandbox": sandbox_result.sandbox,
+                        "execution_state": execution_state,
                         **evidence_details,
                     },
                 )

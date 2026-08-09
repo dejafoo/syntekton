@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from product_factory.domain.errors import ConfigurationError
 from product_factory.domain.plans import PlannerOutput
 from product_factory.domain.runs import RunRequest
+
+if TYPE_CHECKING:
+    from product_factory.orchestration.composition.input import CompositionInput
 
 AuthorityClass = Literal[
     "read_only",
@@ -64,6 +67,8 @@ class ComposeContext:
     use_mock: bool = True
     # Typed composition service (SD2); callback fields are thin adapters.
     composition: Any | None = None
+    # SR2 typed composition boundary; populated on production compose paths.
+    composition_input: CompositionInput | None = None
     # Live generation hooks (optional; prefer composition service).
     generate_architecture: Any | None = None
     compose_architecture: Any | None = None

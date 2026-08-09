@@ -84,6 +84,21 @@ class TestExecutionExecutor:
             tool_call_id = str(result.get("tool_call_id") or "")
             if tool_call_id:
                 tool_call_ids.append(tool_call_id)
+            execution_state = str(result.get("execution_state") or "")
+            if execution_state in {"timeout", "unavailable"}:
+                return blocked_result(
+                    request,
+                    summary=(
+                        f"test_execution blocked: command {command_id!r} "
+                        f"is {execution_state}"
+                    ),
+                    execution_mode=execution_mode,
+                    activity={
+                        "commands": command_ids,
+                        "failed_command_id": command_id,
+                        "reason": execution_state,
+                    },
+                )
             exit_code = result.get("exit_code")
             if exit_code is None:
                 exit_code = result.get("returncode")
@@ -125,6 +140,7 @@ class TestExecutionExecutor:
                 "stdout_excerpt": str(result.get("stdout") or "")[:500],
                 "stderr_excerpt": str(result.get("stderr") or "")[:500],
                 "timed_out": int(exit_code) == 124 if exit_code is not None else False,
+                "execution_state": execution_state or "domain_failure",
                 "validation_evidence_ref": result.get("validation_evidence_ref"),
             }
             receipts.append(receipt)

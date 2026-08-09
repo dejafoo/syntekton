@@ -132,6 +132,48 @@ def test_resume_unknown_run_id_fails_closed(tmp_path: Path) -> None:
         coord.resume("run-does-not-exist")
 
 
+def test_resume_blocks_legacy_effective_policy_before_execution(tmp_path: Path) -> None:
+    """A pre-v2 persisted grant never reaches a gateway or tool on resume."""
+    from product_factory.domain.errors import ConfigurationError
+
+    coord = _new_coordinator(tmp_path)
+    request = RunRequest(
+        request_id="legacy-policy",
+        workflow_type="code_change",
+        request_text="resume legacy work",
+    )
+    run_id = "run-legacy-policy"
+    (tmp_path / ".product-factory" / "runs" / run_id).mkdir(parents=True)
+    coord.db.upsert_run(
+        run_id=run_id,
+        workflow_type=request.workflow_type,
+        status="executing",
+        request=request.model_dump(mode="json"),
+    )
+    coord.db.upsert_task(
+        run_id=run_id,
+        task_id="T-001",
+        capability="implementation",
+        status="running",
+        spec={"id": "T-001", "dependencies": []},
+        effective_policy={
+            "schema_version": "effective_task_policy.v1",
+            "task_id": "T-001",
+            "run_id": run_id,
+            "capability": "implementation",
+        },
+    )
+
+    with pytest.raises(ConfigurationError, match="restart_required"):
+        coord.resume(run_id)
+
+    row = coord.db.get_run(run_id)
+    assert row is not None
+    assert row["status"] == "blocked"
+    assert row["active_operation"] == "restart_required"
+    assert coord.db.list_events(run_id=run_id, types=["run.policy_incompatible"])
+
+
 def test_resume_rejects_already_terminal_run(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     coord = _new_coordinator(tmp_path)

@@ -201,14 +201,19 @@ def compile_plan(
                         task_id=task.id,
                     )
                 )
-            if (
-                workflow_pack is not None
-                and tool_class not in workflow_pack.execution_policy.allowed_tool_classes
-            ):
+            pack_cap_classes: frozenset[str] | None = None
+            if workflow_pack is not None:
+                cap_policy = workflow_pack.execution_policy.capability_policies.get(task.capability)
+                if cap_policy is not None:
+                    pack_cap_classes = cap_policy.allowed_tool_classes
+                else:
+                    pack_cap_classes = workflow_pack.execution_policy.allowed_tool_classes
+            if pack_cap_classes is not None and tool_class not in pack_cap_classes:
+                pack_label = workflow_pack.id if workflow_pack is not None else "unknown"
                 errors.append(
                     CompilerError(
                         code="tool_not_allowed_by_pack",
-                        message=(f"Tool class {tool_class} not allowed by pack {workflow_pack.id}"),
+                        message=(f"Tool class {tool_class} not allowed by pack {pack_label}"),
                         task_id=task.id,
                     )
                 )

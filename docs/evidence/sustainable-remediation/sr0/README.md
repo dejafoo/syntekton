@@ -39,6 +39,14 @@ uv run pytest -q tests/graph/test_quality_gate_pack.py
 uv run pytest -q -m "not integration"
 ```
 
+## Nested uv sandbox cache
+
+Sandboxed validation commands set `UV_CACHE_DIR` to a workspace-local
+`.uv-cache` (or an explicit allowlisted value) so nested `uv run` inside
+restricted/bwrap sandboxes can write cache without depending on `~/.cache`.
+On bwrap, the cache directory is bound RW when it lies outside the worktree.
+Guard: `tests/unit/test_sandbox.py`.
+
 ## Known limitations
 
 - Full browser/AMD/operational proof remains deferred to SR5/SR6.

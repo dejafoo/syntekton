@@ -52,9 +52,7 @@ from product_factory.domain.tasks import (
     requires_repair_or_terminal_resolution,
     satisfies_dependency,
 )
-from product_factory.domain.tools import CapabilityGrant
 from product_factory.domain.usage import UsageMetrics
-from product_factory.executors import execute_task
 from product_factory.gateway.base import ModelGateway
 from product_factory.gateway.instrumented import InstrumentedModelGateway
 from product_factory.gateway.mock import MockGateway
@@ -63,7 +61,7 @@ from product_factory.observability.events import EventLog
 from product_factory.observability.otel import maybe_create_otel_bridge
 from product_factory.observability.recorder import TelemetryRecorder
 from product_factory.orchestration.budget_ledger import BudgetLedger, warn_unused_profile_set
-from product_factory.orchestration.concurrency import run_wave
+from product_factory.orchestration.composition.input import composition_input_from_compose_context
 from product_factory.orchestration.effective_policy import (
     EFFECTIVE_TASK_POLICY_SCHEMA,
 )
@@ -74,7 +72,6 @@ from product_factory.orchestration.repair import (
     should_terminate_no_progress,
     update_no_progress,
 )
-from product_factory.orchestration.skill_grants import enforce_skill_grants
 from product_factory.orchestration.task_preparation import BlockedPreparation
 from product_factory.orchestration.validation_repair.service import (
     changed_files_from_patch,
@@ -99,7 +96,6 @@ from product_factory.repositories.worktrees import WorktreeManager
 from product_factory.repository.stack_profile import StackProfile, discover_stack_profile
 from product_factory.schemas import validate_write_payload
 from product_factory.skills.profiles import ProfileRegistry
-from product_factory.tools.broker import ToolBroker
 from product_factory.validation.pipeline import (
     has_blocking_failures,
     request_expects_web_citations,
@@ -240,11 +236,6 @@ def _clamp_proposal_budgets(proposal: PlannerOutput, config: AppConfig) -> Plann
     return proposal.model_copy(update={"tasks": clamped})
 
 
-from product_factory.orchestration.implementation_helpers import (  # noqa: E402
-    deterministic_impl_files,
-)
-
-
 class RunLifecycleEngine:
     def __init__(
         self,
@@ -279,33 +270,12 @@ class RunLifecycleEngine:
         self.worktree_lineage = app.worktree_lineage
         self.finalizer = app.finalizer
         self.task_preparation = app.task_preparation
+        self.task_runtime = app.task_runtime
         self.wave_execution = app.wave_execution
         # Bind command facade after the engine exists (composition root builds it unbound).
         app.lifecycle = self
         app.commands.bind(self)
         self.commands = app.commands
-
-    def _deployment_approval_verified(
-        self,
-        request: RunRequest,
-        *,
-        consumer_run_id: str,
-        capability: str,
-    ) -> bool:
-        """Wire broker flag from trust.approvals (SR1).
-
-        Ownership is ``trust.approvals.verify_deployment_action_approval``.
-        Lifecycle only sequences the broker flag; temporary until the deployment
-        executor owns consumption (issue: remove-coordinator-approval-verify-2026-08).
-        """
-        from product_factory.trust.approvals import verify_deployment_action_approval
-
-        return verify_deployment_action_approval(
-            self.db,
-            request,
-            consumer_run_id=consumer_run_id,
-            capability=capability,
-        )
 
     def _build_execution_context(
         self,
@@ -507,6 +477,7 @@ class RunLifecycleEngine:
                 request=request.model_dump(mode="json"),
                 base_commit=base_commit,
                 active_operation="planning",
+                workflow_pack_digest=(workflow_pack.content_hash() if workflow_pack else None),
             )
             recorder.emit(
                 run_id=run_id,
@@ -730,6 +701,50 @@ class RunLifecycleEngine:
                 f"Run {run_id} is already {run_row['status']!r}; nothing to resume"
             )
         request = RunRequest.model_validate(json.loads(run_row["request_json"]))
+        # Persisted grants are authoritative.  An unfinished legacy or
+        # tampered run must be restarted, never resumed under broadened
+        # authority. Pending tasks without a persisted policy are prepared
+        # fresh; this check applies to grants that already exist on disk.
+        from product_factory.orchestration.effective_policy import EffectiveTaskPolicy
+
+        incompatible_task_ids: list[str] = []
+        for row in self.db.list_tasks_in_creation_order(run_id):
+            payload = row.get("effective_policy_json")
+            if not payload:
+                continue
+            try:
+                policy = EffectiveTaskPolicy.model_validate_json(payload)
+                policy.ensure_valid_digest()
+            except (TypeError, ValueError):
+                incompatible_task_ids.append(str(row.get("task_id") or "unknown"))
+                continue
+            if row.get("effective_policy_schema") != EFFECTIVE_TASK_POLICY_SCHEMA or (
+                row.get("effective_policy_digest") != policy.policy_digest
+            ):
+                incompatible_task_ids.append(policy.task_id)
+        if incompatible_task_ids:
+            reason = {
+                "code": "policy_incompatible",
+                "next_action": "restart_required",
+                "task_ids": sorted(incompatible_task_ids),
+            }
+            self.db.upsert_run(
+                run_id=run_id,
+                workflow_type=request.workflow_type,
+                status="blocked",
+                request=request.model_dump(mode="json"),
+                base_commit=run_row.get("base_commit"),
+                active_operation="restart_required",
+                blocked_reason=reason,
+            )
+            TelemetryRecorder(self.db).emit(
+                run_id=run_id,
+                event_type="run.policy_incompatible",
+                severity=EventSeverity.ERROR,
+                summary="Persisted effective policy is incompatible; restart required",
+                payload=reason,
+            )
+            raise ConfigurationError("policy_incompatible: restart_required", details=reason)
         base_commit: str | None = run_row.get("base_commit") or None
         run_dir = self.pf_root / "runs" / run_id
         if not run_dir.exists():
@@ -1244,68 +1259,7 @@ class RunLifecycleEngine:
                 raise BudgetExhaustedError("Run budget exhausted")
             ledger.check_wall_clock()
 
-            ready = self.wave_execution.select_ready(
-                live_plan, task_status, max_parallel=request.budget.max_parallel_tasks
-            )
-            if not ready:
-                if all(is_terminal_task_status(task_status[t]) for t in live_plan.tasks):
-                    break
-                # deadlock — diagnose terminal unsuccessful deps instead of
-                # reporting an opaque unsatisfiable-scheduler failure when
-                # dependents are blocked on partial/failed/blocked work.
-                pending = [t for t, s in task_status.items() if s == "pending"]
-                if pending:
-                    failed = [
-                        f"{result.task_id}: {result.summary}"
-                        for result in results
-                        if requires_repair_or_terminal_resolution(result.status)
-                    ]
-                    if failed:
-                        raise RuntimeFailureError("Dependency failed; " + "; ".join(failed))
-                    raise RuntimeFailureError(f"Unsatisfiable dependencies for tasks: {pending}")
-                break
-
-            # Execute wave: read-only tasks and predicted-disjoint writers run
-            # concurrently (bounded by max_parallel_tasks via `run_wave`);
-            # conflicting writers are serialized. Same-wave tasks never depend
-            # on each other (enforced by `runnable_tasks`), so dependency
-            # context is safely precomputed from the pre-wave `results`
-            # snapshot. Result processing below stays single-threaded and
-            # iterates `ready` (plan order) regardless of completion order,
-            # giving a deterministic merge order (P1.F).
-            if spent >= request.budget.max_cost_usd:
-                raise BudgetExhaustedError("Run budget exhausted before wave")
-            ledger.check_wall_clock()
-            pre_wave_results = list(results)
-            dependency_outputs_by_task = {
-                task.id: [
-                    {
-                        "task_id": prior.task_id,
-                        "dependencies": live_plan.tasks[prior.task_id].dependencies,
-                        "summary": prior.summary,
-                        "artifact_refs": [
-                            ref.model_dump(mode="json") for ref in prior.artifact_refs
-                        ],
-                        "artifact_excerpts": [
-                            {
-                                "logical_name": ref.logical_name,
-                                "sha256": ref.sha256,
-                                "content": artifacts.get_text(ref.sha256)[:12_000],
-                            }
-                            for ref in prior.artifact_refs
-                            if ref.media_type.startswith("text/")
-                            or ref.media_type == "application/json"
-                        ],
-                        "findings": [finding.model_dump(mode="json") for finding in prior.findings],
-                    }
-                    for prior in pre_wave_results
-                    if prior.task_id
-                    in self.wave_execution.transitive_dependencies(live_plan, task.id)
-                ]
-                for task in ready
-            }
-            for task in ready:
-                task_status[task.id] = "running"
+            def _mark_task_started(task: TaskSpec) -> None:
                 self.db.upsert_task(
                     run_id=run_id,
                     task_id=task.id,
@@ -1327,13 +1281,14 @@ class RunLifecycleEngine:
                     },
                 )
 
+            def _before_dispatch(spent: Decimal = spent) -> None:
+                if spent >= request.budget.max_cost_usd:
+                    raise BudgetExhaustedError("Run budget exhausted before wave")
+                ledger.check_wall_clock()
+
             def _run_one(
                 task: TaskSpec,
-                # Bound per wave so the closure reads this wave's precomputed
-                # dependency context, never a later wave's.
-                dependency_outputs_by_task: dict[
-                    str, list[dict[str, Any]]
-                ] = dependency_outputs_by_task,
+                dependency_outputs: list[dict[str, Any]],
                 validation_evidence_refs: list[str] = validation_evidence_refs,
                 collected_validator_results: list[dict[str, Any]] = collected_validator_results,
             ) -> TaskResult:
@@ -1344,18 +1299,48 @@ class RunLifecycleEngine:
                     worktrees=worktrees,
                     original_repo=original_repo,
                     base_commit=base_commit,
-                    dependency_outputs=dependency_outputs_by_task[task.id],
+                    dependency_outputs=dependency_outputs,
                     land_map=land_map,
                     composer_role=composer_roles.get(task.id),
                     validation_evidence_refs=validation_evidence_refs,
                     validator_results=collected_validator_results,
                 )
 
-            wave_results: list[TaskResult] = run_wave(
-                ready,
+            # Execute wave: read-only tasks and predicted-disjoint writers run
+            # concurrently (bounded by max_parallel_tasks via WaveExecutionService);
+            # conflicting writers are serialized. Result processing below stays
+            # single-threaded and iterates `ready` (plan order) regardless of
+            # completion order, giving a deterministic merge order (P1.F).
+            cycle = self.wave_execution.run_wave_cycle(
+                plan=live_plan,
+                task_status=task_status,
+                max_parallel=request.budget.max_parallel_tasks,
+                prior_results=list(results),
+                artifacts=artifacts,
+                mark_task_started=_mark_task_started,
                 executor_fn=_run_one,
-                max_workers=request.budget.max_parallel_tasks,
+                before_dispatch=_before_dispatch,
             )
+            ready = cycle.ready
+            wave_results = cycle.wave_results
+            if not ready:
+                if all(is_terminal_task_status(task_status[t]) for t in live_plan.tasks):
+                    break
+                # deadlock — diagnose terminal unsuccessful deps instead of
+                # reporting an opaque unsatisfiable-scheduler failure when
+                # dependents are blocked on partial/failed/blocked work.
+                pending = [t for t, s in task_status.items() if s == "pending"]
+                if pending:
+                    failed = [
+                        f"{result.task_id}: {result.summary}"
+                        for result in results
+                        if requires_repair_or_terminal_resolution(result.status)
+                    ]
+                    if failed:
+                        raise RuntimeFailureError("Dependency failed; " + "; ".join(failed))
+                    raise RuntimeFailureError(f"Unsatisfiable dependencies for tasks: {pending}")
+                break
+
             execution_context.cancel_check()
 
             for task, result in zip(ready, wave_results, strict=True):
@@ -1368,21 +1353,9 @@ class RunLifecycleEngine:
                     collected_validator_results.extend(
                         [v.model_dump(mode="json") for v in result.validator_results]
                     )
-                recorder.emit(
-                    run_id=run_id,
-                    event_type="task.completed" if result.status == "success" else "task.failed",
-                    task_id=task.id,
-                    summary=f"Task {task.id} {result.status}",
-                    payload={
-                        "task_id": task.id,
-                        "status": result.status,
-                        "summary": result.summary,
-                        "usage": result.usage.model_dump(mode="json"),
-                    },
-                    severity=EventSeverity.INFO
-                    if result.status == "success"
-                    else EventSeverity.ERROR,
-                )
+                # task.completed / task.failed already committed with the task
+                # row via WaveExecutionService.record_task_completion (SR3).
+                # Budget telemetry stays on the recorder path after that commit.
                 recorder.emit(
                     run_id=run_id,
                     event_type="budget.updated",
@@ -1499,8 +1472,10 @@ class RunLifecycleEngine:
                         request.metadata.get("disable_validation_repair") != "true"
                         and (
                             workflow_pack is None
-                            or live_plan.tasks[result.task_id].capability
-                            in workflow_pack.execution_policy.repair_eligible_capabilities
+                            or self.validation_repair.is_repair_eligible(
+                                capability=live_plan.tasks[result.task_id].capability,
+                                workflow_pack=workflow_pack,
+                            )
                         )
                         and (
                             result.status != "success"
@@ -1721,26 +1696,30 @@ class RunLifecycleEngine:
                             in workflow_pack.execution_policy.fallback_composition_roles
                         ):
                             try:
+                                compose_ctx = ComposeContext(
+                                    composition=self.composition,
+                                    request=request,
+                                    role=entry.role,
+                                    document_name=entry.logical_name,
+                                    findings=findings,
+                                    dependency_outputs=[],
+                                    use_mock=isinstance(self._raw_gateway, MockGateway),
+                                    compose_architecture=self.composition.compose_architecture,
+                                    compose_evidence_report=self.composition.compose_evidence_report,
+                                    compose_feasibility_dossier=(
+                                        self.composition.compose_feasibility_dossier
+                                    ),
+                                    compose_change_intake=self.composition.compose_change_intake,
+                                    compose_quality_document=self.composition.compose_quality_document,
+                                    validation_evidence_refs=validation_evidence_refs,
+                                    validator_results=collected_validator_results,
+                                )
+                                compose_ctx.composition_input = (
+                                    composition_input_from_compose_context(compose_ctx)
+                                )
                                 document = pack_handler.compose(
                                     entry.role,
-                                    ComposeContext(
-                                        composition=self.composition,
-                                        request=request,
-                                        role=entry.role,
-                                        document_name=entry.logical_name,
-                                        findings=findings,
-                                        dependency_outputs=[],
-                                        use_mock=isinstance(self._raw_gateway, MockGateway),
-                                        compose_architecture=self.composition.compose_architecture,
-                                        compose_evidence_report=self.composition.compose_evidence_report,
-                                        compose_feasibility_dossier=(
-                                            self.composition.compose_feasibility_dossier
-                                        ),
-                                        compose_change_intake=self.composition.compose_change_intake,
-                                        compose_quality_document=self.composition.compose_quality_document,
-                                        validation_evidence_refs=validation_evidence_refs,
-                                        validator_results=collected_validator_results,
-                                    ),
+                                    compose_ctx,
                                 )
                                 documents_by_role[entry.role] = document
                                 if entry.role == ROLE_EVIDENCE_REPORT:
@@ -2180,15 +2159,12 @@ class RunLifecycleEngine:
         )
         if isinstance(prepared, BlockedPreparation):
             conflict_result = prepared.result
-            self.db.upsert_task(
+            # SR3: WaveExecutionService owns terminal task+event durability.
+            self.wave_execution.record_task_completion(
+                db=self.db,
                 run_id=run_id,
-                task_id=task.id,
-                capability=task.capability,
-                status="failed",
-                spec=task.model_dump(mode="json"),
-                result=conflict_result.model_dump(mode="json"),
-                ended_at=datetime.now(UTC).isoformat(),
-                active_operation=None,
+                task=task,
+                result=conflict_result,
             )
             return conflict_result
 
@@ -2378,94 +2354,6 @@ class RunLifecycleEngine:
                     writable=writable,
                 )
 
-        def _tool_observer(phase: str, payload: dict) -> None:
-            if recorder is None:
-                return
-            severity = EventSeverity.ERROR if phase == "failed" else EventSeverity.INFO
-            recorder.emit(
-                run_id=run_id,
-                event_type=f"tool.call.{phase}",
-                task_id=task.id,
-                tool_call_id=payload.get("tool_call_id"),
-                summary=str(payload.get("tool_name") or phase),
-                payload=payload,
-                severity=severity,
-            )
-
-        def _connector_audit(event_type: str, payload: dict) -> None:
-            if recorder is None:
-                return
-            severity = (
-                EventSeverity.INFO if event_type == CONNECTOR_EVENT_INVOKED else EventSeverity.ERROR
-            )
-            recorder.emit(
-                run_id=run_id,
-                event_type=event_type,
-                task_id=task.id,
-                tool_call_id=payload.get("tool_call_id"),
-                summary=f"{payload.get('connector_id') or '?'}:{payload.get('tool_name') or '?'}",
-                payload=payload,
-                severity=severity,
-            )
-
-        broker = ToolBroker(
-            registry=self.tool_registry,
-            artifact_store=artifacts,
-            worktree_root=(
-                wt_path
-                if original_repo or effective_policy.executor_mode == "interface_agent_loop"
-                else None
-            ),
-            original_repo=original_repo,
-            registered_commands=self.config.policies.registered_commands,
-            base_commit=base_commit or None,
-            observer=_tool_observer if recorder is not None else None,
-            ledger=ledger,
-            connectors=self.connector_broker,
-            connector_audit=_connector_audit,
-            source_ledger=SourceLedger.for_run(run_dir),
-            source_policy=resolve_request_source_policy(
-                request, profiles_root=self.config.root / "profiles"
-            ),
-            # SR1: trust.approvals owns verification; lifecycle only wires the broker flag
-            # (issue: remove-coordinator-approval-verify-2026-08).
-            connector_approval_verified=self._deployment_approval_verified(
-                request, consumer_run_id=run_id, capability=task.capability
-            ),
-            run_id=run_id,
-            capture_level=recorder.capture_level if recorder is not None else None,
-            on_artifact_instance=self._record_artifact_instance,
-        )
-        granted = set(effective_policy.allowed_tool_names)
-
-        # Fail closed before granting if a matched skill's declared tool policy
-        # is inconsistent with the task's actual grant (P1.E).
-        enforce_skill_grants(
-            skills=skills,
-            granted_tool_names=granted,
-            connector_tools=self.connector_registry.tool_names_by_class(),
-        )
-
-        broker.set_grant(
-            CapabilityGrant(
-                grant_id=f"grant-{task.id}",
-                run_id=run_id,
-                task_id=task.id,
-                agent_profile=agent_profile,
-                tool_names=granted,
-                allowed_path_patterns=task.allowed_path_patterns,
-                readable_path_patterns=task.effective_read_patterns(),
-                writable_path_patterns=task.effective_write_patterns(),
-                # Reserve headroom for post-loop system git_diff / status calls.
-                max_calls=int(
-                    effective_policy.call_limits.get(
-                        "max_calls",
-                        max(task.budget.max_tool_calls * 2, task.budget.max_tool_calls + 10),
-                    )
-                ),
-            )
-        )
-
         if lineage_conflicts and task.capability == "composition":
             conflict_result = TaskResult(
                 task_id=task.id,
@@ -2483,23 +2371,17 @@ class RunLifecycleEngine:
             )
             # Early-exit path (P1.F): still persist the terminal status so the
             # task row doesn't stay stuck at "running" for resume/observability.
-            self.db.upsert_task(
+            # SR3: WaveExecutionService owns terminal task+event durability.
+            self.wave_execution.record_task_completion(
+                db=self.db,
                 run_id=run_id,
-                task_id=task.id,
-                capability=task.capability,
-                status="failed",
-                spec=task.model_dump(mode="json"),
-                result=conflict_result.model_dump(mode="json"),
-                ended_at=datetime.now(UTC).isoformat(),
-                active_operation=None,
+                task=task,
+                result=conflict_result,
             )
             return conflict_result
 
-        # SD1: dispatch declared work through the executor registry.
-        # SD1 temporary: composition still receives coordinator compose callbacks
-        # (issue: remove-coordinator-compose-callbacks-2026-08).
-        # SR2: TaskPreparationService owns request assembly.
-        execution_request = self.task_preparation.assemble_execution_request(
+        # SR2: TaskRuntimeService owns broker construction, grants, and dispatch.
+        runtime_outcome = self.task_runtime.execute(
             run_id=run_id,
             run_dir=run_dir,
             request=request,
@@ -2507,29 +2389,26 @@ class RunLifecycleEngine:
             effective_policy=effective_policy,
             agent_profile=agent_profile,
             model_profile=profile,
-            broker=broker,
+            skills=skills,
             artifacts=artifacts,
             gateway=gateway,
-            raw_gateway=self._raw_gateway,
-            allow_deterministic_workers=self.allow_deterministic_workers,
+            ledger=ledger,
+            wt_path=wt_path,
+            original_repo=original_repo,
+            base_commit=base_commit,
             ctx_messages=ctx.messages,
             package_hash=ctx.package_hash,
-            granted_tool_names=granted,
             registered_command_ids=list(registered_ids),
             dependency_outputs=dependency_outputs or [],
             repository_excerpts=repository_excerpts,
-            base_commit=base_commit,
             land_map=land_map,
             composer_role=composer_role,
             validation_evidence_refs=validation_evidence_refs,
             validator_results=validator_results,
             composition=self.composition,
-            services={
-                "deterministic_impl_files": deterministic_impl_files,
-                "changed_files_from_patch": changed_files_from_patch,
-            },
+            recorder=recorder,
         )
-        result = execute_task(execution_request)
+        result = runtime_outcome.result
 
         # Legacy live probe path removed: architecture/requirements now persist drafts above.
         context_evidence = [
@@ -2550,15 +2429,12 @@ class RunLifecycleEngine:
         if not result.prompt_package_hash:
             result.prompt_package_hash = ctx.package_hash
         artifact_refs = list(result.artifact_refs)
-        self.db.upsert_task(
+        # SR3: couple terminal task upsert with its observability event.
+        self.wave_execution.record_task_completion(
+            db=self.db,
             run_id=run_id,
-            task_id=task.id,
-            capability=task.capability,
-            status=result.status,
-            spec=task.model_dump(mode="json"),
-            result=result.model_dump(mode="json"),
-            ended_at=datetime.now(UTC).isoformat(),
-            active_operation=None,
+            task=task,
+            result=result,
         )
         for art in artifact_refs:
             self.db.record_artifact(art.model_dump(mode="json"))
@@ -2585,7 +2461,7 @@ class RunLifecycleEngine:
                     summary=art.logical_name,
                     payload=art.model_dump(mode="json"),
                 )
-        for tc in broker.history:
+        for tc in runtime_outcome.tool_call_records:
             self.db.record_tool_call(run_id=run_id, record=tc.model_dump(mode="json"))
         return result
 

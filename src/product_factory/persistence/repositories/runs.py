@@ -201,6 +201,8 @@ class RunRepository(AggregateRepository):
         active_operation: str | None = None,
         touch_progress: bool = True,
         budget_snapshot: dict[str, Any] | None = None,
+        workflow_pack_digest: str | None = None,
+        blocked_reason: dict[str, Any] | None = None,
     ) -> None:
         now = datetime.now(UTC).isoformat()
         existing = self._conn.execute(
@@ -208,6 +210,7 @@ class RunRepository(AggregateRepository):
         ).fetchone()
         progress = now if touch_progress else None
         budget_json = json.dumps(budget_snapshot, default=str) if budget_snapshot else None
+        blocked_reason_json = json.dumps(blocked_reason, default=str) if blocked_reason else None
         if existing:
             self._conn.execute(
                 """
@@ -215,7 +218,9 @@ class RunRepository(AggregateRepository):
                   manifest_json=?,
                   last_progress_at=COALESCE(?, last_progress_at),
                   active_operation=COALESCE(?, active_operation),
-                  budget_json=COALESCE(?, budget_json)
+                  budget_json=COALESCE(?, budget_json),
+                  workflow_pack_digest=COALESCE(?, workflow_pack_digest),
+                  blocked_reason_json=COALESCE(?, blocked_reason_json)
                 WHERE run_id=?
                 """,
                 (
@@ -227,6 +232,8 @@ class RunRepository(AggregateRepository):
                     progress,
                     active_operation,
                     budget_json,
+                    workflow_pack_digest,
+                    blocked_reason_json,
                     run_id,
                 ),
             )
@@ -236,8 +243,8 @@ class RunRepository(AggregateRepository):
                 INSERT INTO runs
                 (run_id, workflow_type, status, request_json, created_at, updated_at,
                  base_commit, usage_json, manifest_json, last_progress_at, active_operation,
-                 budget_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 budget_json, workflow_pack_digest, blocked_reason_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -252,6 +259,8 @@ class RunRepository(AggregateRepository):
                     now,
                     active_operation,
                     budget_json,
+                    workflow_pack_digest,
+                    blocked_reason_json,
                 ),
             )
         self._commit()

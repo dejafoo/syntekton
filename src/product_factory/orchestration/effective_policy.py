@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from product_factory.domain.capabilities import (
-    CAPABILITY_TOOL_CLASSES,
-    EXTERNAL_READ_TOOL_CLASSES,
-)
+from product_factory.domain.capabilities import CAPABILITY_TOOL_CLASSES
 from product_factory.domain.runs import RunRequest
 from product_factory.domain.tasks import TaskSpec
 from product_factory.tools.registry import ToolRegistry
 
-EFFECTIVE_TASK_POLICY_SCHEMA = "effective_task_policy.v1"
+EFFECTIVE_TASK_POLICY_SCHEMA = "effective_task_policy.v2"
 LEGACY_UNRESOLVED = "legacy_unresolved"
 
 ExecutorMode = Literal[
@@ -38,11 +37,17 @@ class EffectiveTaskPolicy(BaseModel):
     run_id: str
     pack_id: str | None = None
     pack_version: str | None = None
+    pack_policy_digest: str | None = None
     capability: str
+    descriptor_version: str | None = None
     executor_mode: ExecutorMode = "model_draft"
+    executor_adapter_id: str | None = None
     allowed_tool_names: list[str] = Field(default_factory=list)
     allowed_tool_classes: list[str] = Field(default_factory=list)
     connector_decisions: dict[str, str] = Field(default_factory=dict)
+    allowed_connector_classes: list[str] = Field(default_factory=list)
+    allowed_connector_names: list[str] = Field(default_factory=list)
+    workspace_access: Literal["none", "read_only", "isolated_write"] = "none"
     path_scopes: dict[str, list[str]] = Field(default_factory=dict)
     call_limits: dict[str, int] = Field(default_factory=dict)
     result_limits: dict[str, int] = Field(default_factory=dict)
@@ -63,6 +68,8 @@ class EffectiveTaskPolicy(BaseModel):
     validator_ids: list[str] = Field(default_factory=list)
     repair_eligible: bool = False
     approval_required: bool = True
+    external_action_requires_approval: bool = False
+    policy_digest: str = ""
 
     def ensure_prompt_subset(self) -> None:
         allowed = set(self.allowed_tool_names)
@@ -72,8 +79,29 @@ class EffectiveTaskPolicy(BaseModel):
                 f"prompt_tool_names must be a subset of allowed_tool_names; got extras {outside}"
             )
 
+    def computed_digest(self) -> str:
+        """Return the stable digest of this policy excluding its own digest."""
+        payload = self.model_dump(mode="json", exclude={"policy_digest"})
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(body).hexdigest()
 
-_DECISION_ANALYSIS_TOOL_NAMES = frozenset({"compare_options"})
+    def ensure_valid_digest(self) -> None:
+        if not self.policy_digest or self.policy_digest != self.computed_digest():
+            raise ValueError("effective task policy digest is missing or does not match")
+
+
+def workspace_access_for_tool_classes(tool_classes: set[str] | frozenset[str]) -> str:
+    """Derive workspace authority from the durable tool-class grant only."""
+    if tool_classes & {"repository_write", "git_write", "synthetic_write"}:
+        return "isolated_write"
+    if tool_classes & {
+        "repository_read",
+        "git_read",
+        "validation_command",
+        "interface_analysis",
+    }:
+        return "read_only"
+    return "none"
 
 
 def compute_allowed_tool_names(
@@ -89,43 +117,28 @@ def compute_allowed_tool_names(
 ) -> tuple[set[str], dict[str, str], list[str]]:
     """Resolve the exact broker grant and connector decisions for a task.
 
-    Pack ``denied_tool_names`` and per-capability tool classes are the
-    authoritative strip/narrow path. ``request`` / ``web_search_tool`` remain
-    for call-site compatibility; workflow_type branches were removed in SR1.
+    Authority intersection (no layer may widen the layer above):
+
+    ``descriptor maximum ∩ capability pack grant ∩ task.required_tool_classes``
+    then environment connector availability and pack ``denied_tool_names``.
+
+    ``request`` / ``web_search_tool`` remain for call-site compatibility.
     """
 
     _ = (request, web_search_tool)
-    granted = {
-        t.name
-        for t in tool_registry.list()
-        if t.tool_class in task.required_tool_classes
-        or (not task.required_tool_classes and t.risk_class in {"R0", "R1"})
-    }
-    if task.capability in {
-        "composition",
-        "architecture",
-        "documentation",
-        "domain_research",
-        "decision_analysis",
-        "interface_analysis",
-    }:
-        granted.add("write_artifact")
-    if task.capability == "decision_analysis":
-        registered = {t.name for t in tool_registry.list()}
-        granted |= registered & _DECISION_ANALYSIS_TOOL_NAMES
-    if task.capability in {"implementation", "repair"}:
-        granted = {
-            "create_file",
-            "apply_patch",
-            "git_diff",
-            "git_status",
-            "read_file",
-            "list_files",
-            "search_text",
-            "run_validation_command",
-        }
-    if task.capability in {"repository_analysis", "independent_review"}:
-        granted.update({"read_file", "list_files", "search_text", "git_diff", "git_status"})
+    descriptor_max = CAPABILITY_TOOL_CLASSES.get(task.capability, frozenset())
+    if pack_allowed_tool_classes is not None:
+        permitted_classes = frozenset(descriptor_max & pack_allowed_tool_classes)
+    else:
+        permitted_classes = frozenset(descriptor_max)
+
+    requested = frozenset(task.required_tool_classes)
+    # A task must explicitly ask for every authority it receives.  Legacy
+    # aliases are deliberately not broadened here: they are rejected by plan
+    # compilation before a task reaches this resolver.
+    class_filter = permitted_classes & requested
+
+    granted = {tool.name for tool in tool_registry.list() if tool.tool_class in class_filter}
 
     connector_decisions: dict[str, str] = {}
     if connector_tool_names:
@@ -136,13 +149,10 @@ def compute_allowed_tool_names(
         for name in sorted(grantable_connector_tools):
             connector_decisions[name] = "allow"
     granted -= denied_tool_names
-    if pack_allowed_tool_classes is not None:
-        tool_classes = {tool.name: tool.tool_class for tool in tool_registry.list()}
-        granted = {name for name in granted if tool_classes.get(name) in pack_allowed_tool_classes}
 
     classes = sorted(
         {t.tool_class for t in tool_registry.list() if t.name in granted}
-        | set(task.required_tool_classes)
+        | (set(requested) & set(permitted_classes))
     )
     return granted, connector_decisions, classes
 
@@ -158,6 +168,9 @@ def resolve_effective_task_policy(
     skill_ids: list[str],
     pack_id: str | None = None,
     pack_version: str | None = None,
+    pack_policy_digest: str | None = None,
+    descriptor_version: str | None = None,
+    executor_adapter_id: str | None = None,
     connector_tool_names: frozenset[str] = frozenset(),
     grantable_connector_tools: frozenset[str] = frozenset(),
     web_search_tool: str = "web_search",
@@ -177,6 +190,8 @@ def resolve_effective_task_policy(
     pack_allowed_tool_classes: frozenset[str] | None = None,
     repair_eligible: bool | None = None,
     approval_required: bool | None = None,
+    external_action_requires_approval: bool | None = None,
+    allowed_connector_classes: frozenset[str] = frozenset(),
 ) -> EffectiveTaskPolicy:
     """Build the durable policy object enforced by broker and prompt builders."""
 
@@ -201,9 +216,11 @@ def resolve_effective_task_policy(
             reduction_reason = reduction_reason or "dropped_ungranted_tools"
 
     if repair_eligible is None:
-        repair_eligible = task.capability in {"implementation", "repair"}
+        repair_eligible = False
     if approval_required is None:
-        approval_required = True
+        approval_required = False
+    if external_action_requires_approval is None:
+        external_action_requires_approval = False
 
     max_calls = max(task.budget.max_tool_calls * 2, task.budget.max_tool_calls + 10)
     policy = EffectiveTaskPolicy(
@@ -211,11 +228,17 @@ def resolve_effective_task_policy(
         run_id=run_id,
         pack_id=pack_id,
         pack_version=pack_version,
+        pack_policy_digest=pack_policy_digest,
         capability=task.capability,
+        descriptor_version=descriptor_version,
         executor_mode=executor_mode,
+        executor_adapter_id=executor_adapter_id,
         allowed_tool_names=allowed,
         allowed_tool_classes=classes,
         connector_decisions=connector_decisions,
+        allowed_connector_classes=sorted(allowed_connector_classes),
+        allowed_connector_names=sorted(grantable_connector_tools),
+        workspace_access=workspace_access_for_tool_classes(set(classes)),  # type: ignore[arg-type]
         path_scopes={
             "allowed": list(task.allowed_path_patterns),
             "readable": list(task.effective_read_patterns()),
@@ -237,21 +260,26 @@ def resolve_effective_task_policy(
         validator_ids=list(validator_ids or []),
         repair_eligible=repair_eligible,
         approval_required=approval_required,
+        external_action_requires_approval=external_action_requires_approval,
         prompt_tool_names=prompt_names,
         prompt_reduction_reason=reduction_reason,
     )
     policy.ensure_prompt_subset()
-    return policy
+    return policy.model_copy(update={"policy_digest": policy.computed_digest()})
 
 
 def grantable_connector_names_for_task(
     *,
     task: TaskSpec,
     grantable_fn,
+    allowed_connector_classes: frozenset[str] | None = None,
 ) -> frozenset[str]:
     """Connector tools permitted by capability catalogue and operator enablement."""
 
-    grant_classes = set(task.required_tool_classes)
     permitted = CAPABILITY_TOOL_CLASSES.get(task.capability, frozenset())
-    grant_classes |= permitted & EXTERNAL_READ_TOOL_CLASSES
+    # Connector authority is never implied by a capability. It is an exact
+    # descriptor ∩ pack ∩ task request intersection.
+    grant_classes = set(task.required_tool_classes) & set(permitted)
+    if allowed_connector_classes is not None:
+        grant_classes &= set(allowed_connector_classes)
     return frozenset(grantable_fn(grant_classes))

@@ -114,12 +114,25 @@ SR7 Removal and measured optimization
 | --- | --- | --- | --- |
 | SR0 — Correctness and baseline | `[x]` | RF-01, RF-08 | G0 |
 | SR1 — Policy authority | `[x]` | RF-02 | G1 |
-| SR2 — Lifecycle decomposition | `[~]` first cuts | RF-03 | G2 |
-| SR3 — Transactional durability | `[~]` UoW slice | RF-04 | G3 |
+| SR2 — Lifecycle decomposition | `[~]` G2 ownership cuts (not closed) | RF-03 | G2 |
+| SR3 — Transactional durability | `[~]` admit+complete UoW wired | RF-04 | G3 |
 | SR4 — Host/v2 adoption | `[~]` Python v2 | RF-05 | G3 |
 | SR5 — Product and release truth | `[~]` first slice | RF-06–RF-08 | G4 |
 | SR6 — Operational evaluation | `[~]` hermetic only | RF-09 | G5 |
 | SR7 — Removal and optimization | `[~]` inventory | all residual findings | post-G5 |
+
+G1 reopen (resolved): `CapabilityExecutionPolicy` is now the authoritative
+runtime grant in `TaskPreparationService`, the plan compiler, and
+`effective_policy` intersection. Pack-wide unions are no longer used as the
+task tool grant.
+
+G2 remaining: `TaskRuntimeService` + `WaveExecutionService.run_wave_cycle`
+own broker/dispatch and wave cycles; Host mutations go through
+`LifecycleCommandService`; production ComposeContext attaches
+`CompositionInput`. The engine still owns prep context assembly, worktree
+setup, validation/repair sequencing, and finalization — G2 is not closed
+until those stay outside the engine body and characterization covers the
+full resume/repair/approval/budget matrix.
 
 ---
 
@@ -312,12 +325,13 @@ Add negative tests that attempt to:
 
 ### 5.5 G1 acceptance
 
-- [ ] One pack policy determines validators, tools, outputs, repair, findings,
-  and external-action requirements.
-- [ ] No named workflow conditional remains in shared runtime code.
-- [ ] Every canonical pack compiles and runs in fake-live tests.
-- [ ] `repository_change` cannot acquire deployment authority.
-- [ ] Durable runs use canonical pack IDs.
+- [x] One pack policy determines validators, tools, outputs, repair, findings,
+  and external-action requirements. *(hermetic: `tests/unit/test_sr1_policy_authority.py`)*
+- [x] No named workflow conditional remains in shared runtime code for tool /
+  repair / approval grants. *(capability_policies + descriptor intersection)*
+- [x] Every canonical pack compiles and runs in fake-live tests.
+- [x] `repository_change` cannot acquire deployment authority.
+- [x] Durable runs use canonical pack IDs.
 
 ---
 
@@ -430,14 +444,14 @@ migrated.
 
 Add characterization tests before moving behavior:
 
-- [ ] fresh run;
-- [ ] resume after interruption;
-- [ ] repair creation and lineage;
-- [ ] partial, blocked, unsupported, and failed results;
-- [ ] cancellation;
-- [ ] approval wait and resume;
-- [ ] budget exhaustion;
-- [ ] finalization;
+- [x] fresh run; *(mock quality-gate characterization)*
+- [~] resume after interruption;
+- [~] repair creation and lineage;
+- [x] partial, blocked, unsupported, and failed results; *(SR0 predicates + SR2 guards)*
+- [x] cancellation; *(commands cancel path)*
+- [~] approval wait and resume;
+- [~] budget exhaustion;
+- [~] finalization;
 - [ ] worker recovery.
 
 Add import-boundary tests that prohibit the extracted dependencies from moving
@@ -445,13 +459,15 @@ back into the lifecycle engine or coordinator.
 
 ### 6.8 G2 acceptance
 
-- [ ] `RunCoordinator` is only a compatibility facade.
-- [ ] `RunLifecycleEngine` contains lifecycle sequencing, not implementation
-  loops.
-- [ ] Adding a fixture pack requires no lifecycle, scheduler, host union,
+- [~] `RunCoordinator` is only a compatibility facade. *(Host mutations via
+  commands; db/pf_root still via coord)*
+- [~] `RunLifecycleEngine` contains lifecycle sequencing, not implementation
+  loops. *(wave/runtime extracted; prep context / validation / finalization
+  still engine-owned)*
+- [x] Adding a fixture pack requires no lifecycle, scheduler, host union,
   dashboard, or API branching.
-- [ ] No handler calls lifecycle-engine private methods.
-- [ ] Characterization tests demonstrate preserved outcomes.
+- [x] No handler calls lifecycle-engine private methods.
+- [~] Characterization tests demonstrate preserved outcomes.
 
 ---
 

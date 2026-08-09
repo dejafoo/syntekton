@@ -34,7 +34,13 @@ def _implementation_task() -> TaskSpec:
         capability="implementation",
         objective="ship a change",
         expected_output_schema="change_set.patch.v1",
-        required_tool_classes=["filesystem_read", "filesystem_write", "git", "validation"],
+        required_tool_classes=[
+            "repository_read",
+            "repository_write",
+            "git_read",
+            "git_write",
+            "validation_command",
+        ],
         budget=TaskBudget(max_tool_calls=8, max_cost_usd="1.00"),
     )
 

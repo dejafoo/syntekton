@@ -229,7 +229,7 @@ def default_architecture_plan(request_text: str) -> PlannerOutput:
                 objective="Review architecture for gaps",
                 dependencies=["T-003"],
                 expected_output_schema="review_findings.v1",
-                required_tool_classes={"repository_read"},
+                required_tool_classes={"repository_read", "git_read"},
                 acceptance_criteria=[
                     AcceptanceCriterion(
                         id="AC-004",

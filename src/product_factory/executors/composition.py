@@ -11,6 +11,7 @@ from product_factory.executors.protocol import (
     attach_receipt,
 )
 from product_factory.gateway.mock import MockGateway
+from product_factory.orchestration.composition.input import composition_input_from_compose_context
 from product_factory.orchestration.repair import patch_fingerprint
 from product_factory.repositories.patches import create_patch
 from product_factory.schemas.builtin import ROLE_TO_SCHEMA
@@ -122,6 +123,7 @@ class CompositionExecutor:
                 validation_evidence_refs=validation_evidence_refs,
                 validator_results=validator_results,
             )
+            compose_ctx.composition_input = composition_input_from_compose_context(compose_ctx)
             document = handler.compose(composer_role, compose_ctx)
             if gen_usage_box:
                 model_usage = model_usage.merge(gen_usage_box[0])

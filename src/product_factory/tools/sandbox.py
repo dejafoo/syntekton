@@ -9,7 +9,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 # Env keys allowed into sandboxed validation commands (plus PATH/HOME/LANG basics).
 _ENV_ALLOWLIST = {
@@ -24,8 +24,6 @@ _ENV_ALLOWLIST = {
     "TEMP",
     "USER",
     "LOGNAME",
-    "UV_PROJECT_ENVIRONMENT",
-    "VIRTUAL_ENV",
     "PYTHONPATH",
 }
 
@@ -56,7 +54,53 @@ class SandboxResult:
     sandbox: str
 
 
-def _scrubbed_env(*, pythonpath: str | None = None) -> dict[str, str]:
+CommandExecutionState = Literal["passed", "domain_failure", "timeout", "unavailable"]
+
+
+def classify_command_result(result: SandboxResult, spec: dict[str, Any]) -> CommandExecutionState:
+    """Classify a receipt without pretending unavailable execution is a test failure."""
+    if result.returncode == 124:
+        return "timeout"
+    success_codes = {int(code) for code in spec.get("success_exit_codes", [0])}
+    domain_failure_codes = {int(code) for code in spec.get("domain_failure_exit_codes", [1])}
+    if result.returncode in success_codes:
+        return "passed"
+    if result.returncode in domain_failure_codes:
+        return "domain_failure"
+    return "unavailable"
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedSandboxPaths:
+    """Validated Product Factory-owned writable paths for a command sandbox."""
+
+    cache_root: Path
+
+    @classmethod
+    def under(cls, data_root: Path) -> ManagedSandboxPaths:
+        root = data_root.resolve()
+        if root == Path(root.anchor) or root == Path.home().resolve():
+            raise ValueError("managed sandbox root must not be filesystem or home root")
+        cache_root = (root / "cache" / "tooling" / "uv").resolve()
+        try:
+            cache_root.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("managed sandbox cache escapes data root") from exc
+        if cache_root.is_symlink() or any(parent.is_symlink() for parent in cache_root.parents):
+            raise ValueError("managed sandbox cache must not traverse symlinks")
+        return cls(cache_root=cache_root)
+
+    def ensure(self) -> Path:
+        self.cache_root.mkdir(parents=True, exist_ok=True)
+        resolved = self.cache_root.resolve()
+        if resolved != self.cache_root:
+            raise ValueError("managed sandbox cache changed while being prepared")
+        return resolved
+
+
+def _scrubbed_env(
+    *, pythonpath: str | None = None, managed_paths: ManagedSandboxPaths
+) -> dict[str, str]:
     env: dict[str, str] = {}
     for key in _ENV_ALLOWLIST:
         value = os.environ.get(key)
@@ -65,6 +109,9 @@ def _scrubbed_env(*, pythonpath: str | None = None) -> dict[str, str]:
     if pythonpath:
         existing = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = pythonpath if not existing else f"{pythonpath}:{existing}"
+    # Never inherit cache or active-venv authority from the operator process.
+    # A managed path is explicitly constructed by Product Factory instead.
+    env["UV_CACHE_DIR"] = str(managed_paths.ensure())
     # Explicitly drop common secret-bearing vars even if somehow allowlisted later.
     for banned in (
         "OPENROUTER_API_KEY",
@@ -87,17 +134,21 @@ def run_sandboxed_command(
     cwd: Path,
     timeout_seconds: int,
     pythonpath: str | None = None,
+    managed_paths: ManagedSandboxPaths | None = None,
     prefer_bwrap: bool = True,
 ) -> SandboxResult:
     """Run a registered command under restricted env; use bwrap when available."""
     cmd = [resolve_executable(executable), *args]
-    env = _scrubbed_env(pythonpath=pythonpath)
+    # Direct test callers may use an explicitly isolated temporary root. All
+    # production callers pass a Product Factory data-root derived value.
+    paths = managed_paths or ManagedSandboxPaths.under(cwd / ".product-factory-sandbox")
+    env = _scrubbed_env(pythonpath=pythonpath, managed_paths=paths)
     sandbox_name = "restricted"
     if prefer_bwrap and _has_bwrap():
         sandbox_name = "bwrap"
         # Minimal bubblewrap: private /tmp, no network, bind worktree RW, keep /usr read-only.
         work = str(cwd.resolve())
-        cmd = [
+        bwrap_cmd = [
             "bwrap",
             "--die-with-parent",
             "--unshare-net",
@@ -124,14 +175,26 @@ def run_sandboxed_command(
             "--bind",
             work,
             work,
-            "--chdir",
-            work,
-            "--dev",
-            "/dev",
-            "--proc",
-            "/proc",
-            *cmd,
         ]
+        uv_cache = env.get("UV_CACHE_DIR")
+        if uv_cache:
+            cache_resolved = str(paths.ensure())
+            # The only writable mount outside the worktree is the validated
+            # Product Factory cache. Ambient UV_CACHE_DIR can never reach here.
+            if cache_resolved != work and not cache_resolved.startswith(work + os.sep):
+                bwrap_cmd.extend(["--bind", cache_resolved, cache_resolved])
+        bwrap_cmd.extend(
+            [
+                "--chdir",
+                work,
+                "--dev",
+                "/dev",
+                "--proc",
+                "/proc",
+                *cmd,
+            ]
+        )
+        cmd = bwrap_cmd
     started = time.monotonic()
     try:
         proc = subprocess.run(
@@ -161,6 +224,15 @@ def run_sandboxed_command(
             if not isinstance(exc.stdout, bytes)
             else exc.stdout.decode(errors="replace")[-8000:],
             stderr=f"Command timed out after {timeout_seconds}s",
+            duration_seconds=duration,
+            sandbox=sandbox_name,
+        )
+    except OSError as exc:
+        duration = time.monotonic() - started
+        return SandboxResult(
+            returncode=127,
+            stdout="",
+            stderr=f"Command unavailable: {exc}",
             duration_seconds=duration,
             sandbox=sandbox_name,
         )
