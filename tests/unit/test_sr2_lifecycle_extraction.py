@@ -56,7 +56,7 @@ def test_task_preparation_and_wave_execution_modules_exist() -> None:
     assert hasattr(TaskPreparationService, "assemble_execution_request")
     assert hasattr(TaskRuntimeService, "execute")
     assert hasattr(WaveExecutionService, "select_ready")
-    assert hasattr(WaveExecutionService, "run_wave_cycle")
+    assert hasattr(WaveExecutionService, "advance")
 
 
 def test_engine_must_not_construct_tool_broker() -> None:

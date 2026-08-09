@@ -298,7 +298,7 @@ def test_wave_execution_record_task_completion_uses_uow(tmp_path: Path) -> None:
         dependencies=[],
     )
     result = TaskResult(task_id="t1", status="success", summary="done")
-    seq = WaveExecutionService().record_task_completion(
+    seq = WaveExecutionService.record_task_completion(
         db=db,
         run_id=run_id,
         task=task,
