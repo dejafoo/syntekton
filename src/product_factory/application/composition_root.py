@@ -136,7 +136,12 @@ def build_application(
         on_artifact_instance=record_artifact_instance,
         approval_verify=approval_verify,
     )
-    wave_execution = WaveExecutionService(wave_scheduler=wave_scheduler)
+    wave_execution = WaveExecutionService(
+        database=database,
+        task_preparation=task_preparation,
+        task_runtime=task_runtime,
+        wave_scheduler=wave_scheduler,
+    )
 
     def cancel_check(run_id: str) -> None:
         row = database.get_run(run_id)

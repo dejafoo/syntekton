@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import shutil
@@ -18,7 +17,6 @@ from product_factory.connectors.broker import EVENT_INVOKED as CONNECTOR_EVENT_I
 from product_factory.connectors.broker import ConnectorBroker
 from product_factory.connectors.registry import ConnectorRegistry
 from product_factory.connectors.tavily import CONNECTOR_ID as TAVILY_CONNECTOR_ID
-from product_factory.domain.artifacts import ResourceRef
 from product_factory.domain.errors import (
     ApprovalBlockedError,
     BudgetExhaustedError,
@@ -36,7 +34,6 @@ from product_factory.domain.tasks import (
     TaskResult,
     TaskSpec,
     is_terminal_task_status,
-    requires_repair_or_terminal_resolution,
     satisfies_dependency,
 )
 from product_factory.domain.usage import UsageMetrics
@@ -60,12 +57,7 @@ from product_factory.orchestration.repair import (
     should_terminate_no_progress,
     update_no_progress,
 )
-from product_factory.orchestration.task_contracts import (
-    TaskPreparationRequest,
-    TaskRuntimeRequest,
-)
 from product_factory.orchestration.task_preparation import (
-    BlockedPreparation,
     TaskPreparationService,
 )
 from product_factory.orchestration.task_runtime import TaskRuntimeService
@@ -74,7 +66,7 @@ from product_factory.orchestration.validation_repair.service import (
     changed_files_from_patch,
     resolve_validation_command_ids,
 )
-from product_factory.orchestration.wave_execution import WaveExecutionService
+from product_factory.orchestration.wave_execution import WaveAdvanceRequest, WaveExecutionService
 from product_factory.orchestration.worktree_lineage import WorktreeLineageService
 from product_factory.persistence.artifact_policy import ArtifactInstance
 from product_factory.persistence.database import Database
@@ -732,89 +724,27 @@ class RunLifecycleEngine:
                 raise BudgetExhaustedError("Run budget exhausted")
             ledger.check_wall_clock()
 
-            def _mark_task_started(task: TaskSpec) -> None:
-                self.db.upsert_task(
-                    run_id=run_id,
-                    task_id=task.id,
-                    capability=task.capability,
-                    status="running",
-                    spec=task.model_dump(mode="json"),
-                    started_at=datetime.now(UTC).isoformat(),
-                    active_operation=task.capability,
-                )
-                recorder.emit(
-                    run_id=run_id,
-                    event_type="task.started",
-                    task_id=task.id,
-                    summary=f"Task {task.id} started",
-                    payload={
-                        "task_id": task.id,
-                        "capability": task.capability,
-                        "title": task.title,
-                    },
-                )
-
-            def _before_dispatch(spent: Decimal = spent) -> None:
-                if spent >= request.budget.max_cost_usd:
-                    raise BudgetExhaustedError("Run budget exhausted before wave")
-                ledger.check_wall_clock()
-
-            def _run_one(
-                task: TaskSpec,
-                dependency_outputs: list[dict[str, Any]],
-                validation_evidence_refs: list[str] = validation_evidence_refs,
-                collected_validator_results: list[dict[str, Any]] = collected_validator_results,
-            ) -> TaskResult:
-                return self._execute_task(
-                    execution_context=execution_context,
+            advance = self.wave_execution.advance(
+                WaveAdvanceRequest(
+                    execution_session=execution_context,
                     request=request,
-                    task=task,
+                    plan=live_plan,
+                    task_status=task_status,
+                    prior_results=tuple(results),
+                    spent=spent,
                     worktrees=worktrees,
-                    original_repo=original_repo,
+                    original_repository=original_repo,
                     base_commit=base_commit,
-                    dependency_outputs=dependency_outputs,
                     land_map=land_map,
-                    composer_role=composer_roles.get(task.id),
-                    validation_evidence_refs=validation_evidence_refs,
-                    validator_results=collected_validator_results,
+                    composition_roles=composer_roles,
+                    validation_evidence_refs=tuple(validation_evidence_refs),
+                    validator_results=tuple(collected_validator_results),
                 )
-
-            # Execute wave: read-only tasks and predicted-disjoint writers run
-            # concurrently (bounded by max_parallel_tasks via WaveExecutionService);
-            # conflicting writers are serialized. Result processing below stays
-            # single-threaded and iterates `ready` (plan order) regardless of
-            # completion order, giving a deterministic merge order (P1.F).
-            cycle = self.wave_execution.run_wave_cycle(
-                plan=live_plan,
-                task_status=task_status,
-                max_parallel=request.budget.max_parallel_tasks,
-                prior_results=list(results),
-                artifacts=artifacts,
-                mark_task_started=_mark_task_started,
-                executor_fn=_run_one,
-                before_dispatch=_before_dispatch,
             )
-            ready = cycle.ready
-            wave_results = cycle.wave_results
-            if not ready:
-                if all(is_terminal_task_status(task_status[t]) for t in live_plan.tasks):
-                    break
-                # deadlock — diagnose terminal unsuccessful deps instead of
-                # reporting an opaque unsatisfiable-scheduler failure when
-                # dependents are blocked on partial/failed/blocked work.
-                pending = [t for t, s in task_status.items() if s == "pending"]
-                if pending:
-                    failed = [
-                        f"{result.task_id}: {result.summary}"
-                        for result in results
-                        if requires_repair_or_terminal_resolution(result.status)
-                    ]
-                    if failed:
-                        raise RuntimeFailureError("Dependency failed; " + "; ".join(failed))
-                    raise RuntimeFailureError(f"Unsatisfiable dependencies for tasks: {pending}")
+            if advance.finalization_eligible:
                 break
-
-            execution_context.cancel_check()
+            ready = advance.ready
+            wave_results = advance.wave_results
 
             for task, result in zip(ready, wave_results, strict=True):
                 usage = usage.merge(result.usage)
@@ -1421,109 +1351,6 @@ class RunLifecycleEngine:
 
     def _record_artifact_instance(self, instance: ArtifactInstance) -> None:
         self.db.record_artifact_instance(instance.model_dump(mode="json"))
-
-    def _execute_task(
-        self,
-        *,
-        execution_context: RunExecutionContext,
-        request: RunRequest,
-        task: TaskSpec,
-        worktrees: WorktreeManager | None,
-        original_repo: Path | None,
-        base_commit: str,
-        dependency_outputs: list[dict[str, Any]] | None = None,
-        land_map: ArtifactLandMap | None = None,
-        composer_role: str | None = None,
-        validation_evidence_refs: list[str] | None = None,
-        validator_results: list[dict[str, Any]] | None = None,
-    ) -> TaskResult:
-        """Prepare and dispatch one task; wave ownership persists its outcome."""
-
-        prepared = self.task_preparation.prepare(
-            TaskPreparationRequest(
-                execution_session=execution_context,
-                run_request=request,
-                task=task,
-                worktrees=worktrees,
-                original_repository=original_repo,
-                base_commit=base_commit,
-                dependency_outputs=tuple(dependency_outputs or ()),
-                land_map=land_map or ArtifactLandMap(),
-                composition_role=composer_role,
-                validation_evidence_refs=tuple(validation_evidence_refs or ()),
-                validator_results=tuple(validator_results or ()),
-            )
-        )
-        if isinstance(prepared, BlockedPreparation):
-            self.wave_execution.record_task_completion(
-                db=self.db,
-                run_id=execution_context.run_id,
-                task=task,
-                result=prepared.result,
-            )
-            return prepared.result
-
-        runtime_outcome = self.task_runtime.execute(
-            TaskRuntimeRequest(
-                prepared_task=prepared,
-                execution_session=execution_context,
-            )
-        )
-        result = runtime_outcome.result
-        if not result.evidence_refs:
-            result.evidence_refs = [
-                ResourceRef(
-                    id=f"context:{task.id}:{excerpt['path']}",
-                    resource_type="file",
-                    origin="task",
-                    scope=excerpt["path"],
-                    trust_level="mixed",
-                    content_hash=hashlib.sha256(excerpt["content"].encode()).hexdigest(),
-                )
-                for excerpt in prepared.repository_excerpts
-            ]
-        if not result.provider:
-            gateway = execution_context.gateway
-            result.provider = getattr(gateway, "default_model", type(gateway).__name__)
-        if not result.prompt_package_hash:
-            result.prompt_package_hash = prepared.prompt_package.package_hash
-
-        self.wave_execution.record_task_completion(
-            db=self.db,
-            run_id=execution_context.run_id,
-            task=task,
-            result=result,
-        )
-        for artifact in result.artifact_refs:
-            self.db.record_artifact(artifact.model_dump(mode="json"))
-            self._record_artifact_instance(
-                ArtifactInstance.create(
-                    run_id=execution_context.run_id,
-                    sha256=artifact.sha256,
-                    content_class="durable_output",
-                    capture_level=execution_context.recorder.capture_level,
-                    role=artifact.logical_name,
-                    producer_task_id=task.id,
-                    media_type=artifact.media_type,
-                    schema_id=artifact.schema_id,
-                    schema_version=artifact.schema_version,
-                    size_bytes=artifact.size_bytes,
-                    display_name=artifact.logical_name,
-                )
-            )
-            execution_context.recorder.emit(
-                run_id=execution_context.run_id,
-                event_type="artifact.created",
-                task_id=task.id,
-                summary=artifact.logical_name,
-                payload=artifact.model_dump(mode="json"),
-            )
-        for tool_call in runtime_outcome.tool_call_records:
-            self.db.record_tool_call(
-                run_id=execution_context.run_id,
-                record=tool_call.model_dump(mode="json"),
-            )
-        return result
 
     def _count_connector_invocations(self, run_id: str, *, connector_id: str) -> int:
         """How many successful connector.invoked events this run recorded for a provider."""

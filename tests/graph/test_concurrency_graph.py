@@ -26,8 +26,8 @@ from product_factory.domain.runs import RunRequest
 from product_factory.domain.tasks import AcceptanceCriterion, TaskSpec
 from product_factory.gateway.mock import MockGateway
 from product_factory.orchestration.coordinator import RunCoordinator
-from product_factory.orchestration.lifecycle import RunLifecycleEngine
 from product_factory.orchestration.planning import RunPlanningService
+from product_factory.orchestration.wave_execution import WaveExecutionService
 from tests.conftest import clone_fixture
 
 
@@ -132,7 +132,7 @@ def test_two_read_only_tasks_overlap_in_the_same_wave(tmp_path: Path, monkeypatc
         ),
     )
 
-    original_execute_task = RunLifecycleEngine._execute_task
+    original_execute_task = WaveExecutionService.execute_task
     delay_s = 0.15
 
     def slow_execute_task(self, *, task, **kwargs):  # type: ignore[no-untyped-def]
@@ -140,7 +140,7 @@ def test_two_read_only_tasks_overlap_in_the_same_wave(tmp_path: Path, monkeypatc
             time.sleep(delay_s)
         return original_execute_task(self, task=task, **kwargs)
 
-    monkeypatch.setattr(RunLifecycleEngine, "_execute_task", slow_execute_task)
+    monkeypatch.setattr(WaveExecutionService, "execute_task", slow_execute_task)
 
     request = RunRequest(
         request_id="req-concurrency-overlap",
