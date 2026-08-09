@@ -7,11 +7,12 @@ import json
 import re
 
 from product_factory.domain.plans import PlannerOutput
+from product_factory.orchestration.composition.input import CompositionInput
+from product_factory.orchestration.composition.service import CompositionService
 from product_factory.workflows.artifacts import ROLE_CHANGE_SET, ROLE_PROPOSED_PATCH
 from product_factory.workflows.default_plans import default_code_change_plan
 from product_factory.workflows.handlers.base import (
     AuthorityClass,
-    ComposeContext,
     EligibleNextAction,
 )
 
@@ -22,7 +23,9 @@ class RepositoryChangeHandler:
     def plan_template(self, request_text: str) -> PlannerOutput:
         return default_code_change_plan(request_text)
 
-    def compose(self, role: str, ctx: ComposeContext) -> str:
+    def compose(
+        self, role: str, ctx: CompositionInput, drafts: CompositionService | None = None
+    ) -> str:
         if role == ROLE_PROPOSED_PATCH:
             compose_fn = getattr(ctx, "compose_patch", None)
             if callable(compose_fn):

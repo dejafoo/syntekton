@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 
 from product_factory.domain.plans import PlannerOutput
+from product_factory.orchestration.composition.input import CompositionInput
+from product_factory.orchestration.composition.service import CompositionService
 from product_factory.workflows.artifacts import (
     ROLE_QUALITY_FINDINGS,
     ROLE_SECURITY_EVIDENCE,
@@ -14,7 +16,6 @@ from product_factory.workflows.artifacts import (
 from product_factory.workflows.default_plans import default_quality_gate_plan
 from product_factory.workflows.handlers.base import (
     AuthorityClass,
-    ComposeContext,
     EligibleNextAction,
 )
 from product_factory.workflows.quality_gate import (
@@ -29,22 +30,24 @@ class QualityGateHandler:
     def plan_template(self, request_text: str) -> PlannerOutput:
         return default_quality_gate_plan(request_text)
 
-    def compose(self, role: str, ctx: ComposeContext) -> str:
+    def compose(
+        self, role: str, ctx: CompositionInput, drafts: CompositionService | None = None
+    ) -> str:
         if role == ROLE_VERIFICATION_REPORT:
             return self._compose_verification_report(ctx)
-        if not callable(ctx.compose_quality_document):
+        if drafts is None:
             raise RuntimeError(f"quality_gate compose requires compose_quality_document for {role}")
         return str(
-            ctx.compose_quality_document(
+            drafts.compose_quality_document(
                 role=role,
                 request=ctx.request,
-                dependency_outputs=ctx.dependency_outputs,
+                dependency_outputs=list(ctx.dependency_outputs),
                 document_name=ctx.document_name,
             )
         )
 
     @staticmethod
-    def _compose_verification_report(ctx: ComposeContext) -> str:
+    def _compose_verification_report(ctx: CompositionInput) -> str:
         change_set = ctx.pack_input.get("change_set") or {}
         acceptance_refs = [
             str(value)

@@ -6,7 +6,6 @@ from typing import Any
 
 from product_factory.domain.errors import ConfigurationError
 from product_factory.workflows.handlers.base import (
-    ComposeContext,
     EligibleNextAction,
     PackHandler,
     validate_handler_authority,
@@ -95,7 +94,6 @@ def eligible_next_actions_for_workflow(
 
 
 __all__ = [
-    "ComposeContext",
     "EligibleNextAction",
     "PackHandler",
     "eligible_next_actions_for_workflow",

@@ -64,13 +64,15 @@ def test_fhir_domain_composition_escalates_and_stays_read_only(tmp_path: Path) -
     ).read_text(encoding="utf-8")
     assert "needs_expert_review" in dossier
     assert "compliant" not in dossier.lower()
-    tool_names = {row["tool_name"] for row in coord.db.list_tool_calls(manifest.run_id)}
+    tool_names = {
+        row["tool_name"] for row in coord.queries.database.list_tool_calls(manifest.run_id)
+    }
     assert "create_file" not in tool_names
     assert "apply_patch" not in tool_names
     assert "start_deployment" not in tool_names
     assert "rollback_deployment" not in tool_names
 
-    tasks = coord.db.list_tasks(manifest.run_id)
+    tasks = coord.queries.database.list_tasks(manifest.run_id)
     policies = [
         json.loads(row["effective_policy_json"])
         for row in tasks

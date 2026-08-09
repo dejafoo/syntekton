@@ -11,24 +11,19 @@ from product_factory.executors.protocol import (
     attach_receipt,
 )
 from product_factory.gateway.mock import MockGateway
-from product_factory.orchestration.composition.input import composition_input_from_compose_context
+from product_factory.orchestration.composition.input import CompositionInput
 from product_factory.orchestration.repair import patch_fingerprint
 from product_factory.repositories.patches import create_patch
 from product_factory.schemas.builtin import ROLE_TO_SCHEMA
 from product_factory.workflows.artifacts import (
     ROLE_CHANGE_BRIEF,
-    ROLE_CHANGE_SET,
     ROLE_CLARIFICATION_REQUEST,
-    ROLE_DEPLOYMENT_RECORD,
     ROLE_FEASIBILITY_DOSSIER,
     ROLE_PROPOSED_PATCH,
     ROLE_QUALITY_FINDINGS,
     ROLE_SECURITY_EVIDENCE,
     ROLE_TEST_PLAN,
-    ROLE_VERIFICATION_REPORT,
 )
-from product_factory.workflows.handlers import handler_for
-from product_factory.workflows.handlers.base import ComposeContext
 from product_factory.workflows.registry import is_registered_workflow
 
 # SD1 temporary: compose role fallbacks until land_map owns all defaults
@@ -75,71 +70,37 @@ class CompositionExecutor:
             and composer_role != ROLE_PROPOSED_PATCH
             and land_map is not None
         ):
-            handler = handler_for(run_request.workflow_type)
             document_name = land_map.logical_name_for(
                 composer_role,
                 default=_QUALITY_GATE_ROLES.get(composer_role, f"{composer_role}.md"),
             )
             use_mock = isinstance(request.raw_gateway, MockGateway)
-            gen_usage_box: list[UsageMetrics] = []
             composition = request.composition
             if composition is None:
                 raise RuntimeError("composition executor requires CompositionService")
-
-            def _generate() -> tuple[str, UsageMetrics]:
-                text, usage = composition.generate_architecture_document(
-                    request=run_request,
-                    task=task,
-                    ctx_messages=request.ctx_messages,
-                    run_id=request.run_id,
-                    profile=profile,
-                    dependency_outputs=dependency_outputs,
-                    document_name=document_name,
-                    gateway=request.gateway,
-                )
-                gen_usage_box.append(usage)
-                return text, usage
-
-            compose_ctx = ComposeContext(
+            composition_input = CompositionInput(
                 request=run_request,
                 role=composer_role,
                 document_name=document_name,
-                findings=task_findings,
-                dependency_outputs=dependency_outputs,
+                findings=tuple(task_findings),
+                dependency_outputs=tuple(dependency_outputs),
                 use_mock=use_mock,
-                composition=composition,
-                generate_architecture=_generate if not use_mock else None,
-                compose_architecture=composition.compose_architecture,
-                compose_evidence_report=composition.compose_evidence_report,
-                compose_feasibility_dossier=composition.compose_feasibility_dossier,
-                compose_change_intake=composition.compose_change_intake,
-                compose_quality_document=composition.compose_quality_document,
                 task=task,
-                ctx_messages=request.ctx_messages,
+                gateway=request.gateway,
+                context_messages=tuple(request.ctx_messages),
                 run_id=request.run_id,
                 profile=profile,
                 base_revision=base_commit,
-                validation_evidence_refs=validation_evidence_refs,
-                validator_results=validator_results,
+                validation_evidence_refs=tuple(validation_evidence_refs),
+                validator_results=tuple(validator_results),
             )
-            compose_ctx.composition_input = composition_input_from_compose_context(compose_ctx)
-            document = handler.compose(composer_role, compose_ctx)
-            if gen_usage_box:
-                model_usage = model_usage.merge(gen_usage_box[0])
+            composed = composition.compose(composition_input)
+            document = composed.body
+            model_usage = model_usage.merge(composed.usage)
             schema_id = ROLE_TO_SCHEMA.get(composer_role)
-            media_type = (
-                "application/json"
-                if composer_role
-                in {
-                    ROLE_CHANGE_SET,
-                    ROLE_DEPLOYMENT_RECORD,
-                    ROLE_VERIFICATION_REPORT,
-                }
-                else "text/markdown"
-            )
             art = artifacts.put_text(
                 document,
-                media_type=media_type,
+                media_type=composed.media_type,
                 logical_name=document_name,
                 created_by_task_id=task.id,
                 schema_id=schema_id,

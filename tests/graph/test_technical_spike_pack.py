@@ -73,7 +73,7 @@ def test_mock_technical_spike_uses_data_dir_scratch_and_emits_result(tmp_path: P
         "contract_simulation.v1",
     }
     assert payload["limits"]
-    tool_calls = coordinator.db.list_tool_calls(manifest.run_id)
+    tool_calls = coordinator.queries.database.list_tool_calls(manifest.run_id)
     assert {"contract_inventory", "generate_synthetic_fixture", "run_contract_simulation"} <= {
         row["tool_name"] for row in tool_calls
     }

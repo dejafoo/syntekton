@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 
 from product_factory.domain.plans import PlannerOutput
+from product_factory.orchestration.composition.input import CompositionInput
+from product_factory.orchestration.composition.service import CompositionService
 from product_factory.schemas import validate_write_payload
 from product_factory.workflows.artifacts import ROLE_SPIKE_RESULT
 from product_factory.workflows.default_plans import default_technical_spike_plan
 from product_factory.workflows.handlers.base import (
     AuthorityClass,
-    ComposeContext,
     EligibleNextAction,
 )
 
@@ -23,7 +24,9 @@ class TechnicalSpikeHandler:
     def plan_template(self, request_text: str) -> PlannerOutput:
         return default_technical_spike_plan(request_text)
 
-    def compose(self, role: str, ctx: ComposeContext) -> str:
+    def compose(
+        self, role: str, ctx: CompositionInput, drafts: CompositionService | None = None
+    ) -> str:
         if role != ROLE_SPIKE_RESULT:
             raise RuntimeError(f"technical_spike does not compose role {role!r}")
         typed_refs: list[dict[str, str]] = []

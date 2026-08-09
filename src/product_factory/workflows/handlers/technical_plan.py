@@ -5,12 +5,13 @@ from __future__ import annotations
 import re
 
 from product_factory.domain.plans import PlannerOutput
+from product_factory.orchestration.composition.input import CompositionInput
+from product_factory.orchestration.composition.service import CompositionService
 from product_factory.validation.pipeline import TECHNICAL_PLAN_REQUIRED_SECTIONS
 from product_factory.workflows.artifacts import ROLE_ARCHITECTURE_DOCUMENT
 from product_factory.workflows.default_plans import default_technical_plan
 from product_factory.workflows.handlers.base import (
     AuthorityClass,
-    ComposeContext,
     EligibleNextAction,
 )
 
@@ -35,7 +36,7 @@ def _section_bullets(markdown: str, heading: str) -> list[str]:
     ]
 
 
-def _ensure_v2_contract(markdown: str, ctx: ComposeContext) -> str:
+def _ensure_v2_contract(markdown: str, ctx: CompositionInput) -> str:
     acceptance = _section_bullets(markdown, "Acceptance criteria")
     if not acceptance:
         acceptance = ["Deliver the outcome defined by the pinned ChangeBrief."]
@@ -111,19 +112,20 @@ class TechnicalPlanHandler:
     def plan_template(self, request_text: str) -> PlannerOutput:
         return default_technical_plan(request_text)
 
-    def compose(self, role: str, ctx: ComposeContext) -> str:
+    def compose(
+        self, role: str, ctx: CompositionInput, drafts: CompositionService | None = None
+    ) -> str:
         if role != ROLE_ARCHITECTURE_DOCUMENT:
             raise RuntimeError(f"technical_plan does not compose role {role!r}")
-        if ctx.generate_architecture is not None and not ctx.use_mock:
-            text, _usage = ctx.generate_architecture()
-            return _ensure_v2_contract(str(text), ctx)
-        if not callable(ctx.compose_architecture):
+        if ctx.generated_document is not None and not ctx.use_mock:
+            return _ensure_v2_contract(ctx.generated_document, ctx)
+        if drafts is None:
             raise RuntimeError("technical_plan compose requires compose_architecture")
         return _ensure_v2_contract(
             str(
-                ctx.compose_architecture(
+                drafts.compose_architecture(
                     ctx.request.request_text,
-                    ctx.findings,
+                    list(ctx.findings),
                     document_name=ctx.document_name,
                 )
             ),

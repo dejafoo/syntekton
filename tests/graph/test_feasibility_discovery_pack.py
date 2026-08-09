@@ -70,7 +70,9 @@ def test_mock_discovery_lands_feasibility_dossier(tmp_path: Path) -> None:
     assert validate_option_comparison(dossier).status == "pass"
     assert validate_recommendation(dossier).status == "pass"
 
-    tool_names = {row["tool_name"] for row in coord.db.list_tool_calls(manifest.run_id)}
+    tool_names = {
+        row["tool_name"] for row in coord.queries.database.list_tool_calls(manifest.run_id)
+    }
     assert "create_file" not in tool_names
     assert "apply_patch" not in tool_names
     assert "run_validation_command" not in tool_names
@@ -131,7 +133,9 @@ def test_regulated_discovery_escalates(tmp_path: Path) -> None:
     ).read_text(encoding="utf-8")
     assert "needs_expert_review" in dossier.lower()
     assert "expert review:" in dossier.lower()
-    policy = resolve_source_policy("regulated-domain", profiles_root=coord.config.root / "profiles")
+    policy = resolve_source_policy(
+        "regulated-domain", profiles_root=coord.queries.config.root / "profiles"
+    )
     assert validate_regulated_claims(dossier, policy=policy).status == "pass"
 
 

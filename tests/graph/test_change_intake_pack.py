@@ -49,7 +49,9 @@ def test_ambiguous_request_lands_clarification(tmp_path: Path) -> None:
     assert not (output / "CHANGE_BRIEF.md").exists()
     body = clarification.read_text(encoding="utf-8")
     assert validate_intake_sections(body, role=ROLE_CLARIFICATION_REQUEST).status == "pass"
-    tool_names = {row["tool_name"] for row in coord.db.list_tool_calls(manifest.run_id)}
+    tool_names = {
+        row["tool_name"] for row in coord.queries.database.list_tool_calls(manifest.run_id)
+    }
     assert "create_file" not in tool_names
     assert "apply_patch" not in tool_names
     assert "run_validation_command" not in tool_names

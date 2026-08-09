@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from product_factory.domain.plans import PlannerOutput
+from product_factory.orchestration.composition.input import CompositionInput
+from product_factory.orchestration.composition.service import CompositionService
 from product_factory.validation.pipeline import FEASIBILITY_REQUIRED_SECTIONS
 from product_factory.workflows.artifacts import ROLE_FEASIBILITY_DOSSIER
 from product_factory.workflows.default_plans import default_feasibility_discovery_plan
 from product_factory.workflows.handlers.base import (
     AuthorityClass,
-    ComposeContext,
     EligibleNextAction,
 )
 
@@ -19,16 +20,18 @@ class FeasibilityDiscoveryHandler:
     def plan_template(self, request_text: str) -> PlannerOutput:
         return default_feasibility_discovery_plan(request_text)
 
-    def compose(self, role: str, ctx: ComposeContext) -> str:
+    def compose(
+        self, role: str, ctx: CompositionInput, drafts: CompositionService | None = None
+    ) -> str:
         if role != ROLE_FEASIBILITY_DOSSIER:
             raise RuntimeError(f"feasibility_discovery does not compose role {role!r}")
-        if not callable(ctx.compose_feasibility_dossier):
+        if drafts is None:
             raise RuntimeError("feasibility_discovery compose requires compose_feasibility_dossier")
         return str(
-            ctx.compose_feasibility_dossier(
+            drafts.compose_feasibility_dossier(
                 ctx.request,
-                findings=ctx.findings,
-                dependency_outputs=ctx.dependency_outputs,
+                findings=list(ctx.findings),
+                dependency_outputs=list(ctx.dependency_outputs),
                 document_name=ctx.document_name,
             )
         )
