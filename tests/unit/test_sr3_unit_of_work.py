@@ -254,7 +254,7 @@ def test_wave_execution_production_path_uses_unit_of_work() -> None:
     assert "unit_of_work" in wave_source
     assert "complete_task_with_event" in wave_source
     assert "record_task_completion" in wave_source
-    assert "record_task_completion" in engine_source
+    assert ".record_task_completion(" not in engine_source
     assert "admit_run_with_events" in host_source
 
     wave_tree = ast.parse(wave_source)
@@ -311,4 +311,99 @@ def test_wave_execution_record_task_completion_uses_uow(tmp_path: Path) -> None:
     events = db.list_events(run_id=run_id, types=["task.completed"])
     assert len(events) == 1
     assert events[0]["task_id"] == "t1"
+    db.close()
+
+
+def test_attempt_and_budget_settlement_is_atomic(tmp_path: Path) -> None:
+    db = Database(tmp_path / "r4.sqlite")
+    run_id = "run-attempt"
+    task_id = "task-1"
+    db.upsert_run(run_id=run_id, workflow_type="repository_change", status="executing", request={})
+    uow = db.unit_of_work()
+    uow.start_task_with_event(
+        run_id=run_id,
+        task_id=task_id,
+        capability="implementation",
+        spec={"dependencies": []},
+        attempt_id="attempt-1",
+        attempt_number=1,
+        idempotency_key="run-attempt:task-1:1",
+        reserved_cost_usd="1.00",
+        event=_event(run_id=run_id, task_id=task_id, event_type="task.started"),
+    )
+    uow.settle_task_attempt_with_event(
+        run_id=run_id,
+        task_id=task_id,
+        capability="implementation",
+        spec={"dependencies": []},
+        result={"status": "success", "summary": "done"},
+        attempt_id="attempt-1",
+        settled_cost_usd="0.25",
+        tool_receipts=[{"tool_call_id": "tc-1"}],
+        event=_event(run_id=run_id, task_id=task_id, event_type="task.completed"),
+    )
+    attempt = db.conn.execute(
+        "SELECT state, tool_receipts_json FROM task_attempts WHERE attempt_id='attempt-1'"
+    ).fetchone()
+    reservation = db.conn.execute(
+        "SELECT state, settled_cost_usd FROM budget_reservations WHERE attempt_id='attempt-1'"
+    ).fetchone()
+    assert dict(attempt)["state"] == "completed"
+    assert dict(reservation) == {"state": "settled", "settled_cost_usd": "0.25"}
+    assert [row["event_type"] for row in db.list_events(run_id=run_id)] == [
+        "task.started",
+        "task.completed",
+    ]
+    db.close()
+
+
+def test_attempt_settlement_rolls_back_after_event_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = Database(tmp_path / "r4-fault.sqlite")
+    run_id = "run-attempt-fault"
+    task_id = "task-1"
+    db.upsert_run(run_id=run_id, workflow_type="repository_change", status="executing", request={})
+    uow = db.unit_of_work()
+    uow.start_task_with_event(
+        run_id=run_id,
+        task_id=task_id,
+        capability="implementation",
+        spec={"dependencies": []},
+        attempt_id="attempt-fault",
+        attempt_number=1,
+        idempotency_key="run-attempt-fault:task-1:1",
+        reserved_cost_usd="1.00",
+        event=_event(run_id=run_id, task_id=task_id, event_type="task.started"),
+    )
+    monkeypatch.setattr(
+        db.events,
+        "append_event",
+        lambda event: (_ for _ in ()).throw(RuntimeError("event fault")),
+    )
+    with pytest.raises(RuntimeError, match="event fault"):
+        uow.settle_task_attempt_with_event(
+            run_id=run_id,
+            task_id=task_id,
+            capability="implementation",
+            spec={"dependencies": []},
+            result={"status": "success"},
+            attempt_id="attempt-fault",
+            settled_cost_usd="0.25",
+            tool_receipts=[],
+            event=_event(run_id=run_id, task_id=task_id, event_type="task.completed"),
+        )
+    assert db.get_task(run_id, task_id)["status"] == "running"
+    assert (
+        db.conn.execute(
+            "SELECT state FROM task_attempts WHERE attempt_id='attempt-fault'"
+        ).fetchone()[0]
+        == "started"
+    )
+    assert (
+        db.conn.execute(
+            "SELECT state FROM budget_reservations WHERE attempt_id='attempt-fault'"
+        ).fetchone()[0]
+        == "reserved"
+    )
     db.close()
