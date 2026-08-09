@@ -14,12 +14,10 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from product_factory.application.composition_root import (
-    ApplicationServices,
-    build_application,
-)
 from product_factory.config.loader import AppConfig
 from product_factory.connectors.broker import EVENT_INVOKED as CONNECTOR_EVENT_INVOKED
+from product_factory.connectors.broker import ConnectorBroker
+from product_factory.connectors.registry import ConnectorRegistry
 from product_factory.connectors.source_ledger import SourceLedger
 from product_factory.connectors.tavily import CONNECTOR_ID as TAVILY_CONNECTOR_ID
 from product_factory.context.assembler import (
@@ -62,23 +60,33 @@ from product_factory.observability.otel import maybe_create_otel_bridge
 from product_factory.observability.recorder import TelemetryRecorder
 from product_factory.orchestration.budget_ledger import BudgetLedger, warn_unused_profile_set
 from product_factory.orchestration.composition.input import composition_input_from_compose_context
+from product_factory.orchestration.composition.service import CompositionService
 from product_factory.orchestration.effective_policy import (
     EFFECTIVE_TASK_POLICY_SCHEMA,
 )
 from product_factory.orchestration.execution_context import RunExecutionContext
+from product_factory.orchestration.finalization.run_finalizer import RunFinalizer
 from product_factory.orchestration.repair import (
     create_repair_tasks,
     patch_fingerprint,
     should_terminate_no_progress,
     update_no_progress,
 )
-from product_factory.orchestration.task_preparation import BlockedPreparation
+from product_factory.orchestration.task_preparation import (
+    BlockedPreparation,
+    TaskPreparationService,
+)
+from product_factory.orchestration.task_runtime import TaskRuntimeService
 from product_factory.orchestration.validation_repair.service import (
+    ValidationRepairService,
     changed_files_from_patch,
     resolve_validation_command_ids,
 )
+from product_factory.orchestration.wave_execution import WaveExecutionService
+from product_factory.orchestration.worktree_lineage import WorktreeLineageService
 from product_factory.persistence.artifact_policy import ArtifactInstance
 from product_factory.persistence.artifacts import ArtifactStore
+from product_factory.persistence.database import Database
 from product_factory.planning.compiler import compile_plan
 from product_factory.planning.planner import plan_with_gateway
 from product_factory.policy.domain_packs import resolve_request_domain_packs
@@ -96,6 +104,8 @@ from product_factory.repositories.worktrees import WorktreeManager
 from product_factory.repository.stack_profile import StackProfile, discover_stack_profile
 from product_factory.schemas import validate_write_payload
 from product_factory.skills.profiles import ProfileRegistry
+from product_factory.skills.registry import SkillRegistry
+from product_factory.tools.registry import ToolRegistry
 from product_factory.validation.pipeline import (
     has_blocking_failures,
     request_expects_web_citations,
@@ -241,41 +251,40 @@ class RunLifecycleEngine:
         self,
         *,
         config: AppConfig,
-        gateway: ModelGateway,
-        data_dir: Path | None = None,
-        use_deterministic_planner: bool = False,
-        services: ApplicationServices | None = None,
+        pf_root: Path,
+        db: Database,
+        skills: SkillRegistry,
+        tool_registry: ToolRegistry,
+        connector_registry: ConnectorRegistry,
+        connector_broker: ConnectorBroker,
+        raw_gateway: ModelGateway,
+        composition: CompositionService,
+        validation_repair: ValidationRepairService,
+        worktree_lineage: WorktreeLineageService,
+        finalizer: RunFinalizer,
+        task_preparation: TaskPreparationService,
+        task_runtime: TaskRuntimeService,
+        wave_execution: WaveExecutionService,
+        allow_deterministic_workers: bool,
+        use_deterministic_planner: bool,
     ) -> None:
-        # SR2: dependency construction lives in the composition root.
-        app = services or build_application(
-            config=config,
-            gateway=gateway,
-            data_dir=data_dir,
-            use_deterministic_planner=use_deterministic_planner,
-        )
-        self._services = app
-        self.config = app.config
-        self.allow_deterministic_workers = app.allow_deterministic_workers
-        self.use_deterministic_planner = app.use_deterministic_planner
-        self.pf_root = app.pf_root
-        self.db = app.db
-        self.skills = app.skills
-        self.tool_registry = app.tool_registry
-        self.connector_registry = app.connector_registry
-        self.connector_broker = app.connector_broker
-        self._raw_gateway = app.raw_gateway
-        self.composition = app.composition
-        self.validation_repair = app.validation_repair
-        self.wave_scheduler = app.wave_scheduler
-        self.worktree_lineage = app.worktree_lineage
-        self.finalizer = app.finalizer
-        self.task_preparation = app.task_preparation
-        self.task_runtime = app.task_runtime
-        self.wave_execution = app.wave_execution
-        # Bind command facade after the engine exists (composition root builds it unbound).
-        app.lifecycle = self
-        app.commands.bind(self)
-        self.commands = app.commands
+        self.config = config
+        self.allow_deterministic_workers = allow_deterministic_workers
+        self.use_deterministic_planner = use_deterministic_planner
+        self.pf_root = pf_root
+        self.db = db
+        self.skills = skills
+        self.tool_registry = tool_registry
+        self.connector_registry = connector_registry
+        self.connector_broker = connector_broker
+        self._raw_gateway = raw_gateway
+        self.composition = composition
+        self.validation_repair = validation_repair
+        self.worktree_lineage = worktree_lineage
+        self.finalizer = finalizer
+        self.task_preparation = task_preparation
+        self.task_runtime = task_runtime
+        self.wave_execution = wave_execution
 
     def _build_execution_context(
         self,

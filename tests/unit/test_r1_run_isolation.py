@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import load_config
 from product_factory.connectors.broker import ConnectorBroker
 from product_factory.connectors.manifest import ConnectorManifest, ConnectorToolSpec
@@ -109,7 +110,7 @@ def _response(
 
 def _coordinator(tmp_path: Path, gateway: ModelGateway) -> RunCoordinator:
     root = Path(__file__).resolve().parents[2]
-    return RunCoordinator(
+    return build_coordinator(
         config=load_config(root),
         gateway=gateway,
         data_dir=tmp_path / ".product-factory",

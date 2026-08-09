@@ -1,17 +1,21 @@
-"""Composition root — construct application dependencies (SR2).
-
-``RunLifecycleEngine`` sequences named owners; it must not construct brokers,
-registries, or lifecycle services inline. Call ``build_application`` once and
-inject the resulting ``ApplicationServices``.
-"""
+"""The sole production composition root for Product Factory."""
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from product_factory.application.command_service import LifecycleCommandService
+from product_factory.application.ports import RunLifecyclePort
+from product_factory.application.services import (
+    ApplicationMetadata,
+    ApplicationQueryService,
+    ApplicationShutdownService,
+    RunWorkerBackend,
+    RunWorkerService,
+)
 from product_factory.config.loader import AppConfig
 from product_factory.connectors.broker import ConnectorBroker
 from product_factory.connectors.defaults import default_connector_registry
@@ -21,6 +25,7 @@ from product_factory.gateway.instrumented import InstrumentedModelGateway
 from product_factory.gateway.mock import MockGateway
 from product_factory.orchestration.composition.service import CompositionService
 from product_factory.orchestration.finalization.run_finalizer import RunFinalizer
+from product_factory.orchestration.lifecycle.engine import RunLifecycleEngine
 from product_factory.orchestration.task_preparation import TaskPreparationService
 from product_factory.orchestration.task_runtime import TaskRuntimeService
 from product_factory.orchestration.validation_repair.service import ValidationRepairService
@@ -31,33 +36,23 @@ from product_factory.persistence.database import Database
 from product_factory.scheduling.scheduler import WaveScheduler
 from product_factory.skills.registry import SkillRegistry
 from product_factory.tools.registry import ToolRegistry, default_tool_registry
+from product_factory.workers.supervisor import WorkerSupervisor
 
 
-@dataclass(slots=True)
-class ApplicationServices:
-    """Typed dependency graph constructed by the composition root."""
+@dataclass(frozen=True, slots=True)
+class ProductFactoryApplication:
+    """Complete immutable application surface shared by all host adapters."""
 
-    config: AppConfig
-    pf_root: Path
-    db: Database
-    skills: SkillRegistry
-    tool_registry: ToolRegistry
-    connector_registry: ConnectorRegistry
-    connector_broker: ConnectorBroker
-    raw_gateway: ModelGateway
-    composition: CompositionService
-    validation_repair: ValidationRepairService
-    wave_scheduler: WaveScheduler
-    worktree_lineage: WorktreeLineageService
-    finalizer: RunFinalizer
-    task_preparation: TaskPreparationService
-    task_runtime: TaskRuntimeService
-    wave_execution: WaveExecutionService
     commands: LifecycleCommandService
-    allow_deterministic_workers: bool = False
-    use_deterministic_planner: bool = False
-    # Bound by RunLifecycleEngine after construction (avoids circular init).
-    lifecycle: Any | None = None
+    queries: ApplicationQueryService
+    workers: RunWorkerService
+    lifecycle: RunLifecyclePort
+    shutdown: ApplicationShutdownService
+    metadata: ApplicationMetadata
+
+
+# Compatibility name for callers that imported the incomplete SR2 container.
+ApplicationServices = ProductFactoryApplication
 
 
 def build_application(
@@ -66,33 +61,31 @@ def build_application(
     gateway: ModelGateway,
     data_dir: Path | None = None,
     use_deterministic_planner: bool = False,
-) -> ApplicationServices:
-    """Construct the application dependency graph formerly built in engine.__init__."""
+) -> ProductFactoryApplication:
+    """Construct every concrete production dependency exactly once."""
 
     allow_deterministic_workers = isinstance(gateway, MockGateway)
     deterministic_planner = use_deterministic_planner or isinstance(gateway, MockGateway)
     pf_root = data_dir or (config.root / ".product-factory")
     pf_root.mkdir(parents=True, exist_ok=True)
-    db = Database(pf_root / "data" / "product_factory.sqlite")
+
+    database = Database(pf_root / "data" / "product_factory.sqlite")
     skills = SkillRegistry.load(config.root / "skills")
-    tool_registry = default_tool_registry()
-    connector_registry = default_connector_registry(
+    tool_registry: ToolRegistry = default_tool_registry()
+    connector_registry: ConnectorRegistry = default_connector_registry(
         config.connectors,
         config_root=config.root,
         deployment_state_path=pf_root / "deployments" / "staging-state.json",
     )
-    # Connector tools share the one registry so ToolBroker.execute resolves
-    # and trust-labels them exactly like built-in tools.
     for definition in connector_registry.tool_definitions():
         tool_registry.register(definition)
     connector_broker = ConnectorBroker(
         connector_registry,
         config=config.connectors,
-        mock=isinstance(gateway, MockGateway),
+        mock=allow_deterministic_workers,
     )
-    # The provider adapter is immutable shared configuration. Instrumented
-    # gateways are constructed per run and live only in RunExecutionContext.
     raw_gateway = gateway.inner if isinstance(gateway, InstrumentedModelGateway) else gateway
+
     composition = CompositionService(config=config, gateway=raw_gateway)
     validation_repair = ValidationRepairService(config=config, raw_gateway=raw_gateway)
     wave_scheduler = WaveScheduler()
@@ -106,10 +99,10 @@ def build_application(
         connector_broker=connector_broker,
     )
 
-    def _record_artifact_instance(instance: ArtifactInstance) -> None:
-        db.record_artifact_instance(instance.model_dump(mode="json"))
+    def record_artifact_instance(instance: ArtifactInstance) -> None:
+        database.record_artifact_instance(instance.model_dump(mode="json"))
 
-    def _approval_verify(
+    def approval_verify(
         request: Any,
         *,
         consumer_run_id: str,
@@ -118,7 +111,7 @@ def build_application(
         from product_factory.trust.approvals import verify_deployment_action_approval
 
         return verify_deployment_action_approval(
-            db,
+            database,
             request,
             consumer_run_id=consumer_run_id,
             capability=capability,
@@ -132,15 +125,15 @@ def build_application(
         task_preparation=task_preparation,
         raw_gateway=raw_gateway,
         allow_deterministic_workers=allow_deterministic_workers,
-        on_artifact_instance=_record_artifact_instance,
-        approval_verify=_approval_verify,
+        on_artifact_instance=record_artifact_instance,
+        approval_verify=approval_verify,
     )
     wave_execution = WaveExecutionService(wave_scheduler=wave_scheduler)
-    commands = LifecycleCommandService()
-    return ApplicationServices(
+
+    lifecycle = RunLifecycleEngine(
         config=config,
         pf_root=pf_root,
-        db=db,
+        db=database,
         skills=skills,
         tool_registry=tool_registry,
         connector_registry=connector_registry,
@@ -148,13 +141,91 @@ def build_application(
         raw_gateway=raw_gateway,
         composition=composition,
         validation_repair=validation_repair,
-        wave_scheduler=wave_scheduler,
         worktree_lineage=worktree_lineage,
         finalizer=finalizer,
         task_preparation=task_preparation,
         task_runtime=task_runtime,
         wave_execution=wave_execution,
-        commands=commands,
         allow_deterministic_workers=allow_deterministic_workers,
         use_deterministic_planner=deterministic_planner,
+    )
+    commands = LifecycleCommandService(lifecycle=lifecycle)
+    queries = ApplicationQueryService(database, data_root=pf_root, config=config)
+    worker_backend = RunWorkerBackend(
+        config=config,
+        gateway=raw_gateway,
+        data_root=pf_root,
+        database=database,
+        commands=commands,
+    )
+    supervisor = WorkerSupervisor(
+        db=database,
+        execute=worker_backend.execute,
+        resume=commands.resume,
+        worktree_key=worker_backend.worktree_key,
+        on_error=worker_backend.on_error,
+        lease_ttl_seconds=float(os.environ.get("PRODUCT_FACTORY_WORKER_LEASE_TTL", "30")),
+        heartbeat_seconds=float(os.environ.get("PRODUCT_FACTORY_WORKER_HEARTBEAT_SECONDS", "10")),
+        scan_seconds=float(os.environ.get("PRODUCT_FACTORY_WORKER_SCAN_SECONDS", "5")),
+    )
+    workers = RunWorkerService(backend=worker_backend, supervisor=supervisor)
+    shutdown = ApplicationShutdownService(workers=workers, database=database)
+    metadata = ApplicationMetadata(
+        data_root=pf_root,
+        configuration_root=config.root,
+        deterministic_planner=deterministic_planner,
+        deterministic_workers=allow_deterministic_workers,
+    )
+    return ProductFactoryApplication(
+        commands=commands,
+        queries=queries,
+        workers=workers,
+        lifecycle=lifecycle,
+        shutdown=shutdown,
+        metadata=metadata,
+    )
+
+
+def build_host_service(
+    *,
+    config: AppConfig,
+    gateway: ModelGateway,
+    data_dir: Path | None = None,
+    use_deterministic_planner: bool = False,
+    observe_base_url: str | None = None,
+):
+    """Construct the host adapter from the one completed application."""
+
+    from product_factory.host.service import HostService
+
+    application = build_application(
+        config=config,
+        gateway=gateway,
+        data_dir=data_dir,
+        use_deterministic_planner=use_deterministic_planner,
+    )
+    return HostService(application=application, observe_base_url=observe_base_url)
+
+
+def build_coordinator(
+    *,
+    config: AppConfig,
+    gateway: ModelGateway,
+    data_dir: Path | None = None,
+    use_deterministic_planner: bool = False,
+):
+    """Build the legacy coordinator adapter from the application root."""
+
+    from product_factory.orchestration.coordinator import RunCoordinator
+
+    application = build_application(
+        config=config,
+        gateway=gateway,
+        data_dir=data_dir,
+        use_deterministic_planner=use_deterministic_planner,
+    )
+    return RunCoordinator(
+        lifecycle=application.lifecycle,
+        commands=application.commands,
+        queries=application.queries,
     )

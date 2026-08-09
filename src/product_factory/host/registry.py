@@ -11,6 +11,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from product_factory.application.composition_root import build_host_service
 from product_factory.config.loader import AppConfig
 from product_factory.gateway.base import ModelGateway
 from product_factory.gateway.factory import gateway_from_config
@@ -65,7 +66,7 @@ def get_host_service(
             if use_deterministic_planner is not None
             else (want_mock or isinstance(gateway, MockGateway))
         )
-        service = HostService(
+        service = build_host_service(
             config=config,
             gateway=gateway,
             data_dir=root,
@@ -106,7 +107,7 @@ def host_service_snapshot() -> dict[str, Any]:
     with _LOCK:
         return {
             str(root): {
-                "mock": isinstance(svc.gateway, MockGateway) or svc.use_deterministic_planner,
+                "mock": svc.application.metadata.deterministic_workers,
                 "observe_base_url": svc.observe_base_url,
             }
             for root, svc in _SERVICES.items()

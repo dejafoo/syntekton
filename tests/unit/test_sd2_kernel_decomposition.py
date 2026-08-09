@@ -9,13 +9,13 @@ from pathlib import Path
 
 import pytest
 
+from product_factory.application import build_host_service
 from product_factory.config.loader import load_config
 from product_factory.domain.budgets import TaskBudget
 from product_factory.domain.plans import CompiledPlan
 from product_factory.domain.runs import RunRequest
 from product_factory.domain.tasks import AcceptanceCriterion, TaskSpec
 from product_factory.gateway.mock import MockGateway
-from product_factory.host.service import HostService
 from product_factory.orchestration.composition import CompositionService
 from product_factory.orchestration.finalization import RunFinalizer
 from product_factory.orchestration.lifecycle import RunLifecycleEngine
@@ -218,7 +218,7 @@ def test_fixture_pack_submits_via_public_host_api(tmp_path: Path) -> None:
     )
 
     config = load_config()
-    host = HostService(
+    host = build_host_service(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / "pf",

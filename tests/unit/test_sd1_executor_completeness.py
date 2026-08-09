@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import load_config
 from product_factory.connectors.policy import ConnectorSettings
 from product_factory.domain.budgets import RunBudget
@@ -31,7 +32,7 @@ def _coord(tmp_path: Path, *, enable: tuple[str, ...] = ()) -> RunCoordinator:
         config = config.model_copy(
             update={"connectors": config.connectors.model_copy(update={"connectors": settings})}
         )
-    return RunCoordinator(
+    return build_coordinator(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",

@@ -6,6 +6,7 @@ import hashlib
 from decimal import Decimal
 from pathlib import Path
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import load_config
 from product_factory.domain.artifacts import HandoffRef
 from product_factory.domain.budgets import RunBudget
@@ -25,7 +26,7 @@ from tests.conftest import clone_fixture
 def _coord(tmp_path: Path) -> RunCoordinator:
     root = Path(__file__).resolve().parents[2]
     config = load_config(root)
-    return RunCoordinator(
+    return build_coordinator(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",

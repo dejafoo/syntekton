@@ -13,31 +13,26 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from product_factory.config.loader import AppConfig
+from product_factory.application.composition_root import ProductFactoryApplication
 from product_factory.domain.errors import (
     ConfigurationError,
     ProductFactoryError,
     RunCancelledError,
 )
 from product_factory.domain.runs import RunManifest, RunRequest
-from product_factory.gateway.base import ModelGateway
-from product_factory.gateway.mock import MockGateway
 from product_factory.host.export import export_evidence_bundle
 from product_factory.host.protocol import HostResponse, HostSubscription
 from product_factory.observability.contracts import EventSeverity, ObservabilityEvent
 from product_factory.observability.ids import new_event_id
 from product_factory.observability.query import ObservabilityQueryService
 from product_factory.observability.recorder import TelemetryRecorder
-from product_factory.orchestration.coordinator import RunCoordinator
 from product_factory.policy.source_policy import resolve_request_source_policy
 from product_factory.workers.models import WorkerLeaseConflictError
-from product_factory.workers.supervisor import WorkerSupervisor
 from product_factory.workflows.artifacts import ArtifactLandMap
 from product_factory.workflows.inputs import validate_request_pack_input
 from product_factory.workflows.registry import land_map_for_request
@@ -79,46 +74,25 @@ class HostService:
     def __init__(
         self,
         *,
-        config: AppConfig,
-        gateway: ModelGateway,
-        data_dir: Path | None = None,
-        use_deterministic_planner: bool = False,
+        application: ProductFactoryApplication,
         observe_base_url: str | None = None,
     ) -> None:
-        self.config = config
-        self.gateway = gateway
-        self.data_dir = data_dir
-        self.use_deterministic_planner = use_deterministic_planner or isinstance(
-            gateway, MockGateway
-        )
+        self.application = application
+        self.config = application.queries.config
+        self.data_dir = application.metadata.data_root
+        self.use_deterministic_planner = application.metadata.deterministic_planner
         self.observe_base_url = (
             observe_base_url or os.environ.get("PRODUCT_FACTORY_OBSERVE_URL") or DEFAULT_OBSERVE_URL
         ).rstrip("/")
-        self.coord = RunCoordinator(
-            config=config,
-            gateway=gateway,
-            data_dir=data_dir,
-            use_deterministic_planner=self.use_deterministic_planner,
-        )
-        # SR2: host mutations go through LifecycleCommandService; coord remains
-        # for db/pf_root compatibility and query construction.
-        self.commands = self.coord.commands
-        self.pf_root = self.coord.pf_root
-        self.query = ObservabilityQueryService(self.coord.db, data_dir=self.pf_root)
-        self.supervisor = WorkerSupervisor(
-            db=self.coord.db,
-            execute=self._execute_worker,
-            resume=self.commands.resume,
-            worktree_key=self._worktree_key,
-            on_error=self._supervisor_error,
-            lease_ttl_seconds=float(os.environ.get("PRODUCT_FACTORY_WORKER_LEASE_TTL", "30")),
-            heartbeat_seconds=float(
-                os.environ.get("PRODUCT_FACTORY_WORKER_HEARTBEAT_SECONDS", "10")
-            ),
-            scan_seconds=float(os.environ.get("PRODUCT_FACTORY_WORKER_SCAN_SECONDS", "5")),
-        )
+        self.commands = application.commands
+        self.pf_root = application.metadata.data_root
+        self.db = application.queries.database
+        self.query: ObservabilityQueryService = application.queries.observability
+        self.workers = application.workers
+        # Compatibility alias for host callers that inspect supervisor state.
+        self.supervisor = application.workers.supervisor
         if _env_truthy("PRODUCT_FACTORY_REMOTE_MODE"):
-            self.supervisor.start()
+            self.workers.start()
 
     def close(self) -> None:
         """Graceful drain then close the coordinator database last (SD3.B).
@@ -129,8 +103,7 @@ class HostService:
         import os
 
         grace = float(os.environ.get("PRODUCT_FACTORY_SHUTDOWN_GRACE_SECONDS", "15"))
-        self.supervisor.drain(grace_seconds=grace, close_database=False)
-        self.coord.db.close()
+        self.application.shutdown.close(grace_seconds=grace)
 
     def subscription_for(self, run_id: str, *, after_seq: int = 0) -> HostSubscription:
         return HostSubscription(
@@ -208,7 +181,7 @@ class HostService:
             request.model_dump_json(indent=2), encoding="utf-8"
         )
         worker_opts = {
-            "mock": mock or isinstance(self.gateway, MockGateway),
+            "mock": mock or self.application.metadata.deterministic_workers,
             "use_deterministic_planner": self.use_deterministic_planner,
         }
         (run_dir / "input" / "host_worker.json").write_text(
@@ -216,7 +189,7 @@ class HostService:
         )
 
         # SR3: couple queue admission with the authoritative admit event.
-        self.coord.db.unit_of_work().admit_run_with_events(
+        self.db.unit_of_work().admit_run_with_events(
             run_id=run_id,
             workflow_type=request.workflow_type,
             status="queued",
@@ -239,14 +212,14 @@ class HostService:
                 from product_factory.trust.handoffs import HandoffService
                 from product_factory.workflows.registry import resolve_workflow_pack
 
-                HandoffService(self.coord.db, self.pf_root).resolve_refs(
+                HandoffService(self.db, self.pf_root).resolve_refs(
                     request,
                     resolve_workflow_pack(request.workflow_type),
                     consumer_run_id=run_id,
                     materialize_dir=run_dir / "input",
                 )
             except Exception as exc:
-                self.coord.db.upsert_run(
+                self.db.upsert_run(
                     run_id=run_id,
                     workflow_type=request.workflow_type,
                     status="failed",
@@ -334,89 +307,32 @@ class HostService:
 
     def run_worker(self, run_id: str) -> RunManifest:
         """Execute a previously submitted run (blocking)."""
-        if self.supervisor.running:
-            return self.supervisor.run_blocking(run_id)
-        return self._execute_worker(run_id)
+        if self.workers.running:
+            return self.workers.run_blocking(run_id)
+        return self.workers.execute(run_id)
 
     def _execute_worker(self, run_id: str) -> RunManifest:
-        """Execute a submitted run after the caller has arranged supervision."""
-        run_dir = self.pf_root / "runs" / run_id
-        request_path = run_dir / "input" / "request.json"
-        if not request_path.exists():
-            raise ProductFactoryError(f"No submitted request for {run_id}")
-        if self.coord.db.is_cancel_requested(run_id):
-            row = self.coord.db.get_run(run_id)
-            request = RunRequest.model_validate_json(request_path.read_text(encoding="utf-8"))
-            self.coord.db.upsert_run(
-                run_id=run_id,
-                workflow_type=request.workflow_type,
-                status="cancelled",
-                request=request.model_dump(mode="json"),
-                base_commit=row.get("base_commit") if row else None,
-                usage=json.loads(row["usage_json"]) if row and row.get("usage_json") else {},
-                active_operation=None,
-            )
-            raise RunCancelledError(f"Run {run_id} cancelled by operator")
-        request = RunRequest.model_validate_json(request_path.read_text(encoding="utf-8"))
-        row = self.coord.db.get_run(run_id)
-        if row and row["status"] == "queued":
-            self.coord.db.upsert_run(
-                run_id=run_id,
-                workflow_type=request.workflow_type,
-                status="initializing",
-                request=request.model_dump(mode="json"),
-                active_operation="initializing",
-            )
-        return self.commands.submit(request, run_id=run_id)
+        """Compatibility delegate to the application-owned worker backend."""
+        return self.workers.execute(run_id)
 
     def _worktree_key(self, run_id: str) -> str:
-        """Stable key for the run's writable worktree collection."""
-        return str((self.pf_root / "runs" / run_id / "worktrees").resolve())
+        return self.workers.backend.worktree_key(run_id)
 
     def _supervisor_error(self, run_id: str, exc: Exception, recovery: bool) -> None:
-        if isinstance(exc, RunCancelledError):
-            return
-        self._record_worker_failure(run_id, exc, recovery=recovery)
+        self.workers.backend.on_error(run_id, exc, recovery)
 
     def _record_worker_failure(self, run_id: str, exc: Exception, *, recovery: bool) -> None:
-        row = self.coord.db.get_run(run_id)
-        if row and row["status"] == "cancelled":
-            return
-        self.coord.db.upsert_run(
-            run_id=run_id,
-            workflow_type=self._workflow_type(run_id) or "code_change",
-            status="failed",
-            request=self._request_dict(run_id) or {},
-            active_operation="recovery_failed" if recovery else "failed",
-        )
-        fail_path = self.pf_root / "runs" / run_id / "output" / "host_worker_error.json"
-        fail_path.parent.mkdir(parents=True, exist_ok=True)
-        fail_path.write_text(
-            json.dumps(
-                {
-                    "error": exc.__class__.__name__,
-                    "message": str(exc),
-                    "recoverable": recovery,
-                    "recovery_outcome": (
-                        f"recoverable_failure:{exc.__class__.__name__}" if recovery else None
-                    ),
-                    "at": datetime.now(UTC).isoformat(),
-                },
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
+        self.workers.backend.on_error(run_id, exc, recovery)
 
     def status(self, run_id: str) -> HostResponse:
-        row = self.coord.db.get_run(run_id)
+        row = self.db.get_run(run_id)
         if not row:
             return HostResponse.failure(
                 code="not_found", message=f"Unknown run {run_id}", run_id=run_id
             )
         summary = self.query.get_run(run_id)
         plan_summary = self._plan_summary(run_id)
-        lease = self.coord.db.get_worker_lease(run_id)
+        lease = self.db.get_worker_lease(run_id)
         return HostResponse.success(
             run_id=run_id,
             status=row["status"],
@@ -435,7 +351,7 @@ class HostService:
         )
 
     def inspect(self, run_id: str) -> HostResponse:
-        row = self.coord.db.get_run(run_id)
+        row = self.db.get_run(run_id)
         if not row:
             return HostResponse.failure(
                 code="not_found", message=f"Unknown run {run_id}", run_id=run_id
@@ -446,7 +362,7 @@ class HostService:
         if manifest_path.exists():
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         plan = self.query.plan(run_id)
-        validations = self.coord.db.list_validator_results(run_id)
+        validations = self.db.list_validator_results(run_id)
         artifacts = self._artifact_dicts(run_id)
         from product_factory.observability.foundation import collect_foundation_projections
         from product_factory.workflows.handlers import eligible_next_actions_for_workflow
@@ -490,7 +406,7 @@ class HostService:
         )
 
     def artifacts(self, run_id: str) -> HostResponse:
-        row = self.coord.db.get_run(run_id)
+        row = self.db.get_run(run_id)
         if not row:
             return HostResponse.failure(
                 code="not_found", message=f"Unknown run {run_id}", run_id=run_id
@@ -512,7 +428,7 @@ class HostService:
                 run_id=run_id,
                 details=exc.details,
             )
-        row = self.coord.db.get_run(run_id)
+        row = self.db.get_run(run_id)
         return HostResponse.success(
             run_id=run_id,
             status=row["status"] if row else "completed",
@@ -520,20 +436,20 @@ class HostService:
         )
 
     def handoffs(self, run_id: str) -> HostResponse:
-        row = self.coord.db.get_run(run_id)
+        row = self.db.get_run(run_id)
         if row is None:
             return HostResponse.failure(code="not_found", message=f"Unknown run {run_id}")
         return HostResponse.success(
             run_id=run_id,
             status=row["status"],
-            data={"handoffs": self.coord.db.list_handoff_records_by_run(run_id)},
+            data={"handoffs": self.db.list_handoff_records_by_run(run_id)},
         )
 
     def approve_handoff(self, handoff_id: str, *, actor: dict[str, Any] | str) -> HostResponse:
         from product_factory.trust.handoffs import HandoffError, HandoffService
 
         try:
-            record = HandoffService(self.coord.db, self.pf_root).approve(handoff_id, actor=actor)
+            record = HandoffService(self.db, self.pf_root).approve(handoff_id, actor=actor)
         except HandoffError as exc:
             return HostResponse.failure(code="invalid_handoff", message=str(exc))
         return HostResponse.success(data={"handoff": record.model_dump(mode="json")})
@@ -544,7 +460,7 @@ class HostService:
         from product_factory.trust.handoffs import HandoffError, HandoffService
 
         try:
-            record = HandoffService(self.coord.db, self.pf_root).supersede(
+            record = HandoffService(self.db, self.pf_root).supersede(
                 handoff_id, successor_handoff_id=successor_handoff_id, actor=actor
             )
         except HandoffError as exc:
@@ -561,7 +477,7 @@ class HostService:
                 run_id=run_id,
                 details=exc.details,
             )
-        row = self.coord.db.get_run(run_id)
+        row = self.db.get_run(run_id)
         return HostResponse.success(
             run_id=run_id,
             status=row["status"] if row else "blocked",
@@ -596,7 +512,7 @@ class HostService:
                 run_id=run_id,
                 details=exc.details,
             )
-        row = self.coord.db.get_run(run_id)
+        row = self.db.get_run(run_id)
         return HostResponse.success(
             run_id=run_id,
             status=row["status"] if row else "completed",
@@ -604,7 +520,7 @@ class HostService:
         )
 
     def list_runs(self, *, limit: int = 50) -> HostResponse:
-        rows = [dict(row) for row in self.coord.db.list_runs(limit=limit)]
+        rows = [dict(row) for row in self.db.list_runs(limit=limit)]
         return HostResponse.success(data={"runs": rows})
 
     def cancel(self, run_id: str) -> HostResponse:
@@ -617,7 +533,7 @@ class HostService:
                 run_id=run_id,
                 details=exc.details,
             )
-        row = self.coord.db.get_run(run_id)
+        row = self.db.get_run(run_id)
         return HostResponse.success(
             run_id=run_id,
             status=row["status"] if row else result.get("status"),
@@ -628,7 +544,7 @@ class HostService:
         try:
             manifest = self.commands.revise(run_id, note=note)
         except ProductFactoryError as exc:
-            row = self.coord.db.get_run(run_id)
+            row = self.db.get_run(run_id)
             return HostResponse.failure(
                 code=exc.__class__.__name__,
                 message=exc.message,
@@ -636,7 +552,7 @@ class HostService:
                 status=row["status"] if row else None,
                 details=exc.details,
             )
-        row = self.coord.db.get_run(run_id)
+        row = self.db.get_run(run_id)
         return HostResponse.success(
             run_id=run_id,
             status=row["status"] if row else manifest.final_status,
@@ -649,7 +565,7 @@ class HostService:
         )
 
     def export_bundle(self, run_id: str, *, as_zip: bool = True) -> HostResponse:
-        row = self.coord.db.get_run(run_id)
+        row = self.db.get_run(run_id)
         if not row:
             return HostResponse.failure(
                 code="not_found", message=f"Unknown run {run_id}", run_id=run_id
@@ -657,7 +573,7 @@ class HostService:
         try:
             result = export_evidence_bundle(
                 pf_root=self.pf_root,
-                db=self.coord.db,
+                db=self.db,
                 run_id=run_id,
                 as_zip=as_zip,
             )
@@ -689,7 +605,7 @@ class HostService:
         Allowed only when the run is ``awaiting_approval`` or ``completed``.
         Destination must resolve under the run's ``repository_path``.
         """
-        row = self.coord.db.get_run(run_id)
+        row = self.db.get_run(run_id)
         if not row:
             return HostResponse.failure(
                 code="not_found", message=f"Unknown run {run_id}", run_id=run_id
@@ -774,7 +690,7 @@ class HostService:
 
         digest = hashlib.sha256(dest.read_bytes()).hexdigest()
         written_rel = str(dest.relative_to(repo_root))
-        TelemetryRecorder(self.coord.db).emit(
+        TelemetryRecorder(self.db).emit(
             run_id=run_id,
             event_type="artifact.materialized",
             summary=f"Materialized {source['logical_name']} → {written_rel}",
@@ -817,7 +733,7 @@ class HostService:
         `artifact.materialized` audit event apply per file. One operator
         confirmation upstream covers the batch; nothing lands implicitly.
         """
-        row = self.coord.db.get_run(run_id)
+        row = self.db.get_run(run_id)
         if not row:
             return HostResponse.failure(
                 code="not_found", message=f"Unknown run {run_id}", run_id=run_id
@@ -867,7 +783,7 @@ class HostService:
                     }
                 )
 
-        current = self.coord.db.get_run(run_id) or row
+        current = self.db.get_run(run_id) or row
         status = current["status"]
         if failures and not landed:
             first = failures[0]
@@ -1016,7 +932,7 @@ class HostService:
         idle_polls = 0
         while True:
             batch, source = self._fetch_event_batch(run_id, after_seq=cursor, limit=100)
-            row = self.coord.db.get_run(run_id)
+            row = self.db.get_run(run_id)
             status = row["status"] if row else None
             if batch:
                 idle_polls = 0
@@ -1167,11 +1083,11 @@ class HostService:
             return None
 
     def _workflow_type(self, run_id: str) -> str | None:
-        row = self.coord.db.get_run(run_id)
+        row = self.db.get_run(run_id)
         return row["workflow_type"] if row else None
 
     def _request_dict(self, run_id: str) -> dict[str, Any] | None:
-        row = self.coord.db.get_run(run_id)
+        row = self.db.get_run(run_id)
         if not row:
             return None
         try:

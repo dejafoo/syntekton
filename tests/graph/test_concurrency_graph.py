@@ -18,6 +18,7 @@ import time
 from decimal import Decimal
 from pathlib import Path
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import AppConfig, load_config
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.plans import FinalArtifactSpec, PlannerOutput
@@ -40,7 +41,7 @@ def _fixture(tmp_path: Path) -> Path:
 
 
 def _new_coordinator(tmp_path: Path) -> RunCoordinator:
-    return RunCoordinator(
+    return build_coordinator(
         config=_config(),
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import load_config
 from product_factory.domain.runs import RunRequest
 from product_factory.evaluation.cases import EvalCase
 from product_factory.evaluation.runners import IsolationAblationRunner
 from product_factory.evaluation.subjects import SubjectConfig
 from product_factory.gateway.mock import MockGateway
-from product_factory.orchestration.coordinator import RunCoordinator
 
 
 def test_implementation_isolation_produces_non_empty_patch(tmp_path: Path) -> None:
@@ -45,7 +45,7 @@ def test_implementation_isolation_produces_non_empty_patch(tmp_path: Path) -> No
 
 def test_isolation_disables_validation_repair(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[2]
-    coordinator = RunCoordinator(
+    coordinator = build_coordinator(
         config=load_config(root),
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",

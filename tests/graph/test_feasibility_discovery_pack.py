@@ -5,11 +5,11 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
+from product_factory.application import build_coordinator, build_host_service
 from product_factory.config.loader import load_config
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.runs import ArtifactOverride, RunRequest
 from product_factory.gateway.mock import MockGateway
-from product_factory.host.service import HostService
 from product_factory.orchestration.coordinator import RunCoordinator
 from product_factory.validation.pipeline import (
     validate_feasibility_document,
@@ -23,7 +23,7 @@ from tests.conftest import clone_fixture
 
 def _coord(tmp_path: Path) -> RunCoordinator:
     root = Path(__file__).resolve().parents[2]
-    return RunCoordinator(
+    return build_coordinator(
         config=load_config(root),
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -163,7 +163,7 @@ def test_host_submit_discovery_and_rejects_bad_input(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[2]
     shutil.copytree(repo_root / "config", project / "config")
     shutil.copytree(repo_root / "profiles", project / "profiles")
-    host = HostService(
+    host = build_host_service(
         config=load_config(project),
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",

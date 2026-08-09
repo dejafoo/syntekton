@@ -9,23 +9,18 @@ from __future__ import annotations
 
 from typing import Any
 
+from product_factory.application.ports import RunLifecyclePort
 from product_factory.domain.runs import RunManifest, RunRequest
 
 
 class LifecycleCommandService:
-    """Thin command facade over a bound lifecycle engine instance."""
+    """Immutable command facade over the lifecycle port."""
 
-    def __init__(self, *, lifecycle: Any | None = None) -> None:
-        self._lifecycle = lifecycle
-
-    def bind(self, lifecycle: Any) -> None:
-        """Attach the lifecycle engine constructed after the composition root."""
+    def __init__(self, *, lifecycle: RunLifecyclePort) -> None:
         self._lifecycle = lifecycle
 
     @property
-    def lifecycle(self) -> Any:
-        if self._lifecycle is None:
-            raise RuntimeError("LifecycleCommandService is not bound to a lifecycle engine")
+    def lifecycle(self) -> RunLifecyclePort:
         return self._lifecycle
 
     def submit(self, request: RunRequest, *, run_id: str | None = None) -> RunManifest:

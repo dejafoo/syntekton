@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import load_config
 from product_factory.domain.budgets import RunBudget, TaskBudget
 from product_factory.domain.errors import RuntimeFailureError
@@ -16,7 +17,6 @@ from product_factory.domain.usage import UsageMetrics
 from product_factory.gateway.canonical_messages import ModelRequest, ModelResponse
 from product_factory.gateway.mock import MockGateway
 from product_factory.orchestration.coordinator import (
-    RunCoordinator,
     append_markdown_continuation,
     output_was_truncated,
 )
@@ -140,7 +140,7 @@ def test_generate_architecture_uses_profile_max_output_tokens(tmp_path: Path) ->
             output_tokens=20,
         )
 
-    coord = RunCoordinator(
+    coord = build_coordinator(
         config=config,
         gateway=MockGateway(responder=responder),
         data_dir=tmp_path / ".product-factory",
@@ -179,7 +179,7 @@ def test_generate_architecture_continues_after_length_truncation(tmp_path: Path)
             output_tokens=40,
         )
 
-    coord = RunCoordinator(
+    coord = build_coordinator(
         config=load_config(root),
         gateway=MockGateway(responder=responder),
         data_dir=tmp_path / ".product-factory",
@@ -211,7 +211,7 @@ def test_generate_architecture_fails_after_exhausted_continuations(tmp_path: Pat
             output_tokens=request.max_output_tokens,
         )
 
-    coord = RunCoordinator(
+    coord = build_coordinator(
         config=load_config(root),
         gateway=MockGateway(responder=responder),
         data_dir=tmp_path / ".product-factory",

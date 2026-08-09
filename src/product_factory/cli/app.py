@@ -158,7 +158,7 @@ def models_refresh() -> None:
     service = get_host_service(
         config=config, gateway=gateway, force_mock=isinstance(gateway, MockGateway)
     )
-    service.coord.db.cache_model_catalog(payload)
+    service.db.cache_model_catalog(payload)
     console.print(f"Refreshed {len(payload.get('models', []))} models")
 
 
@@ -928,10 +928,10 @@ def mcp_cmd(
 def costs_cmd(run_id: str | None = typer.Argument(None)) -> None:
     service = _local_host_service()
     if run_id:
-        row = service.coord.db.get_run(run_id)
+        row = service.db.get_run(run_id)
         rows = [row] if row else []
     else:
-        rows = list(service.coord.db.list_runs())
+        rows = list(service.db.list_runs())
     total = Decimal("0")
     for row in rows:
         if not row:
