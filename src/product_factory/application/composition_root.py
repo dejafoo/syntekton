@@ -25,7 +25,10 @@ from product_factory.gateway.instrumented import InstrumentedModelGateway
 from product_factory.gateway.mock import MockGateway
 from product_factory.orchestration.composition.service import CompositionService
 from product_factory.orchestration.finalization.run_finalizer import RunFinalizer
+from product_factory.orchestration.lifecycle.admission import RunAdmissionService
 from product_factory.orchestration.lifecycle.engine import RunLifecycleEngine
+from product_factory.orchestration.lifecycle.session import RunExecutionSessionFactory
+from product_factory.orchestration.planning import RunPlanningService
 from product_factory.orchestration.task_preparation import TaskPreparationService
 from product_factory.orchestration.task_runtime import TaskRuntimeService
 from product_factory.orchestration.validation_repair.service import ValidationRepairService
@@ -130,6 +133,26 @@ def build_application(
     )
     wave_execution = WaveExecutionService(wave_scheduler=wave_scheduler)
 
+    def cancel_check(run_id: str) -> None:
+        row = database.get_run(run_id)
+        if row and int(row.get("cancel_requested") or 0):
+            from product_factory.domain.errors import RunCancelledError
+
+            raise RunCancelledError(f"Run {run_id} cancelled by operator")
+
+    session_factory = RunExecutionSessionFactory(
+        database=database,
+        raw_gateway=raw_gateway,
+        cancel_check=cancel_check,
+    )
+    admission = RunAdmissionService(config=config, database=database, data_root=pf_root)
+    planning = RunPlanningService(
+        config=config,
+        database=database,
+        skills=skills,
+        use_deterministic_planner=deterministic_planner,
+    )
+
     lifecycle = RunLifecycleEngine(
         config=config,
         pf_root=pf_root,
@@ -146,6 +169,9 @@ def build_application(
         task_preparation=task_preparation,
         task_runtime=task_runtime,
         wave_execution=wave_execution,
+        session_factory=session_factory,
+        admission=admission,
+        planning=planning,
         allow_deterministic_workers=allow_deterministic_workers,
         use_deterministic_planner=deterministic_planner,
     )
