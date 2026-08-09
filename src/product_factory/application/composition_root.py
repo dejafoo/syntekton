@@ -94,16 +94,21 @@ def build_application(
     wave_scheduler = WaveScheduler()
     worktree_lineage = WorktreeLineageService()
     finalizer = RunFinalizer()
+
+    def record_artifact_instance(instance: ArtifactInstance) -> None:
+        database.record_artifact_instance(instance.model_dump(mode="json"))
+
     task_preparation = TaskPreparationService(
         config=config,
         skills=skills,
         tool_registry=tool_registry,
         connector_registry=connector_registry,
         connector_broker=connector_broker,
+        repository=database,
+        worktree_lineage=worktree_lineage,
+        on_artifact_instance=record_artifact_instance,
+        composition=composition,
     )
-
-    def record_artifact_instance(instance: ArtifactInstance) -> None:
-        database.record_artifact_instance(instance.model_dump(mode="json"))
 
     def approval_verify(
         request: Any,

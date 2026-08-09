@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
 from product_factory.domain.runs import RunRequest
 from product_factory.domain.tasks import TaskResult, TaskSpec
+from product_factory.gateway.base import ModelGateway
 from product_factory.orchestration.effective_policy import EffectiveTaskPolicy
+from product_factory.persistence.artifacts import ArtifactStore
 from product_factory.registry.capability_descriptors import CapabilityDescriptor
+from product_factory.tools.broker import ToolBroker
+from product_factory.tools.registry import ToolRegistry
+from product_factory.workflows.artifacts import ArtifactLandMap
 
 
 @dataclass(slots=True)
@@ -24,11 +30,11 @@ class TaskExecutionRequest:
     descriptor: CapabilityDescriptor
     agent_profile: str
     model_profile: str
-    broker: Any
-    artifacts: Any
-    gateway: Any
-    raw_gateway: Any
-    tool_registry: Any
+    broker: ToolBroker
+    artifacts: ArtifactStore
+    gateway: ModelGateway
+    raw_gateway: ModelGateway
+    tool_registry: ToolRegistry
     allow_deterministic_workers: bool
     ctx_messages: list[dict[str, str]]
     package_hash: str
@@ -37,13 +43,14 @@ class TaskExecutionRequest:
     dependency_outputs: list[dict[str, Any]] = field(default_factory=list)
     repository_excerpts: list[dict[str, str]] = field(default_factory=list)
     base_commit: str = ""
-    land_map: Any = None
+    land_map: ArtifactLandMap | None = None
     composer_role: str | None = None
     validation_evidence_refs: list[str] = field(default_factory=list)
     validator_results: list[dict[str, Any]] = field(default_factory=list)
-    # Typed composition boundary (SD2); services bag only for non-compose helpers.
+    # Replaced by CompositionPort during the R3 typed-composition slice.
     composition: Any | None = None
-    services: dict[str, Any] = field(default_factory=dict)
+    deterministic_implementation: Callable[..., list[tuple[str, str]]] | None = None
+    patch_changed_files: Callable[[str], list[str]] | None = None
 
 
 class TaskExecutor(Protocol):
