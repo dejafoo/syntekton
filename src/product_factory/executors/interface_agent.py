@@ -12,10 +12,9 @@ from product_factory.executors.protocol import (
     attach_receipt,
 )
 from product_factory.gateway.mock import MockGateway
+from product_factory.orchestration.composition.input import CompositionInput
 from product_factory.schemas import validate_write_payload
 from product_factory.workflows.artifacts import ROLE_SPIKE_RESULT
-from product_factory.workflows.handlers import handler_for
-from product_factory.workflows.handlers.base import ComposeContext
 from product_factory.workflows.registry import is_registered_workflow
 
 
@@ -32,9 +31,7 @@ class InterfaceAgentExecutor:
         package_hash = request.package_hash
         land_map = request.land_map
         composer_role = request.composer_role
-        execution_mode = (
-            "deterministic_mock" if request.allow_deterministic_workers else "live"
-        )
+        execution_mode = "deterministic_mock" if request.allow_deterministic_workers else "live"
 
         artifact_refs = []
         typed_artifacts = []
@@ -200,16 +197,22 @@ class InterfaceAgentExecutor:
                 if land_map is not None
                 else "SPIKE_RESULT.json"
             )
-            spike_document = handler_for(workflow_type).compose(
-                composer_role or ROLE_SPIKE_RESULT,
-                ComposeContext(
+            if request.composition is None:
+                raise RuntimeError("interface_analysis requires CompositionService")
+            spike_document = request.composition.compose(
+                CompositionInput(
                     request=run_request,
                     role=composer_role or ROLE_SPIKE_RESULT,
                     document_name=document_name,
-                    dependency_outputs=[evidence_output],
+                    dependency_outputs=(evidence_output,),
                     use_mock=isinstance(request.raw_gateway, MockGateway),
-                ),
-            )
+                    run_id=request.run_id,
+                    task=task,
+                    gateway=request.gateway,
+                    profile=request.model_profile,
+                    context_messages=tuple(request.ctx_messages),
+                )
+            ).body
             spike_artifact = artifacts.put_text(
                 spike_document,
                 media_type="application/json",
@@ -235,9 +238,7 @@ class InterfaceAgentExecutor:
                 artifact_refs=artifact_refs,
                 model_profile=profile,
                 resolved_model_id=profile,
-                provider=getattr(
-                    request.gateway, "default_model", type(request.gateway).__name__
-                ),
+                provider=getattr(request.gateway, "default_model", type(request.gateway).__name__),
                 prompt_package_hash=package_hash,
                 tool_call_ids=tool_call_ids,
                 usage=model_usage,

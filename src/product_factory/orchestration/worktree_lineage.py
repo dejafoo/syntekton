@@ -28,11 +28,11 @@ class WorktreeLineageService:
         artifacts: Any,
         run_dir: Path,
         task_id: str,
-        capability: str,
         dependencies: list[str],
         dependency_outputs: list[dict[str, Any]],
         base_commit: str,
         writable: bool,
+        inherit_dependency_patches: bool,
     ) -> tuple[Path, list[str], list[dict[str, str]], str | None]:
         """Create/get worktree, inherit predecessor patches, persist lineage.
 
@@ -48,12 +48,7 @@ class WorktreeLineageService:
             wt = worktrees.create(task_id, base_commit=base_commit, writable=writable)
         wt_path = wt.path
 
-        if capability in {
-            "implementation",
-            "repair",
-            "composition",
-            "independent_review",
-        }:
+        if inherit_dependency_patches:
             superseded = {
                 predecessor
                 for dependency in dependency_outputs or []

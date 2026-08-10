@@ -2,24 +2,20 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from product_factory.config.loader import load_config
 from product_factory.domain.runs import RunRequest
-from product_factory.gateway.mock import MockGateway
-from product_factory.orchestration.coordinator import RunCoordinator
+from product_factory.workflows.handlers import handler_for
+from product_factory.workflows.plan_transforms import apply_plan_transforms
+from product_factory.workflows.registry import resolve_workflow_pack
+
+
+def _plan(request: RunRequest):
+    pack = resolve_workflow_pack(request.workflow_type)
+    proposal = handler_for(pack.id).plan_template(request.request_text)
+    return apply_plan_transforms(proposal, request=request, pack=pack)
 
 
 def test_low_risk_default_plan_omits_review() -> None:
-    root = Path(__file__).resolve().parents[2]
-    coordinator = RunCoordinator(
-        config=load_config(root),
-        gateway=MockGateway(),
-        data_dir=root / ".product-factory-test-unused",
-        use_deterministic_planner=True,
-    )
-    proposal = coordinator._plan(
-        "run",
+    proposal = _plan(
         RunRequest(
             request_id="low-risk",
             workflow_type="code_change",
@@ -27,7 +23,6 @@ def test_low_risk_default_plan_omits_review() -> None:
             approval_policy="none",
             metadata={"planner_mode": "fixed"},
         ),
-        None,
     )
     caps = {task.capability for task in proposal.tasks}
     assert "independent_review" not in caps
@@ -35,15 +30,7 @@ def test_low_risk_default_plan_omits_review() -> None:
 
 
 def test_high_risk_fixed_plan_keeps_review() -> None:
-    root = Path(__file__).resolve().parents[2]
-    coordinator = RunCoordinator(
-        config=load_config(root),
-        gateway=MockGateway(),
-        data_dir=root / ".product-factory-test-unused",
-        use_deterministic_planner=True,
-    )
-    proposal = coordinator._plan(
-        "run",
+    proposal = _plan(
         RunRequest(
             request_id="high-risk",
             workflow_type="code_change",
@@ -51,7 +38,6 @@ def test_high_risk_fixed_plan_keeps_review() -> None:
             approval_policy="none",
             metadata={"planner_mode": "fixed"},
         ),
-        None,
     )
     caps = {task.capability for task in proposal.tasks}
     assert "independent_review" in caps

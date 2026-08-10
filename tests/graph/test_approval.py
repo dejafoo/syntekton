@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import load_config
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.errors import ApprovalBlockedError
 from product_factory.domain.runs import RunRequest
 from product_factory.gateway.mock import MockGateway
-from product_factory.orchestration.coordinator import RunCoordinator
 from tests.conftest import clone_fixture
 
 
@@ -20,7 +20,7 @@ def test_cannot_apply_without_approval(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[2]
     config = load_config(root)
     fixture = clone_fixture(root / "tests" / "fixtures" / "sample_api", tmp_path / "repo")
-    coord = RunCoordinator(
+    coord = build_coordinator(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",

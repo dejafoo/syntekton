@@ -6,11 +6,11 @@ import json
 from decimal import Decimal
 from pathlib import Path
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import load_config
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.runs import RunRequest
 from product_factory.gateway.mock import MockGateway
-from product_factory.orchestration.coordinator import RunCoordinator
 from tests.conftest import clone_fixture
 
 
@@ -18,7 +18,7 @@ def test_code_change_vertical_slice(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[2]
     config = load_config(root)
     fixture = clone_fixture(root / "tests" / "fixtures" / "sample_api", tmp_path / "repo")
-    coord = RunCoordinator(
+    coord = build_coordinator(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -49,7 +49,7 @@ def test_code_change_vertical_slice(tmp_path: Path) -> None:
 def test_architecture_workflow(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[2]
     config = load_config(root)
-    coord = RunCoordinator(
+    coord = build_coordinator(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",

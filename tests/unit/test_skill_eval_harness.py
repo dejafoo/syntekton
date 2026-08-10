@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import load_config
 from product_factory.domain.runs import RunRequest
 from product_factory.evaluation.bench import BenchmarkRunner
@@ -15,7 +16,6 @@ from product_factory.evaluation.deterministic import run_deterministic_checks
 from product_factory.evaluation.loader import load_eval_cases
 from product_factory.evaluation.subjects import SubjectArtifact
 from product_factory.gateway.mock import MockGateway
-from product_factory.orchestration.coordinator import RunCoordinator
 
 
 def _discovery_case(**updates) -> EvalCase:
@@ -200,7 +200,7 @@ def test_skill_ablation_subjects_registered() -> None:
 
 def test_disable_skills_records_omitted_context(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[2]
-    coord = RunCoordinator(
+    coord = build_coordinator(
         config=load_config(root),
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",

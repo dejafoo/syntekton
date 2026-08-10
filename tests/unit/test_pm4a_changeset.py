@@ -9,8 +9,8 @@ import pytest
 from product_factory.domain.artifacts import HandoffRef, HandoffState
 from product_factory.domain.errors import SchemaValidationError
 from product_factory.domain.runs import RunRequest
+from product_factory.orchestration.composition.input import CompositionInput
 from product_factory.schemas.validate import validate_write_payload
-from product_factory.workflows.handlers.base import ComposeContext
 from product_factory.workflows.handlers.repository_change import RepositoryChangeHandler
 from product_factory.workflows.handoffs import validate_pack_handoffs
 from product_factory.workflows.repository_change import REPOSITORY_CHANGE_PACK
@@ -43,7 +43,7 @@ def test_repository_change_v2_emits_content_addressed_change_set() -> None:
     request = _request()
     document = RepositoryChangeHandler().compose(
         "change_set",
-        ComposeContext(
+        CompositionInput(
             request=request,
             role="change_set",
             document_name="change-set.json",

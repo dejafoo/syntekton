@@ -10,7 +10,9 @@ from product_factory.evaluation.cases import EvalCase
 from product_factory.evaluation.runners import IsolationAblationRunner
 from product_factory.evaluation.subjects import SubjectConfig
 from product_factory.gateway.mock import MockGateway
-from product_factory.orchestration.coordinator import RunCoordinator
+from product_factory.workflows.handlers import handler_for
+from product_factory.workflows.plan_transforms import apply_plan_transforms
+from product_factory.workflows.registry import resolve_workflow_pack
 
 
 def test_implementation_isolation_produces_non_empty_patch(tmp_path: Path) -> None:
@@ -44,28 +46,21 @@ def test_implementation_isolation_produces_non_empty_patch(tmp_path: Path) -> No
 
 
 def test_isolation_disables_validation_repair(tmp_path: Path) -> None:
-    root = Path(__file__).resolve().parents[2]
-    coordinator = RunCoordinator(
-        config=load_config(root),
-        gateway=MockGateway(),
-        data_dir=tmp_path / ".product-factory",
-        use_deterministic_planner=True,
+    request = RunRequest(
+        request_id="iso",
+        workflow_type="code_change",
+        request_text="Introduce a simple cache helper behind an interface.",
+        approval_policy="none",
+        metadata={
+            "disable_review": "true",
+            "disable_analysis": "true",
+            "disable_validation_repair": "true",
+            "planner_mode": "fixed",
+        },
     )
-    proposal = coordinator._plan(
-        "run",
-        RunRequest(
-            request_id="iso",
-            workflow_type="code_change",
-            request_text="Introduce a simple cache helper behind an interface.",
-            approval_policy="none",
-            metadata={
-                "disable_review": "true",
-                "disable_analysis": "true",
-                "disable_validation_repair": "true",
-                "planner_mode": "fixed",
-            },
-        ),
-        None,
+    pack = resolve_workflow_pack(request.workflow_type)
+    proposal = apply_plan_transforms(
+        handler_for(pack.id).plan_template(request.request_text), request=request, pack=pack
     )
     caps = {task.capability for task in proposal.tasks}
     assert "implementation" in caps

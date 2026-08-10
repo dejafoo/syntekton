@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import load_config
 from product_factory.context.assembler import select_repository_excerpts
 from product_factory.domain.errors import RuntimeFailureError
@@ -19,7 +20,7 @@ from product_factory.gateway.canonical_messages import (
     ModelResponse,
 )
 from product_factory.gateway.mock import MockGateway
-from product_factory.orchestration.coordinator import RunCoordinator, default_code_change_plan
+from product_factory.orchestration.coordinator import default_code_change_plan
 from tests.conftest import hermetic_validation_config
 
 
@@ -74,7 +75,7 @@ def _git_repo(path: Path) -> Path:
 
 def test_live_empty_model_output_fails_without_fallback(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[2]
-    coordinator = RunCoordinator(
+    coordinator = build_coordinator(
         config=load_config(root),
         gateway=EmptyLiveGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -160,7 +161,7 @@ def test_live_review_receives_patch_and_returns_structured_findings(tmp_path: Pa
         ]
     )
     root = Path(__file__).resolve().parents[2]
-    coordinator = RunCoordinator(
+    coordinator = build_coordinator(
         config=load_config(root),
         gateway=gateway,
         data_dir=tmp_path / ".product-factory",
@@ -259,7 +260,7 @@ def test_repair_inherits_failed_patch_and_composition_uses_repaired_lineage(
     from tests.conftest import clone_fixture
 
     clone_fixture(root / "tests/fixtures/sample_api", repo)
-    coordinator = RunCoordinator(
+    coordinator = build_coordinator(
         config=hermetic_validation_config(root),
         gateway=gateway,
         data_dir=tmp_path / ".product-factory",
@@ -364,29 +365,22 @@ def test_file_list_context_mode_omits_file_bodies(tmp_path: Path) -> None:
 
 
 def test_force_review_injects_review_with_acceptance_criteria() -> None:
-    from product_factory.config.loader import load_config
     from product_factory.domain.runs import RunRequest
-    from product_factory.gateway.mock import MockGateway
-    from product_factory.orchestration.coordinator import RunCoordinator
     from product_factory.planning.compiler import compile_plan
+    from product_factory.workflows.handlers import handler_for
+    from product_factory.workflows.plan_transforms import apply_plan_transforms
+    from product_factory.workflows.registry import resolve_workflow_pack
 
-    root = Path(__file__).resolve().parents[2]
-    coordinator = RunCoordinator(
-        config=load_config(root),
-        gateway=MockGateway(),
-        data_dir=root / ".product-factory-test-unused",
-        use_deterministic_planner=True,
+    request = RunRequest(
+        request_id="force-review",
+        workflow_type="code_change",
+        request_text="Add a cache helper",
+        approval_policy="none",
+        metadata={"force_review": "true", "planner_mode": "fixed"},
     )
-    proposal = coordinator._plan(
-        "run",
-        RunRequest(
-            request_id="force-review",
-            workflow_type="code_change",
-            request_text="Add a cache helper",
-            approval_policy="none",
-            metadata={"force_review": "true", "planner_mode": "fixed"},
-        ),
-        None,
+    pack = resolve_workflow_pack(request.workflow_type)
+    proposal = apply_plan_transforms(
+        handler_for(pack.id).plan_template(request.request_text), request=request, pack=pack
     )
     assert any(task.capability == "independent_review" for task in proposal.tasks)
     result = compile_plan(proposal)
@@ -394,27 +388,24 @@ def test_force_review_injects_review_with_acceptance_criteria() -> None:
 
 
 def test_validation_repair_ablation_strips_analysis(tmp_path: Path) -> None:
-    root = Path(__file__).resolve().parents[2]
-    coordinator = RunCoordinator(
-        config=load_config(root),
-        gateway=EmptyLiveGateway(),
-        data_dir=tmp_path / ".product-factory",
-        use_deterministic_planner=True,
+    from product_factory.workflows.handlers import handler_for
+    from product_factory.workflows.plan_transforms import apply_plan_transforms
+    from product_factory.workflows.registry import resolve_workflow_pack
+
+    request = RunRequest(
+        request_id="ablation",
+        workflow_type="code_change",
+        request_text="Change authentication and database permissions",
+        approval_policy="none",
+        metadata={
+            "disable_review": "true",
+            "disable_analysis": "true",
+            "planner_mode": "fixed",
+        },
     )
-    proposal = coordinator._plan(
-        "run",
-        RunRequest(
-            request_id="ablation",
-            workflow_type="code_change",
-            request_text="Change authentication and database permissions",
-            approval_policy="none",
-            metadata={
-                "disable_review": "true",
-                "disable_analysis": "true",
-                "planner_mode": "fixed",
-            },
-        ),
-        None,
+    pack = resolve_workflow_pack(request.workflow_type)
+    proposal = apply_plan_transforms(
+        handler_for(pack.id).plan_template(request.request_text), request=request, pack=pack
     )
     assert "repository_analysis" not in {task.capability for task in proposal.tasks}
     assert "independent_review" not in {task.capability for task in proposal.tasks}

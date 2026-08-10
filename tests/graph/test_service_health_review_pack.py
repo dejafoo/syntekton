@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import load_config
 from product_factory.connectors.policy import ConnectorSettings
 from product_factory.domain.runs import RunRequest
 from product_factory.gateway.mock import MockGateway
-from product_factory.orchestration.coordinator import RunCoordinator
 
 
 def test_mock_service_health_review_emits_typed_follow_up(tmp_path: Path) -> None:
@@ -22,7 +22,7 @@ def test_mock_service_health_review_emits_typed_follow_up(tmp_path: Path) -> Non
     config = config.model_copy(
         update={"connectors": config.connectors.model_copy(update={"connectors": settings})}
     )
-    coordinator = RunCoordinator(
+    coordinator = build_coordinator(
         config=config,
         gateway=MockGateway(),
         data_dir=data_dir,
@@ -46,7 +46,9 @@ def test_mock_service_health_review_emits_typed_follow_up(tmp_path: Path) -> Non
     )
     assert payload["follow_up_action"]["type"] == "change_intake"
     assert payload["authority"]["restart"] is False
-    calls = {row["tool_name"] for row in coordinator.db.list_tool_calls(manifest.run_id)}
+    calls = {
+        row["tool_name"] for row in coordinator.queries.database.list_tool_calls(manifest.run_id)
+    }
     assert "query_service_signals" in calls
     assert not calls & {
         "start_deployment",

@@ -12,11 +12,11 @@ import json
 from decimal import Decimal
 from pathlib import Path
 
+from product_factory.application import build_coordinator, build_host_service
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.findings import Finding
 from product_factory.domain.runs import ArtifactOverride, RunRequest
 from product_factory.gateway.mock import MockGateway
-from product_factory.host.service import HostService
 from product_factory.orchestration.coordinator import RunCoordinator
 from product_factory.orchestration.review_findings import score_seeded_review_detection
 from product_factory.validation.pipeline import (
@@ -38,7 +38,7 @@ SEEDED_DETECTION_THRESHOLD = 1.0
 
 def _coord(tmp_path: Path) -> RunCoordinator:
     root = Path(__file__).resolve().parents[2]
-    return RunCoordinator(
+    return build_coordinator(
         config=hermetic_validation_config(root),
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -120,7 +120,9 @@ def test_quality_gate_never_receives_repository_write_tools(tmp_path: Path) -> N
     coord = _coord(tmp_path)
     manifest = _run(coord, _fixture(tmp_path))
 
-    tool_names = {row["tool_name"] for row in coord.db.list_tool_calls(manifest.run_id)}
+    tool_names = {
+        row["tool_name"] for row in coord.queries.database.list_tool_calls(manifest.run_id)
+    }
     assert "create_file" not in tool_names
     assert "apply_patch" not in tool_names
 
@@ -164,7 +166,7 @@ def test_quality_gate_honors_requested_deliverable_names(tmp_path: Path) -> None
 def test_materialize_all_lands_every_quality_deliverable(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[2]
     repository = _fixture(tmp_path)
-    service = HostService(
+    service = build_host_service(
         config=hermetic_validation_config(root),
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",

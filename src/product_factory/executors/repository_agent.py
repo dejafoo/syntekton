@@ -113,7 +113,7 @@ class RepositoryAgentExecutor:
             )
         elif not allow_mock:
             patch_text = ""
-            changed_files_from_patch = request.services.get("changed_files_from_patch")
+            changed_files_from_patch = request.patch_changed_files
             try:
                 impl_messages = [
                     CanonicalMessage(role=m["role"], content=m["content"])  # type: ignore[arg-type]
@@ -228,7 +228,7 @@ class RepositoryAgentExecutor:
 
         # Deterministic implementations are test fixtures, never a live fallback.
         if not applied and allow_mock:
-            impl_files = request.services.get("deterministic_impl_files")
+            impl_files = request.deterministic_implementation
             if callable(impl_files):
                 file_pairs = impl_files(
                     run_request.request_text, task_objective=task.objective

@@ -6,11 +6,12 @@ import json
 from typing import Any
 
 from product_factory.domain.plans import PlannerOutput
+from product_factory.orchestration.composition.input import CompositionInput
+from product_factory.orchestration.composition.service import CompositionService
 from product_factory.workflows.artifacts import ROLE_DEPLOYMENT_RECORD
 from product_factory.workflows.default_plans import default_deployment_execution_plan
 from product_factory.workflows.handlers.base import (
     AuthorityClass,
-    ComposeContext,
     EligibleNextAction,
 )
 
@@ -27,7 +28,9 @@ class DeploymentExecutionHandler:
     def plan_template(self, request_text: str) -> PlannerOutput:
         return default_deployment_execution_plan(request_text)
 
-    def compose(self, role: str, ctx: ComposeContext) -> str:
+    def compose(
+        self, role: str, ctx: CompositionInput, drafts: CompositionService | None = None
+    ) -> str:
         if role != ROLE_DEPLOYMENT_RECORD:
             raise RuntimeError(f"deployment_execution does not compose role {role!r}")
         data = ctx.pack_input

@@ -15,8 +15,8 @@ from product_factory.domain.tasks import AcceptanceCriterion, TaskSpec
 from product_factory.domain.usage import UsageMetrics
 from product_factory.gateway.canonical_messages import ModelRequest, ModelResponse
 from product_factory.gateway.mock import MockGateway
+from product_factory.orchestration.composition.service import CompositionService
 from product_factory.orchestration.coordinator import (
-    RunCoordinator,
     append_markdown_continuation,
     output_was_truncated,
 )
@@ -140,12 +140,8 @@ def test_generate_architecture_uses_profile_max_output_tokens(tmp_path: Path) ->
             output_tokens=20,
         )
 
-    coord = RunCoordinator(
-        config=config,
-        gateway=MockGateway(responder=responder),
-        data_dir=tmp_path / ".product-factory",
-    )
-    text, usage = coord._engine.composition.generate_architecture_document(
+    composition = CompositionService(config=config, gateway=MockGateway(responder=responder))
+    text, usage = composition.generate_architecture_document(
         request=_request(),
         task=_task(),
         ctx_messages=[],
@@ -179,12 +175,10 @@ def test_generate_architecture_continues_after_length_truncation(tmp_path: Path)
             output_tokens=40,
         )
 
-    coord = RunCoordinator(
-        config=load_config(root),
-        gateway=MockGateway(responder=responder),
-        data_dir=tmp_path / ".product-factory",
+    composition = CompositionService(
+        config=load_config(root), gateway=MockGateway(responder=responder)
     )
-    text, usage = coord._engine.composition.generate_architecture_document(
+    text, usage = composition.generate_architecture_document(
         request=_request(),
         task=_task(),
         ctx_messages=[],
@@ -211,13 +205,11 @@ def test_generate_architecture_fails_after_exhausted_continuations(tmp_path: Pat
             output_tokens=request.max_output_tokens,
         )
 
-    coord = RunCoordinator(
-        config=load_config(root),
-        gateway=MockGateway(responder=responder),
-        data_dir=tmp_path / ".product-factory",
+    composition = CompositionService(
+        config=load_config(root), gateway=MockGateway(responder=responder)
     )
     with pytest.raises(RuntimeFailureError, match="truncated after"):
-        coord._engine.composition.generate_architecture_document(
+        composition.generate_architecture_document(
             request=_request(),
             task=_task(),
             ctx_messages=[],

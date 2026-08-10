@@ -197,7 +197,7 @@ def submit_run_v2(body: SubmitRunV2Body, request: Request) -> JSONResponse:
         return _v2_json(err)
 
     try:
-        handoff_refs = claims_to_handoff_refs(host.coord.db, list(body.handoffs))
+        handoff_refs = claims_to_handoff_refs(host.db, list(body.handoffs))
     except HandoffRefusal as exc:
         return _v2_json(
             HostResponseV2.failure(

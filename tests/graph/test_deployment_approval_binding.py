@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import load_config
 from product_factory.connectors.policy import ConnectorSettings
 from product_factory.domain.errors import ApprovalBlockedError
@@ -44,7 +45,7 @@ def _coordinator(tmp_path: Path) -> RunCoordinator:
             )
         }
     )
-    return RunCoordinator(
+    return build_coordinator(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -64,9 +65,9 @@ def test_approval_block_occurs_before_any_connector_call(tmp_path: Path) -> None
                 metadata={"planner_mode": "fixed"},
             )
         )
-    run = coordinator.db.list_runs(limit=1)[0]
+    run = coordinator.queries.database.list_runs(limit=1)[0]
     assert run["status"] == "awaiting_approval"
-    assert coordinator.db.list_tool_calls(run["run_id"]) == []
+    assert coordinator.queries.database.list_tool_calls(run["run_id"]) == []
 
 
 def test_forged_pack_input_binding_cannot_authorize_deployment(tmp_path: Path) -> None:
@@ -81,9 +82,9 @@ def test_forged_pack_input_binding_cannot_authorize_deployment(tmp_path: Path) -
                 metadata={"planner_mode": "fixed"},
             )
         )
-    run = coordinator.db.list_runs(limit=1)[0]
+    run = coordinator.queries.database.list_runs(limit=1)[0]
     assert run["status"] == "awaiting_approval"
-    assert coordinator.db.list_tool_calls(run["run_id"]) == []
+    assert coordinator.queries.database.list_tool_calls(run["run_id"]) == []
 
 
 def test_durable_action_approval_authorizes_before_connector(tmp_path: Path) -> None:
@@ -101,20 +102,22 @@ def test_durable_action_approval_authorizes_before_connector(tmp_path: Path) -> 
         idempotency_key=str(data["idempotency_key"]),
     )
     # Subject run must exist for FK; use a placeholder then the consumer run will differ.
-    coordinator.db.upsert_run(
+    coordinator.queries.database.upsert_run(
         run_id="subject-release",
         workflow_type="release_readiness",
         status="completed",
         request={},
     )
-    approval = ApprovalService(coordinator.db).create_pending(
+    approval = ApprovalService(coordinator.queries.database).create_pending(
         action_type="simulated_staging",
         subject_run_id="subject-release",
         action_fingerprint=fingerprint,
         actor="operator",
         payload={"target_id": data["target_id"]},
     )
-    ApprovalService(coordinator.db).decide(approval.approval_id, "approved", "operator")
+    ApprovalService(coordinator.queries.database).decide(
+        approval.approval_id, "approved", "operator"
+    )
     data["approval_binding"] = {
         "approval_id": approval.approval_id,
         "release_handoff_id": "handoff-release",
@@ -137,6 +140,6 @@ def test_durable_action_approval_authorizes_before_connector(tmp_path: Path) -> 
     )
     assert manifest.final_status in {"completed", "awaiting_approval", "failed", "blocked"}
     # Authority consumed: connector path was allowed past the approval gate.
-    consumed = ApprovalService(coordinator.db).get(approval.approval_id)
+    consumed = ApprovalService(coordinator.queries.database).get(approval.approval_id)
     assert consumed is not None
     assert consumed.status == "consumed"

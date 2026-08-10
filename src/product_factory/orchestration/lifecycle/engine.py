@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
-import hashlib
 import json
 import logging
 import shutil
@@ -14,23 +12,11 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from product_factory.application.composition_root import (
-    ApplicationServices,
-    build_application,
-)
 from product_factory.config.loader import AppConfig
 from product_factory.connectors.broker import EVENT_INVOKED as CONNECTOR_EVENT_INVOKED
-from product_factory.connectors.source_ledger import SourceLedger
+from product_factory.connectors.broker import ConnectorBroker
+from product_factory.connectors.registry import ConnectorRegistry
 from product_factory.connectors.tavily import CONNECTOR_ID as TAVILY_CONNECTOR_ID
-from product_factory.context.assembler import (
-    assemble_context,
-    list_repository_paths,
-    resolve_context_limits,
-    select_repository_excerpts,
-)
-from product_factory.context.task_context import build_task_context, persist_task_context
-from product_factory.domain.artifacts import ResourceRef
-from product_factory.domain.budgets import TaskBudgetDefaults, clamp_task_budget
 from product_factory.domain.errors import (
     ApprovalBlockedError,
     BudgetExhaustedError,
@@ -42,47 +28,48 @@ from product_factory.domain.errors import (
     ToolAuthorizationError,
 )
 from product_factory.domain.findings import Finding, ValidatorResult
-from product_factory.domain.plans import CompiledPlan, PlannerOutput
+from product_factory.domain.plans import CompiledPlan
 from product_factory.domain.runs import RunManifest, RunRequest
 from product_factory.domain.tasks import (
-    AcceptanceCriterion,
     TaskResult,
     TaskSpec,
     is_terminal_task_status,
-    requires_repair_or_terminal_resolution,
     satisfies_dependency,
 )
 from product_factory.domain.usage import UsageMetrics
 from product_factory.gateway.base import ModelGateway
-from product_factory.gateway.instrumented import InstrumentedModelGateway
 from product_factory.gateway.mock import MockGateway
 from product_factory.observability.contracts import EventSeverity
-from product_factory.observability.events import EventLog
-from product_factory.observability.otel import maybe_create_otel_bridge
 from product_factory.observability.recorder import TelemetryRecorder
-from product_factory.orchestration.budget_ledger import BudgetLedger, warn_unused_profile_set
-from product_factory.orchestration.composition.input import composition_input_from_compose_context
+from product_factory.orchestration.composition.input import CompositionInput
+from product_factory.orchestration.composition.service import CompositionService
 from product_factory.orchestration.effective_policy import (
     EFFECTIVE_TASK_POLICY_SCHEMA,
 )
 from product_factory.orchestration.execution_context import RunExecutionContext
+from product_factory.orchestration.finalization.run_finalizer import RunFinalizer
+from product_factory.orchestration.lifecycle.admission import RunAdmissionService
+from product_factory.orchestration.lifecycle.session import RunExecutionSessionFactory
+from product_factory.orchestration.planning import RunPlanningService
 from product_factory.orchestration.repair import (
     create_repair_tasks,
     patch_fingerprint,
     should_terminate_no_progress,
     update_no_progress,
 )
-from product_factory.orchestration.task_preparation import BlockedPreparation
+from product_factory.orchestration.task_preparation import (
+    TaskPreparationService,
+)
+from product_factory.orchestration.task_runtime import TaskRuntimeService
 from product_factory.orchestration.validation_repair.service import (
+    ValidationRepairService,
     changed_files_from_patch,
     resolve_validation_command_ids,
 )
+from product_factory.orchestration.wave_execution import WaveAdvanceRequest, WaveExecutionService
+from product_factory.orchestration.worktree_lineage import WorktreeLineageService
 from product_factory.persistence.artifact_policy import ArtifactInstance
-from product_factory.persistence.artifacts import ArtifactStore
-from product_factory.planning.compiler import compile_plan
-from product_factory.planning.planner import plan_with_gateway
-from product_factory.policy.domain_packs import resolve_request_domain_packs
-from product_factory.policy.policy_profiles import resolve_request_policy_profiles
+from product_factory.persistence.database import Database
 from product_factory.policy.source_policy import resolve_request_source_policy
 from product_factory.registry.capability_descriptors import (
     CAPABILITY_DESCRIPTORS,
@@ -91,11 +78,9 @@ from product_factory.repositories.patches import (
     apply_patch,
     create_patch,
 )
-from product_factory.repositories.snapshot import snapshot_repository
 from product_factory.repositories.worktrees import WorktreeManager
-from product_factory.repository.stack_profile import StackProfile, discover_stack_profile
-from product_factory.schemas import validate_write_payload
-from product_factory.skills.profiles import ProfileRegistry
+from product_factory.skills.registry import SkillRegistry
+from product_factory.tools.registry import ToolRegistry
 from product_factory.validation.pipeline import (
     has_blocking_failures,
     request_expects_web_citations,
@@ -133,13 +118,9 @@ from product_factory.workflows.artifacts import (
 )
 from product_factory.workflows.base import WorkflowPack
 from product_factory.workflows.handlers import handler_for
-from product_factory.workflows.handlers.base import ComposeContext
-from product_factory.workflows.handoffs import validate_pack_handoffs
-from product_factory.workflows.inputs import persist_pack_input, validate_pack_input
+from product_factory.workflows.inputs import persist_pack_input
 from product_factory.workflows.registry import (
     is_registered_workflow,
-    land_map_for_request,
-    resolve_workflow_pack,
 )
 
 logger = logging.getLogger("product_factory.orchestration.lifecycle")
@@ -173,402 +154,82 @@ _QUALITY_GATE_ROLES: dict[str, str] = {
 }
 
 
-def default_code_change_plan(request_text: str) -> PlannerOutput:
-    from product_factory.workflows.default_plans import default_code_change_plan as _plan
-
-    return _plan(request_text)
-
-
-def default_architecture_plan(request_text: str) -> PlannerOutput:
-    from product_factory.workflows.default_plans import default_architecture_plan as _plan
-
-    return _plan(request_text)
-
-
-def default_technical_plan(request_text: str) -> PlannerOutput:
-    from product_factory.workflows.default_plans import default_technical_plan as _plan
-
-    return _plan(request_text)
-
-
-def default_investigation_plan(request_text: str) -> PlannerOutput:
-    from product_factory.workflows.default_plans import default_investigation_plan as _plan
-
-    return _plan(request_text)
-
-
-def default_quality_gate_plan(request_text: str) -> PlannerOutput:
-    from product_factory.workflows.default_plans import default_quality_gate_plan as _plan
-
-    return _plan(request_text)
-
-
-def default_release_readiness_plan(request_text: str) -> PlannerOutput:
-    from product_factory.workflows.default_plans import default_release_readiness_plan as _plan
-
-    return _plan(request_text)
-
-
-def default_feasibility_discovery_plan(request_text: str) -> PlannerOutput:
-    from product_factory.workflows.default_plans import (
-        default_feasibility_discovery_plan as _plan,
-    )
-
-    return _plan(request_text)
-
-
-def default_change_intake_plan(request_text: str) -> PlannerOutput:
-    from product_factory.workflows.default_plans import default_change_intake_plan as _plan
-
-    return _plan(request_text)
-
-
-def _clamp_proposal_budgets(proposal: PlannerOutput, config: AppConfig) -> PlannerOutput:
-    """Apply policy floors/ceilings to every task budget in a planned DAG."""
-    defaults = getattr(config.policies, "budgets", None)
-    task_defaults: TaskBudgetDefaults = (
-        defaults.task if defaults is not None else TaskBudgetDefaults()
-    )
-    clamped = [
-        task.model_copy(update={"budget": clamp_task_budget(task.budget, defaults=task_defaults)})
-        for task in proposal.tasks
-    ]
-    return proposal.model_copy(update={"tasks": clamped})
-
-
 class RunLifecycleEngine:
     def __init__(
         self,
         *,
         config: AppConfig,
-        gateway: ModelGateway,
-        data_dir: Path | None = None,
-        use_deterministic_planner: bool = False,
-        services: ApplicationServices | None = None,
+        pf_root: Path,
+        db: Database,
+        skills: SkillRegistry,
+        tool_registry: ToolRegistry,
+        connector_registry: ConnectorRegistry,
+        connector_broker: ConnectorBroker,
+        raw_gateway: ModelGateway,
+        composition: CompositionService,
+        validation_repair: ValidationRepairService,
+        worktree_lineage: WorktreeLineageService,
+        finalizer: RunFinalizer,
+        task_preparation: TaskPreparationService,
+        task_runtime: TaskRuntimeService,
+        wave_execution: WaveExecutionService,
+        session_factory: RunExecutionSessionFactory,
+        admission: RunAdmissionService,
+        planning: RunPlanningService,
+        allow_deterministic_workers: bool,
+        use_deterministic_planner: bool,
     ) -> None:
-        # SR2: dependency construction lives in the composition root.
-        app = services or build_application(
-            config=config,
-            gateway=gateway,
-            data_dir=data_dir,
-            use_deterministic_planner=use_deterministic_planner,
-        )
-        self._services = app
-        self.config = app.config
-        self.allow_deterministic_workers = app.allow_deterministic_workers
-        self.use_deterministic_planner = app.use_deterministic_planner
-        self.pf_root = app.pf_root
-        self.db = app.db
-        self.skills = app.skills
-        self.tool_registry = app.tool_registry
-        self.connector_registry = app.connector_registry
-        self.connector_broker = app.connector_broker
-        self._raw_gateway = app.raw_gateway
-        self.composition = app.composition
-        self.validation_repair = app.validation_repair
-        self.wave_scheduler = app.wave_scheduler
-        self.worktree_lineage = app.worktree_lineage
-        self.finalizer = app.finalizer
-        self.task_preparation = app.task_preparation
-        self.task_runtime = app.task_runtime
-        self.wave_execution = app.wave_execution
-        # Bind command facade after the engine exists (composition root builds it unbound).
-        app.lifecycle = self
-        app.commands.bind(self)
-        self.commands = app.commands
-
-    def _build_execution_context(
-        self,
-        *,
-        run_id: str,
-        request: RunRequest,
-        run_dir: Path,
-        budget_snapshot: dict[str, Any] | None = None,
-        workflow_pack: WorkflowPack | None = None,
-    ) -> RunExecutionContext:
-        events = EventLog(run_dir / "events.jsonl")
-        artifacts = ArtifactStore(run_dir / "artifacts")
-        recorder = TelemetryRecorder(
-            self.db,
-            jsonl=events,
-            content_dir=run_dir / "content",
-            otel_exporter=maybe_create_otel_bridge(),
-        )
-        ledger = (
-            BudgetLedger.restore(request.budget, budget_snapshot)
-            if budget_snapshot
-            else BudgetLedger(request.budget)
-        )
-        gateway = InstrumentedModelGateway(
-            self._raw_gateway,
-            recorder=recorder,
-            db=self.db,
-            ledger=ledger,
-        )
-        workspace_key = (
-            str(request.repository_path.resolve())
-            if request.repository_path is not None
-            else (
-                f"{request.workspace.repository_id}:{request.workspace.ref}"
-                if request.workspace is not None
-                else request.repository_id
-            )
-        )
-        return RunExecutionContext(
-            run_id=run_id,
-            workflow_type=request.workflow_type,
-            run_dir=run_dir,
-            gateway=gateway,
-            recorder=recorder,
-            ledger=ledger,
-            artifacts=artifacts,
-            events=events,
-            cancel_check=lambda: self._raise_if_cancelled(run_id),
-            pack_id=workflow_pack.id if workflow_pack else None,
-            pack_version=workflow_pack.version if workflow_pack else None,
-            workspace_key=workspace_key,
-        )
+        self.config = config
+        self.allow_deterministic_workers = allow_deterministic_workers
+        self.use_deterministic_planner = use_deterministic_planner
+        self.pf_root = pf_root
+        self.db = db
+        self.skills = skills
+        self.tool_registry = tool_registry
+        self.connector_registry = connector_registry
+        self.connector_broker = connector_broker
+        self._raw_gateway = raw_gateway
+        self.composition = composition
+        self.validation_repair = validation_repair
+        self.worktree_lineage = worktree_lineage
+        self.finalizer = finalizer
+        self.task_preparation = task_preparation
+        self.task_runtime = task_runtime
+        self.wave_execution = wave_execution
+        self.session_factory = session_factory
+        self.admission = admission
+        self.planning = planning
 
     def run(self, request: RunRequest, *, run_id: str | None = None) -> RunManifest:
         run_id = run_id or f"run-{uuid.uuid4().hex[:12]}"
         run_dir = self.pf_root / "runs" / run_id
-        for sub in (
-            "input",
-            "worktrees",
-            "scratch",
-            "artifacts",
-            "findings",
-            "prompts",
-            "output",
-            "content",
-        ):
-            (run_dir / sub).mkdir(parents=True, exist_ok=True)
-
-        execution_context = self._build_execution_context(
+        execution_context = self.session_factory.open(
             run_id=run_id,
             request=request,
             run_dir=run_dir,
         )
         events = execution_context.events
-        artifacts = execution_context.artifacts
         recorder = execution_context.recorder
-        note = warn_unused_profile_set(request.model_profile_set)
-        if note:
-            logger.warning(note)
-            recorder.emit(
-                run_id=run_id,
-                event_type="run.deprecation_warning",
-                severity=EventSeverity.WARNING,
-                summary=note,
-                payload={"field": "model_profile_set", "value": request.model_profile_set},
-            )
-        recorder.emit(
-            run_id=run_id,
-            event_type="run.started",
-            summary="Run started",
-            payload={"workflow": request.workflow_type},
-        )
-        self._raise_if_cancelled(run_id)
-
-        self.db.upsert_run(
-            run_id=run_id,
-            workflow_type=request.workflow_type,
-            status="initializing",
-            request=request.model_dump(mode="json"),
-            active_operation="initializing",
-        )
-
-        (run_dir / "input" / "request.md").write_text(request.request_text, encoding="utf-8")
-        (run_dir / "input" / "request.json").write_text(
-            request.model_dump_json(indent=2), encoding="utf-8"
-        )
-        persist_pack_input(request.pack_input, run_dir / "input")
-
         usage = UsageMetrics()
         base_commit: str | None = None
-        repo_summary: dict[str, Any] | None = None
         worktrees: WorktreeManager | None = None
         original_repo: Path | None = None
-        # Resolve the declarative workflow pack up front (P1.G / P3.D): unknown
-        # workflow ids fail closed before any planning/execution spend, and
-        # the resolved pack's identity is stamped on the run manifest.
         workflow_pack: WorkflowPack | None = None
         land_map = ArtifactLandMap()
-        if is_registered_workflow(request.workflow_type):
-            workflow_pack = resolve_workflow_pack(request.workflow_type)
-            validate_pack_handoffs(request, workflow_pack)
-            if request.handoff_refs:
-                # SD0.B temporary: remove when RunLifecycleEngine owns handoff
-                # resolution (issue: remove-coordinator-handoff-resolve-2026-08).
-                from product_factory.trust.handoffs import HandoffService
-
-                resolved_handoffs = HandoffService(self.db, self.pf_root).resolve_refs(
-                    request,
-                    workflow_pack,
-                    consumer_run_id=run_id,
-                    materialize_dir=run_dir / "input",
-                )
-                (run_dir / "input" / "resolved-handoffs.json").write_text(
-                    json.dumps(
-                        [item.model_dump(mode="json") for item in resolved_handoffs],
-                        indent=2,
-                        default=str,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
-            # Bad artifact overrides or typed pack input fail here, before any
-            # planning spend.
-            validate_pack_input(workflow_pack, request.pack_input)
-            land_map = land_map_for_request(request)
-            recorder.emit(
-                run_id=run_id,
-                event_type="workflow.pack_resolved",
-                summary=f"Workflow pack {workflow_pack.id}@{workflow_pack.version}",
-                payload={
-                    **workflow_pack.manifest_metadata(),
-                    "artifact_land_map": land_map.as_payload(),
-                },
-            )
-        execution_context = execution_context.with_pack(workflow_pack)
-        source_policy = resolve_request_source_policy(
-            request, profiles_root=self.config.root / "profiles"
-        )
-        SourceLedger.for_run(run_dir).record_seed_urls(
-            request.pack_input.get("seed_source_urls") or (),
-            policy=source_policy,
-            task_id="run-input",
-        )
 
         try:
-            if request.repository_path is not None:
-                snap = snapshot_repository(
-                    request.repository_path,
-                    allow_dirty=self.config.policies.allow_dirty_repo,
-                    output_dir=run_dir / "input",
-                )
-                base_commit = snap.base_commit
-                if (
-                    request.workspace_provenance is not None
-                    and base_commit != request.workspace_provenance.commit
-                ):
-                    raise ConfigurationError(
-                        "Prepared workspace revision changed before execution",
-                        details={
-                            "expected_commit": request.workspace_provenance.commit,
-                            "actual_commit": base_commit,
-                        },
-                    )
-                repo_summary = snap.manifest
-                original_repo = snap.repository_path
-                worktrees = WorktreeManager(snap.repository_path, run_dir / "worktrees")
-                recorder.emit(
-                    run_id=run_id,
-                    event_type="repository.snapshot",
-                    summary="Repository snapshot",
-                    payload={"base_commit": base_commit},
-                )
-
-            # Planning
-            self.db.upsert_run(
+            snapshot, execution_context = self.admission.admit(
                 run_id=run_id,
-                workflow_type=request.workflow_type,
-                status="planning",
-                request=request.model_dump(mode="json"),
-                base_commit=base_commit,
-                active_operation="planning",
-                workflow_pack_digest=(workflow_pack.content_hash() if workflow_pack else None),
+                request=request,
+                session=execution_context,
             )
-            recorder.emit(
-                run_id=run_id,
-                event_type="run.status_changed",
-                summary="Planning",
-                payload={"status": "planning"},
-            )
-            proposal = self._plan(
-                run_id,
-                request,
-                repo_summary,
-                execution_context=execution_context,
-            )
-            art = artifacts.put_json(
-                proposal.model_dump(mode="json"),
-                logical_name="plan.json",
-                created_by_task_id="plan",
-            )
-            shutil.copy(
-                artifacts.blobs / art.sha256,
-                run_dir / "output" / "plan.json",
-            )
-
-            compile_result = compile_plan(
-                proposal,
-                max_tasks=request.budget.max_tasks,
-                max_parallel_tasks=request.budget.max_parallel_tasks,
-                workflow_pack=workflow_pack,
-                skill_registry=self.skills,
-                profile_digests=self._profile_digests(request),
-            )
-            plan_attempt = 1
-            if not compile_result.ok:
-                recorder.emit(
-                    run_id=run_id,
-                    event_type="plan.rejected",
-                    severity=EventSeverity.WARNING,
-                    summary="Plan rejected by compiler",
-                    payload={"errors": [e.model_dump() for e in compile_result.errors]},
-                )
-                if plan_attempt <= request.budget.max_plan_repairs:
-                    proposal = self._plan(
-                        run_id,
-                        request,
-                        repo_summary,
-                        repair_errors=[e.model_dump() for e in compile_result.errors],
-                        execution_context=execution_context,
-                    )
-                    compile_result = compile_plan(
-                        proposal,
-                        max_tasks=request.budget.max_tasks,
-                        max_parallel_tasks=request.budget.max_parallel_tasks,
-                        workflow_pack=workflow_pack,
-                        skill_registry=self.skills,
-                        profile_digests=self._profile_digests(request),
-                    )
-                    plan_attempt += 1
-                if not compile_result.ok:
-                    (run_dir / "output" / "compiler-report.json").write_text(
-                        json.dumps(
-                            {
-                                "ok": False,
-                                "errors": [e.model_dump() for e in compile_result.errors],
-                            },
-                            indent=2,
-                        ),
-                        encoding="utf-8",
-                    )
-                    raise PlanRejectedError(
-                        "Plan rejected after repair",
-                        details={"errors": [e.model_dump() for e in compile_result.errors]},
-                    )
-
-            plan = compile_result.plan
-            assert plan is not None
-            (run_dir / "output" / "compiler-report.json").write_text(
-                json.dumps({"ok": True, "notes": plan.compiler_notes}, indent=2),
-                encoding="utf-8",
-            )
-            recorder.emit(
-                run_id=run_id,
-                event_type="plan.compiled",
-                summary="Plan compiled",
-                payload={
-                    "task_count": len(plan.tasks),
-                    "task_order": list(plan.task_order),
-                    "notes": plan.compiler_notes,
-                },
-            )
-
-            self._raise_if_cancelled(run_id)
+            workflow_pack = snapshot.workflow_pack
+            land_map = snapshot.land_map
+            base_commit = snapshot.repository.base_commit
+            original_repo = snapshot.repository.original_path
+            worktrees = snapshot.repository.worktrees
+            planning = self.planning.ensure_plan(snapshot=snapshot, session=execution_context)
+            plan = planning.compiled_plan
 
             # Execute
             manifest = self._execute(
@@ -762,7 +423,7 @@ class RunLifecycleEngine:
             (run_dir / sub).mkdir(parents=True, exist_ok=True)
 
         budget_snapshot = json.loads(run_row["budget_json"]) if run_row.get("budget_json") else None
-        execution_context = self._build_execution_context(
+        execution_context = self.session_factory.open(
             run_id=run_id,
             request=request,
             run_dir=run_dir,
@@ -771,55 +432,18 @@ class RunLifecycleEngine:
         artifacts = execution_context.artifacts
         recorder = execution_context.recorder
         ledger = execution_context.ledger
-        workflow_pack: WorkflowPack | None = None
-        land_map = ArtifactLandMap()
-        if is_registered_workflow(request.workflow_type):
-            workflow_pack = resolve_workflow_pack(request.workflow_type)
-            validate_pack_handoffs(request, workflow_pack)
-            if request.handoff_refs:
-                # SD0.B temporary: remove when RunLifecycleEngine owns handoff
-                # resolution (issue: remove-coordinator-handoff-resolve-2026-08).
-                from product_factory.trust.handoffs import HandoffService
-
-                HandoffService(self.db, self.pf_root).resolve_refs(
-                    request,
-                    workflow_pack,
-                    consumer_run_id=run_id,
-                    materialize_dir=run_dir / "input",
-                )
-            validate_pack_input(workflow_pack, request.pack_input)
-            land_map = land_map_for_request(request)
-        execution_context = execution_context.with_pack(workflow_pack)
-        source_policy = resolve_request_source_policy(
-            request, profiles_root=self.config.root / "profiles"
+        snapshot, execution_context = self.admission.resume(
+            run_id=run_id,
+            request=request,
+            status=str(run_row["status"]),
+            base_commit=base_commit,
+            session=execution_context,
         )
-        SourceLedger.for_run(run_dir).record_seed_urls(
-            request.pack_input.get("seed_source_urls") or (),
-            policy=source_policy,
-            task_id="run-input",
-        )
-
-        plan_path = run_dir / "output" / "plan.json"
-        if not plan_path.exists():
-            raise ConfigurationError(
-                f"No persisted plan for run {run_id}; cannot resume before planning completed"
-            )
-        proposal = PlannerOutput.model_validate(json.loads(plan_path.read_text(encoding="utf-8")))
-        compile_result = compile_plan(
-            proposal,
-            max_tasks=request.budget.max_tasks,
-            max_parallel_tasks=request.budget.max_parallel_tasks,
-            workflow_pack=workflow_pack,
-            skill_registry=self.skills,
-            profile_digests=self._profile_digests(request),
-        )
-        if not compile_result.ok or compile_result.plan is None:
-            raise PlanRejectedError(
-                "Persisted plan no longer compiles",
-                details={"errors": [e.model_dump() for e in compile_result.errors]},
-            )
-        merged_tasks = dict(compile_result.plan.tasks)
-        merged_order = list(compile_result.plan.task_order)
+        workflow_pack = snapshot.workflow_pack
+        land_map = snapshot.land_map
+        existing_plan = self.planning.load_existing(snapshot=snapshot)
+        merged_tasks = dict(existing_plan.compiled_plan.tasks)
+        merged_order = list(existing_plan.compiled_plan.task_order)
 
         task_status: dict[str, str] = {}
         results: list[TaskResult] = []
@@ -893,7 +517,7 @@ class RunLifecycleEngine:
                         continue
         for tid in merged_tasks:
             task_status.setdefault(tid, "pending")
-        live_plan = compile_result.plan.model_copy(
+        live_plan = existing_plan.compiled_plan.model_copy(
             update={"tasks": merged_tasks, "task_order": merged_order}
         )
 
@@ -1007,165 +631,6 @@ class RunLifecycleEngine:
             )
             raise RuntimeFailureError(str(exc)) from exc
 
-    def _plan(
-        self,
-        run_id: str,
-        request: RunRequest,
-        repo_summary: dict[str, Any] | None,
-        repair_errors: list[dict[str, Any]] | None = None,
-        *,
-        execution_context: RunExecutionContext | None = None,
-    ) -> PlannerOutput:
-        planner_mode = str(request.metadata.get("planner_mode") or "").strip().lower()
-        force_fixed = planner_mode in {"fixed", "complexity_sensitive", "deterministic"}
-        force_live = planner_mode == "live"
-        use_deterministic = force_fixed or (self.use_deterministic_planner and not force_live)
-        if use_deterministic:
-            if is_registered_workflow(request.workflow_type):
-                proposal = handler_for(request.workflow_type).plan_template(request.request_text)
-            else:
-                proposal = default_code_change_plan(request.request_text)
-        else:
-            proposal = plan_with_gateway(
-                execution_context.gateway if execution_context is not None else self._raw_gateway,
-                run_id=run_id,
-                request_text=request.request_text,
-                workflow_type=request.workflow_type,
-                repository_summary=repo_summary,
-                budget=request.budget.model_dump(mode="json"),
-                repair_errors=repair_errors,
-                allowed_capabilities=(
-                    resolve_workflow_pack(request.workflow_type).allowed_capabilities
-                    if is_registered_workflow(request.workflow_type)
-                    else None
-                ),
-                seed=(
-                    int(request.metadata["benchmark_seed"])
-                    if request.metadata.get("benchmark_seed") is not None
-                    else None
-                ),
-            )
-            if is_registered_workflow(request.workflow_type):
-                pack = resolve_workflow_pack(request.workflow_type)
-                allowed = pack.allowed_capabilities
-                filtered = [t for t in proposal.tasks if t.capability in allowed]
-                if filtered:
-                    kept = {t.id for t in filtered}
-                    filtered = [
-                        t.model_copy(
-                            update={
-                                "dependencies": [d for d in t.dependencies if d in kept],
-                            }
-                        )
-                        for t in filtered
-                    ]
-                    finals = [fa for fa in proposal.final_artifacts if fa.composer_task_id in kept]
-                    proposal = proposal.model_copy(
-                        update={
-                            "tasks": filtered,
-                            "final_artifacts": finals or proposal.final_artifacts,
-                        }
-                    )
-        proposal = _clamp_proposal_budgets(proposal, self.config)
-        if not self.finalizer.pack_declares_patch_output(
-            resolve_workflow_pack(request.workflow_type)
-            if is_registered_workflow(request.workflow_type)
-            else None
-        ):
-            return proposal
-        disable_review = request.metadata.get("disable_review") == "true"
-        force_review = request.metadata.get("force_review") == "true"
-        disable_analysis = request.metadata.get("disable_analysis") == "true"
-        tasks = list(proposal.tasks)
-        review_ids = {task.id for task in tasks if task.capability == "independent_review"}
-        analysis_ids = {task.id for task in tasks if task.capability == "repository_analysis"}
-        if disable_analysis and analysis_ids:
-            tasks = [
-                task.model_copy(
-                    update={
-                        "dependencies": [
-                            dep for dep in task.dependencies if dep not in analysis_ids
-                        ]
-                    }
-                )
-                for task in tasks
-                if task.id not in analysis_ids
-            ]
-        if disable_review and review_ids:
-            tasks = [
-                task.model_copy(
-                    update={
-                        "dependencies": [dep for dep in task.dependencies if dep not in review_ids]
-                    }
-                )
-                for task in tasks
-                if task.id not in review_ids
-            ]
-        elif force_review and not review_ids:
-            implementation = next(
-                (task for task in tasks if task.capability in {"implementation", "repair"}),
-                None,
-            )
-            composition_index = next(
-                (i for i, task in enumerate(tasks) if task.capability == "composition"),
-                len(tasks),
-            )
-            if implementation is not None:
-                review = TaskSpec(
-                    id="POLICY-REVIEW",
-                    title="Independent review",
-                    capability="independent_review",
-                    objective="Review the proposed patch with evidence",
-                    dependencies=[implementation.id],
-                    expected_output_schema="review_findings.v1",
-                    required_tool_classes={"repository_read", "git_read"},
-                    acceptance_criteria=[
-                        AcceptanceCriterion(
-                            id="POLICY-REVIEW-AC1",
-                            description="Findings cite file or patch evidence",
-                            verification="evidence_check",
-                        )
-                    ],
-                )
-                tasks.insert(composition_index, review)
-                tasks = [
-                    task.model_copy(
-                        update={
-                            "dependencies": [*task.dependencies, review.id]
-                            if task.capability == "composition"
-                            else task.dependencies
-                        }
-                    )
-                    for task in tasks
-                ]
-        proposal = proposal.model_copy(update={"tasks": tasks})
-        return self._apply_expected_file_guidance(proposal, request)
-
-    def _apply_expected_file_guidance(
-        self, proposal: PlannerOutput, request: RunRequest
-    ) -> PlannerOutput:
-        expected = [
-            path.strip()
-            for path in str(request.metadata.get("expected_files") or "").split(",")
-            if path.strip()
-        ]
-        if not expected:
-            return proposal
-        guidance = (
-            "Required deliverable paths (create or modify exactly these paths):\n"
-            + "\n".join(f"- {path}" for path in expected)
-        )
-        tasks: list[TaskSpec] = []
-        for task in proposal.tasks:
-            if task.capability not in {"implementation", "repair"}:
-                tasks.append(task)
-                continue
-            objective = task.objective
-            if "Required deliverable paths" not in objective:
-                objective = f"{objective.rstrip()}\n\n{guidance}"
-            tasks.append(task.model_copy(update={"objective": objective}))
-        return proposal.model_copy(update={"tasks": tasks})
-
     def _execute(
         self,
         *,
@@ -1259,89 +724,27 @@ class RunLifecycleEngine:
                 raise BudgetExhaustedError("Run budget exhausted")
             ledger.check_wall_clock()
 
-            def _mark_task_started(task: TaskSpec) -> None:
-                self.db.upsert_task(
-                    run_id=run_id,
-                    task_id=task.id,
-                    capability=task.capability,
-                    status="running",
-                    spec=task.model_dump(mode="json"),
-                    started_at=datetime.now(UTC).isoformat(),
-                    active_operation=task.capability,
-                )
-                recorder.emit(
-                    run_id=run_id,
-                    event_type="task.started",
-                    task_id=task.id,
-                    summary=f"Task {task.id} started",
-                    payload={
-                        "task_id": task.id,
-                        "capability": task.capability,
-                        "title": task.title,
-                    },
-                )
-
-            def _before_dispatch(spent: Decimal = spent) -> None:
-                if spent >= request.budget.max_cost_usd:
-                    raise BudgetExhaustedError("Run budget exhausted before wave")
-                ledger.check_wall_clock()
-
-            def _run_one(
-                task: TaskSpec,
-                dependency_outputs: list[dict[str, Any]],
-                validation_evidence_refs: list[str] = validation_evidence_refs,
-                collected_validator_results: list[dict[str, Any]] = collected_validator_results,
-            ) -> TaskResult:
-                return self._execute_task(
-                    execution_context=execution_context,
+            advance = self.wave_execution.advance(
+                WaveAdvanceRequest(
+                    execution_session=execution_context,
                     request=request,
-                    task=task,
+                    plan=live_plan,
+                    task_status=task_status,
+                    prior_results=tuple(results),
+                    spent=spent,
                     worktrees=worktrees,
-                    original_repo=original_repo,
+                    original_repository=original_repo,
                     base_commit=base_commit,
-                    dependency_outputs=dependency_outputs,
                     land_map=land_map,
-                    composer_role=composer_roles.get(task.id),
-                    validation_evidence_refs=validation_evidence_refs,
-                    validator_results=collected_validator_results,
+                    composition_roles=composer_roles,
+                    validation_evidence_refs=tuple(validation_evidence_refs),
+                    validator_results=tuple(collected_validator_results),
                 )
-
-            # Execute wave: read-only tasks and predicted-disjoint writers run
-            # concurrently (bounded by max_parallel_tasks via WaveExecutionService);
-            # conflicting writers are serialized. Result processing below stays
-            # single-threaded and iterates `ready` (plan order) regardless of
-            # completion order, giving a deterministic merge order (P1.F).
-            cycle = self.wave_execution.run_wave_cycle(
-                plan=live_plan,
-                task_status=task_status,
-                max_parallel=request.budget.max_parallel_tasks,
-                prior_results=list(results),
-                artifacts=artifacts,
-                mark_task_started=_mark_task_started,
-                executor_fn=_run_one,
-                before_dispatch=_before_dispatch,
             )
-            ready = cycle.ready
-            wave_results = cycle.wave_results
-            if not ready:
-                if all(is_terminal_task_status(task_status[t]) for t in live_plan.tasks):
-                    break
-                # deadlock — diagnose terminal unsuccessful deps instead of
-                # reporting an opaque unsatisfiable-scheduler failure when
-                # dependents are blocked on partial/failed/blocked work.
-                pending = [t for t, s in task_status.items() if s == "pending"]
-                if pending:
-                    failed = [
-                        f"{result.task_id}: {result.summary}"
-                        for result in results
-                        if requires_repair_or_terminal_resolution(result.status)
-                    ]
-                    if failed:
-                        raise RuntimeFailureError("Dependency failed; " + "; ".join(failed))
-                    raise RuntimeFailureError(f"Unsatisfiable dependencies for tasks: {pending}")
+            if advance.finalization_eligible:
                 break
-
-            execution_context.cancel_check()
+            ready = advance.ready
+            wave_results = advance.wave_results
 
             for task, result in zip(ready, wave_results, strict=True):
                 usage = usage.merge(result.usage)
@@ -1696,31 +1099,18 @@ class RunLifecycleEngine:
                             in workflow_pack.execution_policy.fallback_composition_roles
                         ):
                             try:
-                                compose_ctx = ComposeContext(
-                                    composition=self.composition,
+                                composition_input = CompositionInput(
                                     request=request,
                                     role=entry.role,
                                     document_name=entry.logical_name,
-                                    findings=findings,
-                                    dependency_outputs=[],
+                                    findings=tuple(findings),
                                     use_mock=isinstance(self._raw_gateway, MockGateway),
-                                    compose_architecture=self.composition.compose_architecture,
-                                    compose_evidence_report=self.composition.compose_evidence_report,
-                                    compose_feasibility_dossier=(
-                                        self.composition.compose_feasibility_dossier
-                                    ),
-                                    compose_change_intake=self.composition.compose_change_intake,
-                                    compose_quality_document=self.composition.compose_quality_document,
-                                    validation_evidence_refs=validation_evidence_refs,
-                                    validator_results=collected_validator_results,
+                                    run_id=run_id,
+                                    base_revision=base_commit,
+                                    validation_evidence_refs=tuple(validation_evidence_refs),
+                                    validator_results=tuple(collected_validator_results),
                                 )
-                                compose_ctx.composition_input = (
-                                    composition_input_from_compose_context(compose_ctx)
-                                )
-                                document = pack_handler.compose(
-                                    entry.role,
-                                    compose_ctx,
-                                )
+                                document = self.composition.compose(composition_input).body
                                 documents_by_role[entry.role] = document
                                 if entry.role == ROLE_EVIDENCE_REPORT:
                                     evidence_report_md = document
@@ -1959,511 +1349,8 @@ class RunLifecycleEngine:
         )
         return manifest
 
-    def _profile_digests(self, request: RunRequest) -> dict[str, str]:
-        digests = ProfileRegistry.load(self.config.root / "profiles").digests()
-        if request.repository_path is not None:
-            stack_profile = discover_stack_profile(
-                request.repository_path,
-                registered_command_ids=(
-                    resolve_validation_command_ids(request)
-                    or self.config.policies.registered_commands
-                ),
-            )
-            digests.update(stack_profile.as_manifest_entry())
-        source_policy = resolve_request_source_policy(
-            request, profiles_root=self.config.root / "profiles"
-        )
-        if source_policy is not None:
-            digests.update(source_policy.as_manifest_entry())
-        for pack in resolve_request_domain_packs(request, packs_root=self.config.root / "packs"):
-            digests.update(pack.as_manifest_entry())
-        for profile in resolve_request_policy_profiles(
-            request, profiles_root=self.config.root / "profiles"
-        ):
-            digests.update(profile.as_manifest_entry())
-        return digests
-
     def _record_artifact_instance(self, instance: ArtifactInstance) -> None:
         self.db.record_artifact_instance(instance.model_dump(mode="json"))
-
-    def _pin_stack_profile(
-        self,
-        *,
-        request: RunRequest,
-        artifacts: ArtifactStore,
-        run_id: str,
-        task_id: str,
-        existing_policy: dict[str, Any] | None,
-    ) -> tuple[dict[str, str], str | None, str | None, str | None]:
-        """Return (profile_digests, digest, artifact_sha256, schema_version).
-
-        On resume, reuse the pinned stack-profile artifact instead of re-detecting.
-        """
-
-        digests = ProfileRegistry.load(self.config.root / "profiles").digests()
-        source_policy = resolve_request_source_policy(
-            request, profiles_root=self.config.root / "profiles"
-        )
-        if source_policy is not None:
-            digests.update(source_policy.as_manifest_entry())
-        for pack in resolve_request_domain_packs(request, packs_root=self.config.root / "packs"):
-            digests.update(pack.as_manifest_entry())
-        for profile in resolve_request_policy_profiles(
-            request, profiles_root=self.config.root / "profiles"
-        ):
-            digests.update(profile.as_manifest_entry())
-
-        stack_digest = None
-        stack_sha = None
-        stack_version = None
-        if existing_policy:
-            stack_sha = existing_policy.get("stack_profile_artifact_sha256")
-            stack_digest = existing_policy.get("stack_profile_digest")
-            stack_version = existing_policy.get("stack_profile_schema_version")
-            if stack_sha and artifacts.exists(str(stack_sha)):
-                try:
-                    pinned = StackProfile.model_validate(
-                        json.loads(artifacts.get_text(str(stack_sha)))
-                    )
-                    digests.update(pinned.as_manifest_entry())
-                    return digests, pinned.digest, str(stack_sha), pinned.version
-                except (OSError, json.JSONDecodeError, ValueError, TypeError):
-                    if stack_digest:
-                        digests["stack:pinned"] = str(stack_digest)
-                    return digests, stack_digest, str(stack_sha), stack_version
-            if stack_sha:
-                return digests, stack_digest, str(stack_sha), stack_version
-
-        existing_instance = next(
-            (
-                row
-                for row in self.db.list_artifact_instances(run_id)
-                if row.get("role") == "stack_profile"
-            ),
-            None,
-        )
-        if existing_instance and artifacts.exists(str(existing_instance["sha256"])):
-            try:
-                pinned = StackProfile.model_validate(
-                    json.loads(artifacts.get_text(str(existing_instance["sha256"])))
-                )
-                digests.update(pinned.as_manifest_entry())
-                return (
-                    digests,
-                    pinned.digest,
-                    str(existing_instance["sha256"]),
-                    pinned.version,
-                )
-            except (OSError, json.JSONDecodeError, ValueError, TypeError):
-                pass
-
-        if request.repository_path is None:
-            return digests, None, None, None
-
-        stack_profile = discover_stack_profile(
-            request.repository_path,
-            registered_command_ids=(
-                resolve_validation_command_ids(request) or self.config.policies.registered_commands
-            ),
-        )
-        digests.update(stack_profile.as_manifest_entry())
-        ref = artifacts.put_json(
-            stack_profile.model_dump(mode="json"),
-            logical_name="stack-profile.json",
-            created_by_task_id=task_id,
-            schema_id="stack_profile.v1",
-            schema_version=stack_profile.version,
-            trust_level="generated",
-        )
-        self.db.record_artifact(ref.model_dump(mode="json"))
-        self._record_artifact_instance(
-            ArtifactInstance.create(
-                run_id=run_id,
-                sha256=ref.sha256,
-                content_class="durable_output",
-                capture_level="full",
-                role="stack_profile",
-                producer_task_id=task_id,
-                media_type=ref.media_type,
-                schema_id="stack_profile.v1",
-                schema_version=stack_profile.version,
-                size_bytes=ref.size_bytes,
-                display_name="stack-profile.json",
-                metadata={"stack_id": stack_profile.id, "digest": stack_profile.digest},
-            )
-        )
-        return digests, stack_profile.digest, ref.sha256, stack_profile.version
-
-    def _research_prompt_tool_names(
-        self,
-        *,
-        task: TaskSpec,
-        request: RunRequest,
-        allowed: set[str],
-    ) -> tuple[list[str] | None, str | None]:
-        """Compat delegate — ownership is TaskPreparationService (SR2)."""
-        return self.task_preparation.research_prompt_tool_names(
-            task=task, request=request, allowed=allowed
-        )
-
-    def _execute_task(
-        self,
-        *,
-        execution_context: RunExecutionContext,
-        request: RunRequest,
-        task: TaskSpec,
-        worktrees: WorktreeManager | None,
-        original_repo: Path | None,
-        base_commit: str,
-        dependency_outputs: list[dict[str, Any]] | None = None,
-        land_map: ArtifactLandMap | None = None,
-        composer_role: str | None = None,
-        validation_evidence_refs: list[str] | None = None,
-        validator_results: list[dict[str, Any]] | None = None,
-    ) -> TaskResult:
-        run_id = execution_context.run_id
-        run_dir = execution_context.run_dir
-        artifacts = execution_context.artifacts
-        recorder = execution_context.recorder
-        ledger = execution_context.ledger
-        gateway = execution_context.gateway
-        land_map = land_map or ArtifactLandMap()
-        validation_evidence_refs = validation_evidence_refs or []
-        validator_results = validator_results or []
-
-        existing_policy_data: dict[str, Any] | None = None
-        existing_row = self.db.get_task(run_id, task.id)
-        if existing_row and existing_row.get("effective_policy_json"):
-            with contextlib.suppress(json.JSONDecodeError, TypeError):
-                loaded = json.loads(existing_row["effective_policy_json"])
-                if isinstance(loaded, dict):
-                    existing_policy_data = loaded
-
-        profile_digests, stack_digest, stack_sha, stack_version = self._pin_stack_profile(
-            request=request,
-            artifacts=artifacts,
-            run_id=run_id,
-            task_id=task.id,
-            existing_policy=existing_policy_data,
-        )
-
-        prepared = self.task_preparation.prepare_effective_policy(
-            run_id=run_id,
-            request=request,
-            task=task,
-            existing_policy_data=existing_policy_data,
-            profile_digests=profile_digests,
-            stack_digest=stack_digest,
-            stack_sha=stack_sha,
-            stack_version=stack_version,
-        )
-        if isinstance(prepared, BlockedPreparation):
-            conflict_result = prepared.result
-            # SR3: WaveExecutionService owns terminal task+event durability.
-            self.wave_execution.record_task_completion(
-                db=self.db,
-                run_id=run_id,
-                task=task,
-                result=conflict_result,
-            )
-            return conflict_result
-
-        effective_policy = prepared.effective_policy
-        profile = prepared.profile
-        agent_profile = prepared.agent_profile
-        skills = prepared.skills
-        skills_disabled = prepared.skills_disabled
-        profile_digests = prepared.profile_digests
-        profile_cfg = self.config.models.profiles.get(profile)
-
-        if not prepared.reused_existing:
-            validate_write_payload(
-                EFFECTIVE_TASK_POLICY_SCHEMA,
-                effective_policy.model_dump(mode="json"),
-            )
-            policy_ref = artifacts.put_json(
-                effective_policy.model_dump(mode="json"),
-                logical_name=f"effective-policy-{task.id}.json",
-                created_by_task_id=task.id,
-                schema_id=EFFECTIVE_TASK_POLICY_SCHEMA,
-                schema_version="1",
-            )
-            self.db.record_artifact(policy_ref.model_dump(mode="json"))
-            self._record_artifact_instance(
-                ArtifactInstance.create(
-                    run_id=run_id,
-                    sha256=policy_ref.sha256,
-                    content_class="durable_output",
-                    capture_level="full",
-                    role="effective_task_policy",
-                    producer_task_id=task.id,
-                    media_type=policy_ref.media_type,
-                    schema_id=EFFECTIVE_TASK_POLICY_SCHEMA,
-                    schema_version="1",
-                    size_bytes=policy_ref.size_bytes,
-                    display_name=policy_ref.logical_name,
-                )
-            )
-            self.db.upsert_task(
-                run_id=run_id,
-                task_id=task.id,
-                capability=task.capability,
-                status="running",
-                spec=task.model_dump(mode="json"),
-                effective_policy=effective_policy.model_dump(mode="json"),
-                active_operation=task.capability,
-            )
-
-        prompt_set = set(effective_policy.prompt_tool_names)
-        tool_defs = [
-            {"name": t.name, "description": t.description, "parameters": t.input_schema}
-            for t in self.tool_registry.list()
-            if t.name in prompt_set
-        ]
-        registered_ids = resolve_validation_command_ids(request) or list(
-            self.config.policies.registered_commands
-        )
-        if registered_ids:
-            for entry in tool_defs:
-                if entry.get("name") == "run_validation_command":
-                    entry["description"] = (
-                        f"{entry.get('description', '')} Registered ids: "
-                        f"{', '.join(registered_ids)}."
-                    )
-        excerpt_root = original_repo
-        repository_excerpts: list[dict[str, str]] = []
-        context_omissions: list[str] = []
-        if skills_disabled:
-            context_omissions.append("skills_disabled")
-        context_mode = str(request.metadata.get("context_mode") or "targeted").strip().lower()
-        soft_limit = profile_cfg.context_soft_limit if profile_cfg is not None else None
-        packing_limits = resolve_context_limits(
-            self.config.policies.context,
-            task_max_input_tokens=task.budget.max_input_tokens,
-            model_context_soft_limit=soft_limit,
-        )
-        if excerpt_root is not None:
-            if context_mode in {"file_list_only", "file-list-only", "paths_only"}:
-                repository_excerpts, context_omissions = list_repository_paths(
-                    excerpt_root,
-                    max_files=packing_limits.max_file_list_paths,
-                )
-            else:
-                repository_excerpts, context_omissions = select_repository_excerpts(
-                    excerpt_root,
-                    objective=f"{request.request_text}\n{task.objective}",
-                    max_files=packing_limits.max_excerpt_files,
-                    max_chars=packing_limits.max_excerpt_chars,
-                )
-        runtime_directives: list[str] = []
-        if registered_ids and task.capability in {"implementation", "repair"}:
-            runtime_directives.append(
-                "Validation: call run_validation_command only with a registered "
-                f"command_id from [{', '.join(registered_ids)}]. Never use "
-                "validator labels (behavioral:...) or raw executables (pytest)."
-            )
-        if "jitter" in f"{request.request_text}\n{task.objective}".lower() and task.capability in {
-            "implementation",
-            "repair",
-        }:
-            runtime_directives.append(
-                "Retry/jitter: compute the sleep duration with jitter applied "
-                "before calling sleep (e.g. sleep(min(max_delay, delay * "
-                "(1 + random())))). Do not sleep the base delay and only mutate "
-                "delay afterward — tests assert observed sleep values vary."
-            )
-        ctx = assemble_context(
-            task=task,
-            model_profile=profile,
-            agent_profile=agent_profile,
-            skills=skills,
-            tool_definitions=tool_defs,
-            repository_excerpts=repository_excerpts,
-            dependency_outputs=dependency_outputs,
-            context_omissions=context_omissions,
-            runtime_directives=runtime_directives or None,
-            package_id=f"pkg-{task.id}",
-            packing=packing_limits,
-            profile_digests=profile_digests,
-        )
-        task_context = build_task_context(
-            task_id=task.id,
-            skills=skills,
-            tool_names=list(effective_policy.allowed_tool_names),
-            prompt_tool_names=list(effective_policy.prompt_tool_names),
-            expected_output_schema=task.expected_output_schema,
-            profile_digests=profile_digests,
-            effective_policy=effective_policy.model_dump(mode="json"),
-        )
-        persist_task_context(task_context, run_dir / "prompts")
-        (run_dir / "prompts" / f"{task.id}.manifest.json").write_text(
-            ctx.manifest.model_dump_json(indent=2), encoding="utf-8"
-        )
-        if recorder is not None:
-            recorder.emit(
-                run_id=run_id,
-                event_type="prompt.package_created",
-                task_id=task.id,
-                summary="Prompt package assembled",
-                payload={
-                    "package_hash": ctx.package_hash,
-                    "manifest": ctx.manifest.model_dump(mode="json"),
-                    "effective_policy": effective_policy.model_dump(mode="json"),
-                },
-                content=ctx.messages,
-                content_logical_name=f"prompt-package-{task.id}",
-            )
-
-        wt_path = run_dir / "scratch" / task.id
-        wt_path.mkdir(parents=True, exist_ok=True)
-        writable = task.capability in {
-            "implementation",
-            "repair",
-            "test_design",
-            "composition",
-            "interface_analysis",
-        }
-        inherited_artifacts: list[str] = []
-        lineage_conflicts: list[dict[str, str]] = []
-        pre_patch_fingerprint: str | None = None
-        if worktrees is not None and original_repo is not None and base_commit:
-            if task.capability in {
-                "implementation",
-                "repair",
-                "repository_analysis",
-                "independent_review",
-                "composition",
-                "test_execution",
-                "domain_research",
-                "interface_analysis",
-            }:
-                (
-                    wt_path,
-                    inherited_artifacts,
-                    lineage_conflicts,
-                    pre_patch_fingerprint,
-                ) = self.worktree_lineage.prepare_task_worktree(
-                    worktrees=worktrees,
-                    artifacts=artifacts,
-                    run_dir=run_dir,
-                    task_id=task.id,
-                    capability=task.capability,
-                    dependencies=task.dependencies,
-                    dependency_outputs=dependency_outputs or [],
-                    base_commit=base_commit,
-                    writable=writable,
-                )
-
-        if lineage_conflicts and task.capability == "composition":
-            conflict_result = TaskResult(
-                task_id=task.id,
-                status="failed",
-                summary="composition_conflict",
-                validator_results=[
-                    ValidatorResult(
-                        validator_id="composition_conflict",
-                        status="fail",
-                        message="Conflicting writable-task patches detected",
-                        details={"conflicts": lineage_conflicts},
-                    )
-                ],
-                model_profile=profile,
-            )
-            # Early-exit path (P1.F): still persist the terminal status so the
-            # task row doesn't stay stuck at "running" for resume/observability.
-            # SR3: WaveExecutionService owns terminal task+event durability.
-            self.wave_execution.record_task_completion(
-                db=self.db,
-                run_id=run_id,
-                task=task,
-                result=conflict_result,
-            )
-            return conflict_result
-
-        # SR2: TaskRuntimeService owns broker construction, grants, and dispatch.
-        runtime_outcome = self.task_runtime.execute(
-            run_id=run_id,
-            run_dir=run_dir,
-            request=request,
-            task=task,
-            effective_policy=effective_policy,
-            agent_profile=agent_profile,
-            model_profile=profile,
-            skills=skills,
-            artifacts=artifacts,
-            gateway=gateway,
-            ledger=ledger,
-            wt_path=wt_path,
-            original_repo=original_repo,
-            base_commit=base_commit,
-            ctx_messages=ctx.messages,
-            package_hash=ctx.package_hash,
-            registered_command_ids=list(registered_ids),
-            dependency_outputs=dependency_outputs or [],
-            repository_excerpts=repository_excerpts,
-            land_map=land_map,
-            composer_role=composer_role,
-            validation_evidence_refs=validation_evidence_refs,
-            validator_results=validator_results,
-            composition=self.composition,
-            recorder=recorder,
-        )
-        result = runtime_outcome.result
-
-        # Legacy live probe path removed: architecture/requirements now persist drafts above.
-        context_evidence = [
-            ResourceRef(
-                id=f"context:{task.id}:{excerpt['path']}",
-                resource_type="file",
-                origin="run_coordinator",
-                scope=excerpt["path"],
-                trust_level="mixed",
-                content_hash=hashlib.sha256(excerpt["content"].encode()).hexdigest(),
-            )
-            for excerpt in repository_excerpts
-        ]
-        if not result.evidence_refs:
-            result.evidence_refs = context_evidence
-        if not result.provider:
-            result.provider = getattr(gateway, "default_model", type(gateway).__name__)
-        if not result.prompt_package_hash:
-            result.prompt_package_hash = ctx.package_hash
-        artifact_refs = list(result.artifact_refs)
-        # SR3: couple terminal task upsert with its observability event.
-        self.wave_execution.record_task_completion(
-            db=self.db,
-            run_id=run_id,
-            task=task,
-            result=result,
-        )
-        for art in artifact_refs:
-            self.db.record_artifact(art.model_dump(mode="json"))
-            self._record_artifact_instance(
-                ArtifactInstance.create(
-                    run_id=run_id,
-                    sha256=art.sha256,
-                    content_class="durable_output",
-                    capture_level=recorder.capture_level if recorder is not None else "full",
-                    role=art.logical_name,
-                    producer_task_id=task.id,
-                    media_type=art.media_type,
-                    schema_id=art.schema_id,
-                    schema_version=art.schema_version,
-                    size_bytes=art.size_bytes,
-                    display_name=art.logical_name,
-                )
-            )
-            if recorder is not None:
-                recorder.emit(
-                    run_id=run_id,
-                    event_type="artifact.created",
-                    task_id=task.id,
-                    summary=art.logical_name,
-                    payload=art.model_dump(mode="json"),
-                )
-        for tc in runtime_outcome.tool_call_records:
-            self.db.record_tool_call(run_id=run_id, record=tc.model_dump(mode="json"))
-        return result
 
     def _count_connector_invocations(self, run_id: str, *, connector_id: str) -> int:
         """How many successful connector.invoked events this run recorded for a provider."""

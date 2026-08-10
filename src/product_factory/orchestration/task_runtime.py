@@ -11,32 +11,26 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
 
 from product_factory.config.loader import AppConfig
 from product_factory.connectors.broker import EVENT_INVOKED as CONNECTOR_EVENT_INVOKED
 from product_factory.connectors.broker import ConnectorBroker
 from product_factory.connectors.registry import ConnectorRegistry
 from product_factory.connectors.source_ledger import SourceLedger
-from product_factory.domain.runs import RunRequest
-from product_factory.domain.tasks import TaskResult, TaskSpec
+from product_factory.domain.tasks import TaskResult
 from product_factory.domain.tools import CapabilityGrant, ToolCallRecord
 from product_factory.executors import execute_task
 from product_factory.gateway.base import ModelGateway
 from product_factory.observability.contracts import EventSeverity
-from product_factory.orchestration.budget_ledger import BudgetLedger
-from product_factory.orchestration.effective_policy import EffectiveTaskPolicy
 from product_factory.orchestration.implementation_helpers import deterministic_impl_files
 from product_factory.orchestration.skill_grants import enforce_skill_grants
+from product_factory.orchestration.task_contracts import TaskRuntimeRequest
 from product_factory.orchestration.task_preparation import TaskPreparationService
 from product_factory.orchestration.validation_repair.service import changed_files_from_patch
 from product_factory.persistence.artifact_policy import ArtifactInstance
-from product_factory.persistence.artifacts import ArtifactStore
 from product_factory.policy.source_policy import resolve_request_source_policy
 from product_factory.tools.broker import ToolBroker
 from product_factory.tools.registry import ToolRegistry
-from product_factory.workflows.artifacts import ArtifactLandMap
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,34 +69,37 @@ class TaskRuntimeService:
 
     def execute(
         self,
-        *,
-        run_id: str,
-        run_dir: Path,
-        request: RunRequest,
-        task: TaskSpec,
-        effective_policy: EffectiveTaskPolicy,
-        agent_profile: str,
-        model_profile: str,
-        skills: list[Any],
-        artifacts: ArtifactStore,
-        gateway: ModelGateway,
-        ledger: BudgetLedger,
-        wt_path: Path,
-        original_repo: Path | None,
-        base_commit: str,
-        ctx_messages: list[dict[str, Any]],
-        package_hash: str,
-        registered_command_ids: list[str] | None = None,
-        dependency_outputs: list[dict[str, Any]] | None = None,
-        repository_excerpts: list[dict[str, str]] | None = None,
-        land_map: ArtifactLandMap | None = None,
-        composer_role: str | None = None,
-        validation_evidence_refs: list[str] | None = None,
-        validator_results: list[dict[str, Any]] | None = None,
-        composition: Any = None,
-        recorder: Any | None = None,
+        runtime_request: TaskRuntimeRequest,
     ) -> TaskRuntimeOutcome:
         """Construct broker, enforce skill grants, set CapabilityGrant, execute."""
+
+        prepared = runtime_request.prepared_task
+        session = runtime_request.execution_session
+        run_id = prepared.run_id
+        run_dir = session.run_dir
+        request = prepared.run_request
+        task = prepared.task_spec
+        effective_policy = prepared.effective_policy
+        agent_profile = prepared.agent_profile
+        model_profile = prepared.model_profile
+        skills = list(prepared.matched_skills)
+        artifacts = session.artifacts
+        gateway = session.gateway
+        ledger = session.ledger
+        wt_path = prepared.workspace.root
+        original_repo = prepared.workspace.original_repository
+        base_commit = prepared.workspace.base_revision
+        ctx_messages = prepared.prompt_package.messages
+        package_hash = prepared.prompt_package.package_hash
+        registered_command_ids = list(prepared.registered_command_ids)
+        dependency_outputs = list(prepared.dependency_outputs)
+        repository_excerpts = list(prepared.repository_excerpts)
+        land_map = prepared.land_map
+        composer_role = prepared.composition_role
+        validation_evidence_refs = list(prepared.validation_evidence_refs)
+        validator_results = list(prepared.validator_results)
+        composition = prepared.composition
+        recorder = session.recorder
 
         def _tool_observer(phase: str, payload: dict) -> None:
             if recorder is None:
@@ -219,15 +216,13 @@ class TaskRuntimeService:
             dependency_outputs=dependency_outputs or [],
             repository_excerpts=repository_excerpts or [],
             base_commit=base_commit,
-            land_map=land_map or ArtifactLandMap(),
+            land_map=land_map,
             composer_role=composer_role,
             validation_evidence_refs=validation_evidence_refs or [],
             validator_results=validator_results or [],
             composition=composition,
-            services={
-                "deterministic_impl_files": deterministic_impl_files,
-                "changed_files_from_patch": changed_files_from_patch,
-            },
+            deterministic_implementation=deterministic_impl_files,
+            patch_changed_files=changed_files_from_patch,
         )
         result = execute_task(execution_request)
         return TaskRuntimeOutcome(

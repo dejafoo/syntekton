@@ -18,6 +18,7 @@ import time
 from decimal import Decimal
 from pathlib import Path
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import AppConfig, load_config
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.plans import FinalArtifactSpec, PlannerOutput
@@ -25,7 +26,8 @@ from product_factory.domain.runs import RunRequest
 from product_factory.domain.tasks import AcceptanceCriterion, TaskSpec
 from product_factory.gateway.mock import MockGateway
 from product_factory.orchestration.coordinator import RunCoordinator
-from product_factory.orchestration.lifecycle import RunLifecycleEngine
+from product_factory.orchestration.planning import RunPlanningService
+from product_factory.orchestration.wave_execution import WaveExecutionService
 from tests.conftest import clone_fixture
 
 
@@ -40,7 +42,7 @@ def _fixture(tmp_path: Path) -> Path:
 
 
 def _new_coordinator(tmp_path: Path) -> RunCoordinator:
-    return RunCoordinator(
+    return build_coordinator(
         config=_config(),
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -123,14 +125,14 @@ def test_two_read_only_tasks_overlap_in_the_same_wave(tmp_path: Path, monkeypatc
     coord = _new_coordinator(tmp_path)
 
     monkeypatch.setattr(
-        RunLifecycleEngine,
-        "_plan",
-        lambda self, run_id, request, repo_summary=None, repair_errors=None, **kwargs: (
-            _read_only_overlap_plan(request.request_text)
+        RunPlanningService,
+        "_draft",
+        lambda self, *, snapshot, session, repair_errors=None: _read_only_overlap_plan(
+            snapshot.request.request_text
         ),
     )
 
-    original_execute_task = RunLifecycleEngine._execute_task
+    original_execute_task = WaveExecutionService.execute_task
     delay_s = 0.15
 
     def slow_execute_task(self, *, task, **kwargs):  # type: ignore[no-untyped-def]
@@ -138,7 +140,7 @@ def test_two_read_only_tasks_overlap_in_the_same_wave(tmp_path: Path, monkeypatc
             time.sleep(delay_s)
         return original_execute_task(self, task=task, **kwargs)
 
-    monkeypatch.setattr(RunLifecycleEngine, "_execute_task", slow_execute_task)
+    monkeypatch.setattr(WaveExecutionService, "execute_task", slow_execute_task)
 
     request = RunRequest(
         request_id="req-concurrency-overlap",
@@ -150,8 +152,8 @@ def test_two_read_only_tasks_overlap_in_the_same_wave(tmp_path: Path, monkeypatc
     manifest = coord.run(request)
     assert manifest.final_status in {"completed", "awaiting_approval", "failed"}
 
-    task_a = coord.db.get_task(manifest.run_id, "T-001a")
-    task_b = coord.db.get_task(manifest.run_id, "T-001b")
+    task_a = coord.queries.database.get_task(manifest.run_id, "T-001a")
+    task_b = coord.queries.database.get_task(manifest.run_id, "T-001b")
     assert task_a is not None and task_b is not None
     assert task_a["status"] == "success"
     assert task_b["status"] == "success"
@@ -252,10 +254,10 @@ def test_conflicting_writers_yield_typed_composition_conflict(tmp_path: Path, mo
     coord = _new_coordinator(tmp_path)
 
     monkeypatch.setattr(
-        RunLifecycleEngine,
-        "_plan",
-        lambda self, run_id, request, repo_summary=None, repair_errors=None, **kwargs: (
-            _writer_conflict_plan(request.request_text)
+        RunPlanningService,
+        "_draft",
+        lambda self, *, snapshot, session, repair_errors=None: _writer_conflict_plan(
+            snapshot.request.request_text
         ),
     )
     monkeypatch.setattr(
@@ -274,25 +276,27 @@ def test_conflicting_writers_yield_typed_composition_conflict(tmp_path: Path, mo
 
     # Both writers succeed individually (isolated worktrees, no real race);
     # the collision is only observable — and must be caught — at composition.
-    impl_a = coord.db.get_task(manifest.run_id, "IMPL-A")
-    impl_b = coord.db.get_task(manifest.run_id, "IMPL-B")
+    impl_a = coord.queries.database.get_task(manifest.run_id, "IMPL-A")
+    impl_b = coord.queries.database.get_task(manifest.run_id, "IMPL-B")
     assert impl_a is not None
     assert impl_b is not None
     assert impl_a["status"] == "success"
     assert impl_b["status"] == "success"
 
-    comp = coord.db.get_task(manifest.run_id, "T-COMP")
+    comp = coord.queries.database.get_task(manifest.run_id, "T-COMP")
     assert comp is not None
     assert comp["status"] == "failed"
 
     import json
 
     result = json.loads(comp["result_json"])
-    assert result["summary"] == "composition_conflict"
+    assert result["summary"] == "workspace_lineage_conflict"
     validator_ids = {v["validator_id"] for v in result["validator_results"]}
-    assert "composition_conflict" in validator_ids
+    assert "workspace_lineage_conflict" in validator_ids
 
-    lineage_path = coord.pf_root / "runs" / manifest.run_id / "output" / "T-COMP-lineage.json"
+    lineage_path = (
+        coord.queries.data_root / "runs" / manifest.run_id / "output" / "T-COMP-lineage.json"
+    )
     assert lineage_path.exists()
     lineage = json.loads(lineage_path.read_text())
     assert lineage["conflicts"], "expected recorded lineage conflicts"
@@ -301,7 +305,7 @@ def test_conflicting_writers_yield_typed_composition_conflict(tmp_path: Path, mo
     # failure) rather than dead-ending the run: a repair task is spawned and
     # the run recovers instead of silently accepting a corrupted composed
     # patch. The original T-COMP attempt's typed failure is preserved as-is.
-    all_tasks = {t["task_id"]: t for t in coord.db.list_tasks(manifest.run_id)}
+    all_tasks = {t["task_id"]: t for t in coord.queries.database.list_tasks(manifest.run_id)}
     repair_ids = [tid for tid in all_tasks if tid.startswith("R-") and tid[2:].isdigit()]
     assert repair_ids, "expected a repair task spawned after the composition conflict"
     assert manifest.final_status in {"awaiting_approval", "completed", "failed"}

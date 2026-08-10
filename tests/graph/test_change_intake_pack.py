@@ -5,12 +5,12 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
+from product_factory.application import build_coordinator, build_host_service
 from product_factory.config.loader import load_config
 from product_factory.domain.artifacts import HandoffRef
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.runs import ArtifactOverride, RunRequest
 from product_factory.gateway.mock import MockGateway
-from product_factory.host.service import HostService
 from product_factory.orchestration.coordinator import RunCoordinator
 from product_factory.validation.pipeline import validate_intake_sections
 from product_factory.workflows.artifacts import ROLE_CHANGE_BRIEF, ROLE_CLARIFICATION_REQUEST
@@ -21,7 +21,7 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "intake"
 
 def _coord(tmp_path: Path) -> RunCoordinator:
     root = Path(__file__).resolve().parents[2]
-    return RunCoordinator(
+    return build_coordinator(
         config=load_config(root),
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -49,7 +49,9 @@ def test_ambiguous_request_lands_clarification(tmp_path: Path) -> None:
     assert not (output / "CHANGE_BRIEF.md").exists()
     body = clarification.read_text(encoding="utf-8")
     assert validate_intake_sections(body, role=ROLE_CLARIFICATION_REQUEST).status == "pass"
-    tool_names = {row["tool_name"] for row in coord.db.list_tool_calls(manifest.run_id)}
+    tool_names = {
+        row["tool_name"] for row in coord.queries.database.list_tool_calls(manifest.run_id)
+    }
     assert "create_file" not in tool_names
     assert "apply_patch" not in tool_names
     assert "run_validation_command" not in tool_names
@@ -140,7 +142,7 @@ def test_technical_plan_rejects_forged_change_brief_handoff_pin(tmp_path: Path) 
     repo_root = Path(__file__).resolve().parents[2]
     shutil.copytree(repo_root / "config", project / "config")
     shutil.copytree(repo_root / "profiles", project / "profiles")
-    host = HostService(
+    host = build_host_service(
         config=load_config(project),
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -177,7 +179,7 @@ def test_host_rejects_unknown_pack_input(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[2]
     shutil.copytree(repo_root / "config", project / "config")
     shutil.copytree(repo_root / "profiles", project / "profiles")
-    host = HostService(
+    host = build_host_service(
         config=load_config(project),
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",

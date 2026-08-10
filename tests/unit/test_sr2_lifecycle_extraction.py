@@ -11,20 +11,17 @@ from product_factory.application import (
     ApplicationServices,
     LifecycleCommandService,
     build_application,
+    build_coordinator,
+    build_host_service,
 )
 from product_factory.application.composition_root import ApplicationServices as RootServices
 from product_factory.config.loader import load_config
 from product_factory.domain.runs import RunRequest
 from product_factory.gateway.mock import MockGateway
-from product_factory.orchestration.composition.input import (
-    CompositionInput,
-    composition_input_from_compose_context,
-)
-from product_factory.orchestration.coordinator import RunCoordinator
+from product_factory.orchestration.composition.input import CompositionInput
 from product_factory.orchestration.task_preparation import TaskPreparationService
 from product_factory.orchestration.task_runtime import TaskRuntimeService
 from product_factory.orchestration.wave_execution import WaveExecutionService
-from product_factory.workflows.handlers.base import ComposeContext
 from tests.conftest import hermetic_validation_config
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,21 +38,11 @@ def test_application_services_and_build_application_exist(tmp_path: Path) -> Non
         use_deterministic_planner=True,
     )
     assert isinstance(services, ApplicationServices)
-    assert services.db is not None
-    assert services.skills is not None
-    assert services.tool_registry is not None
-    assert services.connector_broker is not None
-    assert services.composition is not None
-    assert services.validation_repair is not None
-    assert services.wave_scheduler is not None
-    assert services.worktree_lineage is not None
-    assert services.finalizer is not None
-    assert isinstance(services.task_preparation, TaskPreparationService)
-    assert isinstance(services.task_runtime, TaskRuntimeService)
-    assert isinstance(services.wave_execution, WaveExecutionService)
-    assert services.wave_execution.wave_scheduler is services.wave_scheduler
+    assert services.queries.database is not None
+    assert services.workers.supervisor.db is services.queries.database
     assert isinstance(services.commands, LifecycleCommandService)
-    assert services.lifecycle is None  # unbound until engine construction
+    assert services.commands.lifecycle is services.lifecycle
+    assert services.metadata.data_root == tmp_path / "pf"
 
 
 def test_task_preparation_and_wave_execution_modules_exist() -> None:
@@ -69,7 +56,7 @@ def test_task_preparation_and_wave_execution_modules_exist() -> None:
     assert hasattr(TaskPreparationService, "assemble_execution_request")
     assert hasattr(TaskRuntimeService, "execute")
     assert hasattr(WaveExecutionService, "select_ready")
-    assert hasattr(WaveExecutionService, "run_wave_cycle")
+    assert hasattr(WaveExecutionService, "advance")
 
 
 def test_engine_must_not_construct_tool_broker() -> None:
@@ -123,53 +110,38 @@ def test_lifecycle_command_service_delegates_without_reimplementing() -> None:
 
 def test_composition_input_is_immutable_typed_boundary() -> None:
     assert (SRC / "orchestration" / "composition" / "input.py").is_file()
+    request = RunRequest(
+        request_id="req-compose",
+        workflow_type="technical_plan",
+        request_text="Design the boundary",
+    )
     payload = CompositionInput(
-        run_snapshot={"run_id": "run-1"},
-        compiled_plan={"tasks": []},
-        task_results=({"task_id": "t1"},),
-        dependency_artifacts=({"role": "patch"},),
-        validation_evidence=("ref-1",),
-        findings=({"severity": "x"},),
-        lineage={"parent": None},
+        request=request,
+        role="architecture_document",
+        document_name="ARCHITECTURE.md",
+        run_id="run-1",
+        dependency_outputs=({"role": "patch"},),
+        validation_evidence_refs=("ref-1",),
+        lineage=({"parent": ""},),
         effective_policy={"mode": "live"},
     )
-    assert payload.run_snapshot["run_id"] == "run-1"
+    assert payload.run_id == "run-1"
     try:
-        payload.run_snapshot = {"run_id": "other"}  # type: ignore[misc]
+        payload.run_id = "other"  # type: ignore[misc]
         raise AssertionError("CompositionInput must be frozen")
     except FrozenInstanceError:
         pass
-
-    ctx = ComposeContext(
-        request=MagicMock(spec=RunRequest),
-        role="architecture_document",
-        document_name="ARCHITECTURE.md",
-        findings=[{"id": "f1"}],
-        dependency_outputs=[{"artifact": "a"}],
-        run_id="run-9",
-        profile="writer",
-        validation_evidence_refs=["v1"],
-        validator_results=[{"ok": True}],
-    )
-    adapted = composition_input_from_compose_context(ctx)
-    assert adapted.run_snapshot is not None
-    assert adapted.run_snapshot["run_id"] == "run-9"
-    assert adapted.findings == ({"id": "f1"},)
-    assert adapted.dependency_artifacts == ({"artifact": "a"},)
-    assert "v1" in adapted.validation_evidence
-    assert {"ok": True} in adapted.validation_evidence
-    ctx.composition_input = adapted
-    assert ctx.composition_input is adapted
+    assert payload.dependency_outputs == ({"role": "patch"},)
+    assert payload.validation_evidence_refs == ("ref-1",)
 
 
 def test_run_coordinator_remains_thin_facade() -> None:
     source = (SRC / "orchestration" / "coordinator.py").read_text(encoding="utf-8")
-    assert "self._engine.run" in source
-    assert "return self._engine._execute_task(*args, **kwargs)" in source
-    assert "build_application" in source
-    # Must not re-absorb task loops or composition.
+    assert "self._lifecycle.run" in source
+    assert "build_application" not in source
     assert "_compose_architecture" not in source
-    assert "def _execute_task(self, *args, **kwargs):" in source
+    assert "def _execute_task" not in source
+    assert "def __getattr__" not in source
     tree = ast.parse(source)
     class_defs = [
         node
@@ -185,7 +157,7 @@ def test_run_coordinator_remains_thin_facade() -> None:
         assert name in method_names
 
 
-def test_engine_accepts_prebuilt_application_services(tmp_path: Path) -> None:
+def test_engine_is_constructed_only_by_application_root(tmp_path: Path) -> None:
     from product_factory.orchestration.lifecycle.engine import RunLifecycleEngine
 
     config = load_config()
@@ -195,24 +167,16 @@ def test_engine_accepts_prebuilt_application_services(tmp_path: Path) -> None:
         data_dir=tmp_path / "pf",
         use_deterministic_planner=True,
     )
-    engine = RunLifecycleEngine(
-        config=config,
-        gateway=MockGateway(),
-        data_dir=tmp_path / "pf",
-        services=services,
-    )
-    assert engine.task_preparation is services.task_preparation
-    assert engine.task_runtime is services.task_runtime
-    assert engine.wave_execution is services.wave_execution
-    assert engine.db is services.db
-    assert services.lifecycle is engine
-    assert engine.commands is services.commands
-    assert engine.commands.lifecycle is engine
+    assert isinstance(services.lifecycle, RunLifecycleEngine)
+    assert services.commands.lifecycle is services.lifecycle
+    engine_source = (SRC / "orchestration" / "lifecycle" / "engine.py").read_text(encoding="utf-8")
+    assert "build_application" not in engine_source
+    assert "ApplicationServices" not in engine_source
 
 
 def test_coordinator_public_api_unchanged(tmp_path: Path) -> None:
     config = load_config()
-    coord = RunCoordinator(
+    coord = build_coordinator(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / "pf",
@@ -225,11 +189,10 @@ def test_coordinator_public_api_unchanged(tmp_path: Path) -> None:
     assert hasattr(coord, "cancel")
     assert hasattr(coord, "revise")
     assert hasattr(coord, "apply_patch")
-    assert coord.task_preparation is coord._engine.task_preparation
-    assert coord.task_runtime is coord._engine.task_runtime
-    assert coord.wave_execution is coord._engine.wave_execution
     assert isinstance(coord.commands, LifecycleCommandService)
-    assert coord.commands.lifecycle is coord._engine
+    assert coord.commands.lifecycle is coord._lifecycle
+    assert coord.queries.database is not None
+    assert not hasattr(coord, "_engine")
 
 
 def _module_imports_name(path: Path, banned: str) -> bool:
@@ -255,7 +218,6 @@ def _module_imports_name(path: Path, banned: str) -> bool:
 
 def test_new_sr2_modules_must_not_import_run_coordinator() -> None:
     banned_files = [
-        SRC / "application" / "composition_root.py",
         SRC / "application" / "command_service.py",
         SRC / "application" / "__init__.py",
         SRC / "orchestration" / "task_preparation.py",
@@ -270,6 +232,8 @@ def test_new_sr2_modules_must_not_import_run_coordinator() -> None:
         )
         source = path.read_text(encoding="utf-8")
         assert "RunCoordinator" not in source, f"{path} mentions RunCoordinator"
+    root_source = (SRC / "application" / "composition_root.py").read_text(encoding="utf-8")
+    assert "from product_factory.orchestration.coordinator import RunCoordinator" in root_source
 
 
 def _engine_imports_from(module_prefix: str) -> list[str]:
@@ -338,14 +302,13 @@ def test_engine_temporary_forbidden_dependency_exceptions() -> None:
     )
 
 
-def test_engine_production_compose_attaches_composition_input() -> None:
-    """Engine fallback compose path must populate ComposeContext.composition_input."""
+def test_engine_and_executor_use_typed_composition_input_directly() -> None:
     source = (SRC / "orchestration" / "lifecycle" / "engine.py").read_text(encoding="utf-8")
-    assert "composition_input_from_compose_context" in source
-    assert "compose_ctx.composition_input" in source
+    assert "CompositionInput(" in source
+    assert "composition_input_from_compose_context" not in source
     executor = (SRC / "executors" / "composition.py").read_text(encoding="utf-8")
-    assert "composition_input_from_compose_context" in executor
-    assert "compose_ctx.composition_input" in executor
+    assert "CompositionInput(" in executor
+    assert "ComposeContext" not in executor
 
 
 def test_mock_quality_gate_characterization_completes(tmp_path: Path) -> None:
@@ -356,7 +319,7 @@ def test_mock_quality_gate_characterization_completes(tmp_path: Path) -> None:
     from tests.conftest import clone_fixture
 
     fixture = clone_fixture(ROOT / "tests" / "fixtures" / "sample_api", tmp_path / "repo")
-    coord = RunCoordinator(
+    coord = build_coordinator(
         config=hermetic_validation_config(ROOT),
         gateway=MockGateway(),
         data_dir=tmp_path / "pf",
@@ -387,7 +350,7 @@ def test_cancel_queued_run_via_commands(tmp_path: Path) -> None:
 
     from product_factory.domain.budgets import RunBudget
 
-    coord = RunCoordinator(
+    coord = build_coordinator(
         config=load_config(),
         gateway=MockGateway(),
         data_dir=tmp_path / "pf",
@@ -401,7 +364,7 @@ def test_cancel_queued_run_via_commands(tmp_path: Path) -> None:
         approval_policy="none",
     )
     run_id = "run-sr2-cancel-queued"
-    coord.db.upsert_run(
+    coord.queries.database.upsert_run(
         run_id=run_id,
         workflow_type=request.workflow_type,
         status="queued",
@@ -411,22 +374,21 @@ def test_cancel_queued_run_via_commands(tmp_path: Path) -> None:
     result = coord.commands.cancel(run_id)
     assert result["status"] == "cancelled"
     assert result.get("cancel_requested") is True
-    row = coord.db.get_run(run_id)
+    row = coord.queries.database.get_run(run_id)
     assert row is not None
     assert row["status"] == "cancelled"
 
 
 def test_host_service_mutations_use_commands(tmp_path: Path) -> None:
     """HostService public mutations route through LifecycleCommandService."""
-    from product_factory.host.service import HostService
-
-    service = HostService(
+    service = build_host_service(
         config=load_config(),
         gateway=MockGateway(),
         data_dir=tmp_path / "pf",
         use_deterministic_planner=True,
     )
-    assert service.commands is service.coord.commands
+    assert service.commands is service.application.commands
+    assert service.supervisor is service.application.workers.supervisor
     source = (SRC / "host" / "service.py").read_text(encoding="utf-8")
     for needle in (
         "self.commands.approve",
@@ -435,10 +397,10 @@ def test_host_service_mutations_use_commands(tmp_path: Path) -> None:
         "self.commands.apply",
         "self.commands.cancel",
         "self.commands.revise",
-        "self.commands.submit",
-        "resume=self.commands.resume",
     ):
         assert needle in source, f"HostService must use {needle}"
+    worker_source = (SRC / "application" / "services.py").read_text(encoding="utf-8")
+    assert "self.commands.submit" in worker_source
     for banned in (
         "self.coord.approve",
         "self.coord.reject",

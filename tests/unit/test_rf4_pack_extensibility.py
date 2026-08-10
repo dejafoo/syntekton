@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from product_factory.domain.errors import ConfigurationError
+from product_factory.orchestration.composition.input import CompositionInput
 from product_factory.planning.compiler import compile_plan
 from product_factory.planning.planner import build_planner_messages
 from product_factory.workflows.artifacts import ArtifactLandSpec
@@ -22,7 +23,7 @@ from product_factory.workflows.handlers import (
     handler_for,
     register_pack_handler,
 )
-from product_factory.workflows.handlers.base import AuthorityClass, ComposeContext
+from product_factory.workflows.handlers.base import AuthorityClass
 from product_factory.workflows.registry import (
     list_workflow_packs,
     register_workflow_pack,
@@ -155,7 +156,7 @@ class _ReadOnlyExampleHandler:
     def plan_template(self, request_text: str):
         return handler_for("repository_investigation").plan_template(request_text)
 
-    def compose(self, role: str, ctx: ComposeContext) -> str:
+    def compose(self, role: str, ctx: CompositionInput, drafts=None) -> str:
         return f"# Summary\n\n{ctx.request.request_text}\n"
 
     def required_sections(self, role: str) -> tuple[str, ...]:
@@ -224,10 +225,10 @@ def test_coordinator_is_lifecycle_facade_without_workflow_branches() -> None:
         if isinstance(target, ast.Name) and target.id.endswith("_WORKFLOW_TYPES")
     }
     assert declared == set()
-    assert "RunLifecycleEngine" in source
+    assert "RunLifecyclePort" in source
     assert "_compose_architecture" not in source
     assert "class RunCoordinator" in source
-    assert "return self._engine._execute_task(*args, **kwargs)" in source
+    assert "def _execute_task" not in source
 
 
 def test_lifecycle_engine_forbids_new_named_workflow_type_constants() -> None:

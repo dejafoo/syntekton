@@ -5,12 +5,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from product_factory.domain.plans import PlannerOutput
+from product_factory.orchestration.composition.input import CompositionInput
+from product_factory.orchestration.composition.service import CompositionService
 from product_factory.validation.pipeline import INVESTIGATION_REQUIRED_SECTIONS
 from product_factory.workflows.artifacts import ROLE_EVIDENCE_REPORT
 from product_factory.workflows.default_plans import default_investigation_plan
 from product_factory.workflows.handlers.base import (
     AuthorityClass,
-    ComposeContext,
     EligibleNextAction,
 )
 
@@ -21,16 +22,18 @@ class RepositoryInvestigationHandler:
     def plan_template(self, request_text: str) -> PlannerOutput:
         return default_investigation_plan(request_text)
 
-    def compose(self, role: str, ctx: ComposeContext) -> str:
+    def compose(
+        self, role: str, ctx: CompositionInput, drafts: CompositionService | None = None
+    ) -> str:
         if role != ROLE_EVIDENCE_REPORT:
             raise RuntimeError(f"repository_investigation does not compose role {role!r}")
-        if not callable(ctx.compose_evidence_report):
+        if drafts is None:
             raise RuntimeError("repository_investigation compose requires compose_evidence_report")
         base = str(
-            ctx.compose_evidence_report(
+            drafts.compose_evidence_report(
                 ctx.request.request_text,
-                findings=ctx.findings,
-                dependency_outputs=ctx.dependency_outputs,
+                findings=list(ctx.findings),
+                dependency_outputs=list(ctx.dependency_outputs),
                 document_name=ctx.document_name,
             )
         )

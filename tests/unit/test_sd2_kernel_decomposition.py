@@ -9,21 +9,22 @@ from pathlib import Path
 
 import pytest
 
+from product_factory.application import build_host_service
 from product_factory.config.loader import load_config
 from product_factory.domain.budgets import TaskBudget
 from product_factory.domain.plans import CompiledPlan
 from product_factory.domain.runs import RunRequest
 from product_factory.domain.tasks import AcceptanceCriterion, TaskSpec
 from product_factory.gateway.mock import MockGateway
-from product_factory.host.service import HostService
 from product_factory.orchestration.composition import CompositionService
+from product_factory.orchestration.composition.input import CompositionInput
 from product_factory.orchestration.finalization import RunFinalizer
 from product_factory.orchestration.lifecycle import RunLifecycleEngine
 from product_factory.scheduling.scheduler import WaveScheduler
 from product_factory.workflows.artifacts import ArtifactLandSpec
 from product_factory.workflows.base import WorkflowPack, execution_policy
 from product_factory.workflows.handlers import register_pack_handler
-from product_factory.workflows.handlers.base import AuthorityClass, ComposeContext
+from product_factory.workflows.handlers.base import AuthorityClass
 from product_factory.workflows.registry import (
     is_registered_workflow,
     register_workflow_pack,
@@ -33,15 +34,12 @@ from product_factory.workflows.registry import (
 
 def test_coordinator_facade_delegates_to_lifecycle_engine() -> None:
     source = Path("src/product_factory/orchestration/coordinator.py").read_text(encoding="utf-8")
-    assert "self._engine.run" in source
-    assert "self._engine.resume" in source
-    assert "RunLifecycleEngine" in source
+    assert "self._lifecycle.run" in source
+    assert "self._lifecycle.resume" in source
+    assert "RunLifecyclePort" in source
     assert "_compose_architecture" not in source
-    assert "self._engine.run" in source
-    # Thin delegates for monkeypatch compatibility are allowed; bodies must not
-    # implement task loops or composition.
-    assert "def _execute_task(self, *args, **kwargs):" in source
-    assert "return self._engine._execute_task(*args, **kwargs)" in source
+    assert "def _execute_task" not in source
+    assert "def __getattr__" not in source
 
 
 def test_composition_service_deterministic_architecture() -> None:
@@ -152,7 +150,7 @@ class _Sd2FixtureHandler:
             request_acceptance_criteria=[],
         )
 
-    def compose(self, role: str, ctx: ComposeContext) -> str:
+    def compose(self, role: str, ctx: CompositionInput, drafts=None) -> str:
         return f"# Summary\n\n{ctx.request.request_text}\n"
 
     def required_sections(self, role: str) -> tuple[str, ...]:
@@ -218,7 +216,7 @@ def test_fixture_pack_submits_via_public_host_api(tmp_path: Path) -> None:
     )
 
     config = load_config()
-    host = HostService(
+    host = build_host_service(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / "pf",

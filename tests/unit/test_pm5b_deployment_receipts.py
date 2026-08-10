@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 
 from product_factory.domain.runs import RunRequest
+from product_factory.orchestration.composition.input import CompositionInput
 from product_factory.validation.pipeline import validate_deployment_record
 from product_factory.workflows.handlers import handler_for
-from product_factory.workflows.handlers.base import ComposeContext
 
 
 def _input() -> dict[str, object]:
@@ -39,7 +39,7 @@ def _document(data: dict[str, object]) -> str:
     )
     return handler_for("deployment_execution").compose(
         "deployment_record",
-        ComposeContext(
+        CompositionInput(
             request=request,
             role="deployment_record",
             document_name="DEPLOYMENT_RECORD.json",

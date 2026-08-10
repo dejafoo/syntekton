@@ -10,6 +10,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from product_factory.application import build_host_service
 from product_factory.cli.app import app
 from product_factory.config.loader import load_config
 from product_factory.domain.budgets import RunBudget
@@ -74,7 +75,7 @@ def test_host_submit_status_loop_with_mock(tmp_path: Path) -> None:
     fixture = _fixture_repo(tmp_path)
     config = load_config(project)
     data_dir = tmp_path / ".product-factory"
-    service = HostService(
+    service = build_host_service(
         config=config,
         gateway=MockGateway(),
         data_dir=data_dir,
@@ -152,7 +153,7 @@ def test_host_reject_round_trip(tmp_path: Path) -> None:
     project = _project_root(tmp_path)
     fixture = _fixture_repo(tmp_path)
     config = load_config(project)
-    service = HostService(
+    service = build_host_service(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -234,7 +235,7 @@ def test_host_cancel_mid_mock_run(tmp_path: Path) -> None:
     project = _project_root(tmp_path)
     fixture = _fixture_repo(tmp_path)
     config = load_config(project)
-    service = HostService(
+    service = build_host_service(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -242,16 +243,22 @@ def test_host_cancel_mid_mock_run(tmp_path: Path) -> None:
     )
     gate = threading.Event()
     released = threading.Event()
-    original = service.coord._engine._raise_if_cancelled
+    original_submit = service.commands.submit
 
-    def gated_raise(run_id: str) -> None:
-        row = service.coord.db.get_run(run_id)
-        if row and row["status"] == "executing" and not gate.is_set():
-            gate.set()
-            assert released.wait(timeout=10), "cancel was not signalled in time"
-        original(run_id)
+    def gated_submit(request: RunRequest, *, run_id: str | None = None):
+        assert run_id is not None
+        service.db.upsert_run(
+            run_id=run_id,
+            workflow_type=request.workflow_type,
+            status="executing",
+            request=request.model_dump(mode="json"),
+            active_operation="dispatch_pending",
+        )
+        gate.set()
+        assert released.wait(timeout=10), "cancel was not signalled in time"
+        return original_submit(request, run_id=run_id)
 
-    service.coord._engine._raise_if_cancelled = gated_raise  # type: ignore[method-assign]
+    service.commands.submit = gated_submit  # type: ignore[method-assign]
 
     submitted = service.submit(
         RunRequest(
@@ -280,7 +287,7 @@ def test_host_cancel_mid_mock_run(tmp_path: Path) -> None:
         timeout=30.0,
     )
     assert terminal.status == "cancelled"
-    row = service.coord.db.get_run(submitted.run_id)
+    row = service.db.get_run(submitted.run_id)
     assert row is not None
     assert int(row.get("cancel_requested") or 0) == 1
 
@@ -289,7 +296,7 @@ def test_host_revise_after_awaiting_approval(tmp_path: Path) -> None:
     project = _project_root(tmp_path)
     fixture = _fixture_repo(tmp_path)
     config = load_config(project)
-    service = HostService(
+    service = build_host_service(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -354,7 +361,7 @@ def test_host_export_bundle_contents_redacted(tmp_path: Path) -> None:
     project = _project_root(tmp_path)
     fixture = _fixture_repo(tmp_path)
     config = load_config(project)
-    service = HostService(
+    service = build_host_service(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -374,7 +381,7 @@ def test_host_export_bundle_contents_redacted(tmp_path: Path) -> None:
     )
     assert submitted.ok and submitted.run_id
     secret = "sk-secret-export-fixture-should-not-leak"
-    TelemetryRecorder(service.coord.db).emit(
+    TelemetryRecorder(service.db).emit(
         run_id=submitted.run_id,
         event_type="test.secret_fixture",
         summary="fixture",
@@ -440,7 +447,7 @@ def _seed_materialize_run(
     (run_dir / "input" / "request.json").write_text(
         json.dumps(request, indent=2) + "\n", encoding="utf-8"
     )
-    service.coord.db.upsert_run(
+    service.db.upsert_run(
         run_id=run_id,
         workflow_type="technical_plan",
         status=status,
@@ -454,7 +461,7 @@ def test_host_materialize_happy_path(tmp_path: Path) -> None:
     project = _project_root(tmp_path)
     fixture = _fixture_repo(tmp_path)
     config = load_config(project)
-    service = HostService(
+    service = build_host_service(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -486,7 +493,7 @@ def test_host_materialize_rejects_path_escape(tmp_path: Path) -> None:
     project = _project_root(tmp_path)
     fixture = _fixture_repo(tmp_path)
     config = load_config(project)
-    service = HostService(
+    service = build_host_service(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -510,7 +517,7 @@ def test_host_materialize_rejects_pre_approval_status(tmp_path: Path) -> None:
     project = _project_root(tmp_path)
     fixture = _fixture_repo(tmp_path)
     config = load_config(project)
-    service = HostService(
+    service = build_host_service(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -535,7 +542,7 @@ def test_host_cli_materialize(tmp_path: Path, monkeypatch) -> None:
     _clear_pf_env(monkeypatch)
     monkeypatch.chdir(project)
     config = load_config(project)
-    service = HostService(
+    service = build_host_service(
         config=config,
         gateway=MockGateway(),
         use_deterministic_planner=True,
@@ -561,7 +568,7 @@ def test_host_cli_materialize(tmp_path: Path, monkeypatch) -> None:
 
 
 def _named_service(tmp_path: Path) -> HostService:
-    return HostService(
+    return build_host_service(
         config=load_config(_project_root(tmp_path)),
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -717,7 +724,7 @@ def test_host_cli_submit_accepts_artifact_override(tmp_path: Path, monkeypatch) 
     assert payload.ok, payload.model_dump()
     assert payload.run_id is not None
 
-    service = HostService(
+    service = build_host_service(
         config=load_config(project),
         gateway=MockGateway(),
         use_deterministic_planner=True,
@@ -757,7 +764,7 @@ def test_host_cli_materialize_all(tmp_path: Path, monkeypatch) -> None:
     fixture = _fixture_repo(tmp_path)
     _clear_pf_env(monkeypatch)
     monkeypatch.chdir(project)
-    service = HostService(
+    service = build_host_service(
         config=load_config(project),
         gateway=MockGateway(),
         use_deterministic_planner=True,

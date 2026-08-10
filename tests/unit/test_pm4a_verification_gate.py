@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from product_factory.domain.runs import RunRequest
+from product_factory.orchestration.composition.input import CompositionInput
 from product_factory.validation.pipeline import validate_verification_report
-from product_factory.workflows.handlers.base import ComposeContext
 from product_factory.workflows.handlers.quality_gate import QualityGateHandler
 from product_factory.workflows.quality_gate import QUALITY_GATE_PACK
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "verification"
 
 
-def _context(pack_input: dict) -> ComposeContext:
-    return ComposeContext(
+def _context(pack_input: dict) -> CompositionInput:
+    return CompositionInput(
         request=RunRequest(
             request_id="pm4a-verify",
             workflow_type="quality_gate",
@@ -68,8 +69,11 @@ def test_skipped_registered_validator_is_insufficient_evidence() -> None:
 
 def test_runtime_validation_evidence_is_consumed() -> None:
     ctx = _context({"acceptance_refs": ["plan:a#AC-001"]})
-    ctx.validation_evidence_refs = ["e" * 64]
-    ctx.validator_results = [{"validator_id": "behavioral:python_tests", "status": "pass"}]
+    ctx = replace(
+        ctx,
+        validation_evidence_refs=("e" * 64,),
+        validator_results=(({"validator_id": "behavioral:python_tests", "status": "pass"}),),
+    )
 
     payload = json.loads(QualityGateHandler().compose("verification_report", ctx))
 

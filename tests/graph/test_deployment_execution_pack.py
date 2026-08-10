@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import load_config
 from product_factory.connectors.policy import ConnectorSettings
 from product_factory.domain.runs import RunRequest
 from product_factory.gateway.mock import MockGateway
-from product_factory.orchestration.coordinator import RunCoordinator
 from product_factory.trust.approvals import ApprovalService, deployment_action_fingerprint
 
 
@@ -23,7 +23,7 @@ def test_mock_deployment_executes_staging_and_emits_record(tmp_path: Path) -> No
             )
         }
     )
-    coordinator = RunCoordinator(
+    coordinator = build_coordinator(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -48,13 +48,13 @@ def test_mock_deployment_executes_staging_and_emits_record(tmp_path: Path) -> No
         change_window=pack_input["change_window"],
         idempotency_key=str(pack_input["idempotency_key"]),
     )
-    coordinator.db.upsert_run(
+    coordinator.queries.database.upsert_run(
         run_id="subject-release-happy",
         workflow_type="release_readiness",
         status="completed",
         request={},
     )
-    service = ApprovalService(coordinator.db)
+    service = ApprovalService(coordinator.queries.database)
     approval = service.create_pending(
         action_type="simulated_staging",
         subject_run_id="subject-release-happy",
@@ -97,7 +97,9 @@ def test_mock_deployment_executes_staging_and_emits_record(tmp_path: Path) -> No
     )
     assert record["outcome"] == "succeeded"
     assert record["artifact_digest"] == "b" * 64
-    called = {row["tool_name"] for row in coordinator.db.list_tool_calls(manifest.run_id)}
+    called = {
+        row["tool_name"] for row in coordinator.queries.database.list_tool_calls(manifest.run_id)
+    }
     assert {"resolve_deployment_target", "start_deployment", "verify_health"} <= called
     consumed = service.get(approval.approval_id)
     assert consumed is not None

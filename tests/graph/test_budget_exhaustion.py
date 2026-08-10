@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from product_factory.application import build_coordinator
 from product_factory.config.loader import load_config
 from product_factory.domain.budgets import RunBudget
 from product_factory.domain.errors import BudgetExhaustedError
@@ -20,7 +21,7 @@ from tests.conftest import clone_fixture
 def _coord(tmp_path: Path) -> RunCoordinator:
     root = Path(__file__).resolve().parents[2]
     config = load_config(root)
-    return RunCoordinator(
+    return build_coordinator(
         config=config,
         gateway=MockGateway(),
         data_dir=tmp_path / ".product-factory",
@@ -47,7 +48,7 @@ def test_tool_call_budget_exhausted_mid_run_sets_typed_terminal_status(tmp_path:
         coord.run(request)
     assert excinfo.value.details["dimension"] == "max_tool_calls"
 
-    rows = coord.db.list_runs()
+    rows = coord.queries.database.list_runs()
     assert len(rows) == 1
     assert rows[0]["status"] == "budget_exhausted"
 
@@ -83,7 +84,7 @@ def test_wall_clock_budget_exhausted_mid_run_sets_typed_terminal_status(
         coord.run(request)
     assert excinfo.value.details["dimension"] == "max_wall_clock_seconds"
 
-    rows = coord.db.list_runs()
+    rows = coord.queries.database.list_runs()
     assert len(rows) == 1
     assert rows[0]["status"] == "budget_exhausted"
 
@@ -100,5 +101,5 @@ def test_cost_budget_exhausted_before_any_task(tmp_path: Path) -> None:
     )
     with pytest.raises(BudgetExhaustedError):
         coord.run(request)
-    rows = coord.db.list_runs()
+    rows = coord.queries.database.list_runs()
     assert rows[0]["status"] == "budget_exhausted"
